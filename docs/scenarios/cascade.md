@@ -47,10 +47,11 @@ mixing, instantaneous actuators, lumped heat loss, and no pipe transport delay,
 wall heat capacity, downstream backpressure, boiling, evaporation, or phase
 change.
 
-## Batch and continuous tasks
+## Throughput targets
 
-Direct environments use batch semantics with zero required
-throughput. Use the task-owned continuous benchmark explicitly:
+Direct environments use `product_flow_sp=min_product_flow=0`, so they have no
+required or economically valued throughput. Use the task-owned continuous
+benchmark explicitly:
 
 ```python
 import aiogym
@@ -68,6 +69,11 @@ controller model. Economic scoring includes actual product flow, electrical
 energy, temperature/level violations, and normalized flow shortfall. The
 throughput value is an assumed benchmark, not a measured plant capacity.
 
+There is no separate batch operation mode. Zero throughput targets disable
+production value and shortfall accounting without changing the physical
+equations: pump and valve actions can still create physical flow. This keeps
+task economics independent from the actuator-driven hydraulic model.
+
 At the default setpoint and nominal disturbances, the analytic requirement is:
 
 ```text
@@ -79,6 +85,36 @@ ideal electrical power = 87.695 kW
 The helper `steady_state_requirements()` reports these commands, component heat
 loads and powers, feasibility, and per-actuator infeasibility reasons.
 
+## Formal control tasks
+
+Four additional tasks use the same assumed `4.0e-4 m3/s` continuous operating
+point while keeping their non-economic objectives separate:
+
+- `commissioning` holds the nominal model-consistent equilibrium;
+- `temperature-step` moves the first-stage target from 35 to 40 degC at step
+  120 and returns it at step 1200;
+- `disturbance-rejection` schedules feed-pump capacity, common heater
+  efficiency, and ambient-temperature changes;
+- `safety-recovery` starts below the Tank 0 heater minimum level and above the
+  Tank 2 heater temperature trip, but inside the hard termination limits.
+
+Run all four with their task-owned default objectives:
+
+```bash
+aiogym benchmark suite cascade-control --episodes 3
+```
+
+Each task binds PID to the `cascade-control-benchmark` controller profile,
+which initializes the six feedback loops and fixed third outlet valve at the
+analytic steady input. Single-task and suite runs therefore use the same PID
+parameters. MPC obtains the same feasible input through
+`tracking_steady_state_action()`.
+
+These task names mirror the recirculating task family, but their numerical
+states, actuator contract, disturbance meaning, and protection conditions are
+specific to the open cascade. In particular, they do not add passive return
+overflows, a Tank 3 pump interlock, or a single-H1 topology to this model.
+
 ## Migration notes
 
 - Code that previously used `heater_efficiency > 1` must use a capacity change
@@ -89,8 +125,8 @@ loads and powers, feasibility, and per-actuator infeasibility reasons.
   `terminate_on_runaway`; callers must handle `terminated=True`,
   `termination_reason`, and `safety_events`.
 - Economic comparisons requiring production must select
-  `task="continuous-benchmark"`. Batch results are not continuous-production
-  rankings.
+  `task="continuous-benchmark"`. Zero-target results are not
+  continuous-production rankings.
 
 ## Evidence limits
 

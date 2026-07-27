@@ -1,0 +1,64 @@
+{
+  "schema_version": "aiogym.task_profile.v1",
+  "name": "disturbance-rejection",
+  "scenario": "cascade",
+  "status": "benchmark-designed",
+  "description": "Deterministic rejection of feed-pump capacity, common heater efficiency, and ambient changes around the continuous open-cascade equilibrium.",
+  "default_objective": "robustness",
+  "supported_objectives": ["tracking", "kpi", "robustness", "safety"],
+  "controllers": {
+    "pid": {"profile": "cascade-control-benchmark"}
+  },
+  "environment": {
+    "control_dt": 0.5,
+    "episode_steps": 1400,
+    "action_mode": "actuator",
+    "auto_events": false,
+    "randomize": false,
+    "randomize_setpoints": false,
+    "randomize_plant": false,
+    "plant_drift": false,
+    "integral_obs": false,
+    "terminate_on_runaway": false,
+    "noise": false,
+    "noise_pct": 0.01
+  },
+  "operation": {
+    "product_flow_sp": 0.0004,
+    "min_product_flow": 0.0004
+  },
+  "initialization": {
+    "state": [0.45, 35.0, 0.45, 50.0, 0.45, 65.0],
+    "basis": "model-consistent nominal continuous equilibrium"
+  },
+  "setpoints": {
+    "initial": [0.45, 0.45, 0.45, 35.0, 50.0, 65.0],
+    "schedule": []
+  },
+  "disturbances": [
+    {"at_step": 200, "name": "pump_flow_factor", "value": 0.75, "description": "25% feed-pump capacity loss"},
+    {"at_step": 400, "name": "pump_flow_factor", "value": 1.0, "description": "feed-pump capacity restored"},
+    {"at_step": 600, "name": "heater_efficiency", "value": 0.7, "description": "common heat-transfer efficiency loss across all three heaters"},
+    {"at_step": 800, "name": "heater_efficiency", "value": 1.0, "description": "common heater efficiency restored"},
+    {"at_step": 1000, "name": "t_amb", "value": 15.0, "description": "cool ambient-temperature step"},
+    {"at_step": 1200, "name": "t_amb", "value": 20.0, "description": "ambient temperature restored"}
+  ],
+  "constraints": [
+    {"name": "tank_levels", "bounds": [0.0, 0.8], "unit": "m"},
+    {"name": "tank_temperatures", "bounds": [0.0, 120.0], "unit": "degC"}
+  ],
+  "acceptance": {
+    "required_checks": [
+      "deterministic_disturbance_schedule",
+      "disturbance_values_exposed_to_controller",
+      "finite_recovery_rollout",
+      "protection_event_accounting"
+    ]
+  },
+  "references": [
+    {
+      "id": "cascade-continuous-benchmark",
+      "locator": "Event schedule and magnitudes are AIO-Gym benchmark assumptions around cascade/continuous-benchmark"
+    }
+  ]
+}

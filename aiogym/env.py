@@ -13,7 +13,7 @@ reward_mode:
              (evaluation.metrics.kpi), so the RL optimizes exactly what it is judged on.
   "economic" production-value reward with energy and constraint penalties.
   "tracking" setpoint tracking: reward = -(normalized squared SP error
-             + input move penalty + nominal steady-input deviation penalty).
+             + normalized input move penalty).
 
 ``auto_events`` controls generic automatically generated within-episode events; it
 does not enable or disable the process model's physical dynamics. The model is
@@ -35,15 +35,12 @@ from ._internal.identifiers import canonical_scenario_id
 from .models import apply_model_params, make_model
 from .models.integration import Integrator
 from .evaluation.metrics.kpi import KPIScorer
+from .evaluation.objective_specs import (
+    DEFAULT_TRACKING_Q_Y,
+    DEFAULT_TRACKING_R_MOVE,
+)
 
 from ._environment.config import (
-    H_HIGH_FRAC,
-    H_LOW_FRAC,
-    H_OVERFLOW_FRAC,
-    I_LEVEL_MAX,
-    I_TEMP_MAX,
-    T_HIGH,
-    T_TRIP,
     DIRECT_ENV_DEFAULTS as _DIRECT_ENV_DEFAULTS,
     validated_range as _validated_range,
 )
@@ -152,6 +149,7 @@ class AIOGymNativeEnv(
             if at_step in self._task_setpoint_events:
                 raise ValueError("setpoint_schedule cannot contain duplicate at_step values")
             self._task_setpoint_events[at_step] = values
+        self._episode_setpoint_events = copy.deepcopy(self._task_setpoint_events)
         self._task_disturbance_events = {}
         for event in (self.task_profile or {}).get("disturbances", []):
             self._task_disturbance_events.setdefault(int(event["at_step"]), []).append({
@@ -184,9 +182,15 @@ class AIOGymNativeEnv(
 
         tracking_options = task_objective_options(self.task_profile, "tracking")
         if tracking_q_y is None:
-            tracking_q_y = tracking_options.get("tracking_q_y", 1.0)
+            tracking_q_y = tracking_options.get(
+                "tracking_q_y",
+                DEFAULT_TRACKING_Q_Y,
+            )
         if tracking_r_move is None:
-            tracking_r_move = tracking_options.get("tracking_r_move", 1.0)
+            tracking_r_move = tracking_options.get(
+                "tracking_r_move",
+                DEFAULT_TRACKING_R_MOVE,
+            )
         self.tracking_q_y = self._resolve_tracking_q_y(tracking_q_y)
         self.tracking_r_move = self._nonnegative("tracking_r_move", tracking_r_move)
         self.auto_events = auto_events
@@ -207,6 +211,7 @@ class AIOGymNativeEnv(
         self.crystal_ln_range = _validated_range("crystal_ln_range", crystal_ln_range)
         self.crystal_cv_range = _validated_range("crystal_cv_range", crystal_cv_range)
         self._model_env_options = {
+            "randomize_setpoints": bool(randomize_setpoints),
             "crystal_ln_sp": crystal_ln_sp,
             "crystal_cv_sp": crystal_cv_sp,
             "crystal_random_targets": bool(crystal_random_targets),
@@ -330,6 +335,7 @@ class AIOGymNativeEnv(
             else self.model.initial_state()
         )
         self.y_sp = list(self._ysp0)
+        self._episode_setpoint_events = copy.deepcopy(self._task_setpoint_events)
         self._reset_disturbance_values()
         if self.randomize:
             for j in range(len(x0)):
@@ -342,9 +348,29 @@ class AIOGymNativeEnv(
                     base = float(self._disturbance_defaults["t_amb"])
                     self._set_disturbance_value("t_amb", float(np.clip(base + rng.uniform(-5, 8), 0, 40)))
         self._sync_known_disturbances()
-        self.y_sp = self.model.sample_env_setpoints(self.y_sp, rng, self._model_env_options)
-        if self.randomize_setpoints and self.model.supports_generic_setpoint_randomization:
-            self._randomize_setpoints(rng)
+        initial_sampling_options = {
+            **self._model_env_options,
+            # A task with reference events keeps its initial equilibrium SP and
+            # samples the episode's scheduled targets instead.
+            "randomize_setpoints": (
+                self.randomize_setpoints
+                and not self._episode_setpoint_events
+            ),
+        }
+        self.y_sp = self.model.sample_env_setpoints(
+            self.y_sp, rng, initial_sampling_options
+        )
+        if self.randomize_setpoints and self._episode_setpoint_events:
+            event_sampling_options = {
+                **self._model_env_options,
+                "randomize_setpoints": True,
+            }
+            self._episode_setpoint_events = {
+                at_step: self.model.sample_env_setpoints(
+                    values, rng, event_sampling_options
+                )
+                for at_step, values in self._episode_setpoint_events.items()
+            }
         self.integ.reset(x0)
         self.scorer.reset()
         if self.pid is not None:
@@ -357,8 +383,8 @@ class AIOGymNativeEnv(
         # A task event at t=0 is part of the initial controller context. Applying
         # it before the first observation avoids an artificial one-sample delay
         # in paper-style reference-step experiments.
-        if 0 in self._task_setpoint_events:
-            self.y_sp = list(self._task_setpoint_events[0])
+        if 0 in self._episode_setpoint_events:
+            self.y_sp = list(self._episode_setpoint_events[0])
         for event in self._task_disturbance_events.get(0, []):
             self._set_disturbance_value(event["name"], event["value"])
         return self._obs(), {}
@@ -383,8 +409,8 @@ class AIOGymNativeEnv(
         # observation. The controller therefore sees an event at step k before
         # selecting u_k, while the transition just completed is still scored
         # against the reference that was active when its action was selected.
-        if self._k in self._task_setpoint_events:
-            self.y_sp = list(self._task_setpoint_events[self._k])
+        if self._k in self._episode_setpoint_events:
+            self.y_sp = list(self._episode_setpoint_events[self._k])
         truncated = self._k >= self.episode_steps
         return self._obs(), reward, terminated, truncated, info
 

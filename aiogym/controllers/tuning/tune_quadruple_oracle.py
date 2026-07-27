@@ -31,6 +31,11 @@ def main() -> None:
     parser.add_argument("--terminal-weights", default="0", help="comma-separated floats")
     parser.add_argument("--move-weights", default="0", help="comma-separated floats")
     parser.add_argument(
+        "--steady-input-weights",
+        default="0",
+        help="comma-separated steady-state input regularization weights",
+    )
+    parser.add_argument(
         "--ranking-metric",
         choices=("tracking_error_cost", "tracking_cost"),
         default="tracking_error_cost",
@@ -49,10 +54,11 @@ def main() -> None:
         _csv(args.solve_every, int),
         _csv(args.terminal_weights, float),
         _csv(args.move_weights, float),
+        _csv(args.steady_input_weights, float),
         _csv(args.transcriptions, str),
     )
     rows = []
-    for horizon, solve_every, terminal, move, transcription in grid:
+    for horizon, solve_every, terminal, move, steady_input_weight, transcription in grid:
         # The benchmark protocol owns both the reported tracking objective and
         # the Oracle's matching objective weights. Put r_move there so a tuning
         # candidate is not overwritten by the protocol default (R = I).
@@ -71,6 +77,7 @@ def main() -> None:
             "solve_every": solve_every,
             "terminal_weight": terminal,
             "r_move": move,
+            "steady_input_weight": steady_input_weight,
             "transcription": transcription,
             "ipopt_max_iter": args.ipopt_max_iter,
             "ipopt_tol": args.ipopt_tol,
@@ -83,7 +90,7 @@ def main() -> None:
             controller="oracle",
             protocol=protocol,
             seeds=[args.seed],
-            controller_config={"profile": profile, "mode": "tracking", "parameters": parameters},
+            controller_config={"profile": profile, "parameters": parameters},
             include_episodes=False,
         )
         row = case["row"]

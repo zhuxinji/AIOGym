@@ -95,6 +95,99 @@ def test_reference_task_applies_equilibrium_and_setpoint_schedule():
     assert build_context(env).setpoint["y_sp"] == pytest.approx(scheduled)
 
 
+def test_randomized_reference_schedule_is_seeded_and_reachable():
+    env = aiogym.make_env(
+        "quadruple",
+        objective="tracking",
+        task="nonminimum-phase",
+        randomize_setpoints=True,
+    )
+    nominal_initial = list(env._ysp0)
+    nominal_schedule = dict(env._task_setpoint_events)
+
+    env.reset(seed=9000)
+    first = dict(env._episode_setpoint_events)
+    assert env.y_sp == pytest.approx(nominal_initial)
+
+    env.reset(seed=9001)
+    second = dict(env._episode_setpoint_events)
+    env.reset(seed=9000)
+    repeated = dict(env._episode_setpoint_events)
+
+    assert first == repeated
+    assert first != second
+    assert first != nominal_schedule
+    assert env._task_setpoint_events == nominal_schedule
+    for _ in range(120):
+        env.step(env.model.default_action())
+    assert env.y_sp == pytest.approx(first[120])
+    for target in first.values():
+        assert env.model.is_setpoint_reachable(target)
+        action = env.model.tracking_steady_state_action(target)
+        equilibrium = env.model.equilibrium_state(
+            env.model.physical_action_vector(action)
+        )
+        assert env.model.controlled_output(equilibrium) == pytest.approx(target)
+        assert all(0.0 <= value <= 20.0 for value in equilibrium)
+
+
+def test_zero_boundary_randomized_schedule_stays_on_reachable_manifold():
+    env = aiogym.make_env(
+        "quadruple",
+        objective="tracking",
+        task="zero-boundary-stress",
+        randomize_setpoints=True,
+    )
+    env.reset(seed=9000)
+    target = env._episode_setpoint_events[120]
+    env.reset(seed=9001)
+    other_target = env._episode_setpoint_events[120]
+
+    assert target != pytest.approx(other_target)
+    # The singular zero-boundary map has no unique inverse, so the sampler
+    # generates a safe actuator equilibrium and maps it forward to this target.
+    assert env.model.tracking_steady_state_action(target) is None
+    gamma1, gamma2 = env.model.p["gamma"]
+    k1, k2 = env.model.p["pump_gain"]
+    a1, a2 = env.model.p["outlet_area"][:2]
+    required = [
+        a1 * np.sqrt(2.0 * env.model.p["gravity"] * target[0]),
+        a2 * np.sqrt(2.0 * env.model.p["gravity"] * target[1]),
+    ]
+    matrix = np.asarray([
+        [gamma1 * k1, (1.0 - gamma2) * k2],
+        [(1.0 - gamma1) * k1, gamma2 * k2],
+    ])
+    assert np.linalg.matrix_rank(matrix) == 1
+    assert np.linalg.matrix_rank(np.column_stack([matrix, required])) == 1
+
+
+def test_evaluation_records_each_seeded_setpoint_schedule():
+    protocol = aiogym.BenchmarkProtocol.tracking(
+        "quadruple",
+        task="nonminimum-phase",
+        randomize_setpoints=True,
+        episode_steps=1,
+    )
+    controller = make_controller(
+        "pid",
+        model=protocol.make_env().model,
+        scenario="quadruple",
+        config={"profile": "quadruple-nonminimum-phase-benchmark"},
+    )
+    result = evaluate_controller(
+        controller,
+        protocol.make_env(),
+        seed_list=[9000, 9001],
+        protocol=protocol,
+    )
+    schedules = result["disturbance"]["episode_schedules"]
+
+    assert len(schedules) == 2
+    assert schedules[0]["setpoints"] != schedules[1]["setpoints"]
+    assert "120" in schedules[0]["setpoints"]
+
+
 def test_reference_pi_bias_and_closed_loop_smoke():
     env = aiogym.make_env(
         "quadruple", objective="tracking", task="minimum-phase"
@@ -184,7 +277,7 @@ def test_nonminimum_benchmark_pid_uses_cross_pairing():
     assert [(loop["u_index"], loop["y_index"]) for loop in loops] == [(0, 1), (1, 0)]
 
 
-def test_nonminimum_mpc_profile_has_unconstrained_moves_and_feedforward_initialization():
+def test_nonminimum_mpc_profile_regularizes_toward_steady_input():
     protocol = aiogym.BenchmarkProtocol.tracking(
         "quadruple", task="nonminimum-phase", episode_steps=2
     )
@@ -195,14 +288,15 @@ def test_nonminimum_mpc_profile_has_unconstrained_moves_and_feedforward_initiali
         config={"profile": "quadruple-nonminimum-phase"},
     )
     metadata = controller.metadata()
-    assert metadata["horizon"] == 60
+    assert metadata["horizon"] == 48
     assert metadata["cv_scale"] == pytest.approx([1.0, 1.0])
     assert metadata["initialization"] == "tracking_steady_state_action"
+    assert metadata["feedforward_reseed"] == "setpoint_change"
+    assert metadata["steady_input_weight"] == pytest.approx(20000.0)
     assert "du_max" not in metadata
-    assert "steady_input_weight" not in metadata
 
 
-def test_mpc_steady_feedforward_only_seeds_the_first_solve(monkeypatch):
+def test_mpc_steady_feedforward_reseeds_on_setpoint_change(monkeypatch):
     model = aiogym.make_model("quadruple")
     controller = make_controller(
         "mpc",
@@ -211,12 +305,14 @@ def test_mpc_steady_feedforward_only_seeds_the_first_solve(monkeypatch):
         config={"profile": "quadruple-minimum-phase", "P": 1},
     )
     target = [model.default_setpoint_vector()[0] + 1.0, model.default_setpoint_vector()[1]]
+    changed_target = [target[0], target[1] + 1.0]
     seed = model.tracking_steady_state_action(target)
+    changed_seed = model.tracking_steady_state_action(changed_target)
     calls = []
 
     def steady_action(y_sp):
         calls.append(list(y_sp))
-        return seed
+        return seed if list(y_sp) == target else changed_seed
 
     monkeypatch.setattr(model, "tracking_steady_state_action", steady_action)
     monkeypatch.setattr(np.linalg, "solve", lambda H, g: np.zeros(model.action_dim()))
@@ -224,23 +320,25 @@ def test_mpc_steady_feedforward_only_seeds_the_first_solve(monkeypatch):
 
     first = controller.compute(measurement, {"y_sp": target}, 1.0)
     second = controller.compute(measurement, {"y_sp": target}, 1.0)
+    third = controller.compute(measurement, {"y_sp": changed_target}, 1.0)
 
     assert first == pytest.approx(seed)
     assert second == pytest.approx(seed)
-    assert calls == [target]
+    assert third == pytest.approx(changed_seed)
+    assert calls == [target, changed_target]
 
 
 @pytest.mark.parametrize(
-    "profile,horizon,solve_every,r_move,terminal_weight",
+    "profile,horizon,solve_every,r_move,terminal_weight,steady_input_weight",
     [
-        ("quadruple-minimum-phase", 12, 1, 1.0, 0.0),
-        ("quadruple-nonminimum-phase", 180, 10, 1.0, 0.0),
-        ("quadruple-zero-boundary", 4, 1, 1.0, 0.0),
-        ("quadruple-disturbance-rejection", 3, 2, 1.0, 0.0),
+        ("quadruple-minimum-phase", 12, 1, 1.0, 0.0, 0.0),
+        ("quadruple-nonminimum-phase", 8, 8, 1.0, 0.0, 1.0),
+        ("quadruple-zero-boundary", 4, 1, 1.0, 0.0, 0.0),
+        ("quadruple-disturbance-rejection", 3, 2, 1.0, 0.0, 0.0),
     ],
 )
 def test_quadruple_oracle_profiles_expose_task_specific_tuning(
-    profile, horizon, solve_every, r_move, terminal_weight
+    profile, horizon, solve_every, r_move, terminal_weight, steady_input_weight
 ):
     protocol = aiogym.BenchmarkProtocol.tracking(
         "quadruple", task="minimum-phase", episode_steps=2
@@ -257,11 +355,11 @@ def test_quadruple_oracle_profiles_expose_task_specific_tuning(
     assert metadata["q_y"] == pytest.approx([1.0, 1.0])
     assert metadata["r_move"] == pytest.approx(r_move)
     assert metadata["terminal_weight"] == pytest.approx(terminal_weight)
+    assert metadata["steady_input_weight"] == pytest.approx(steady_input_weight)
     assert metadata["initialization"] == "tracking_steady_state_action"
     assert metadata["integration_substeps"] == 10
     assert metadata["integration_max_step"] == pytest.approx(0.1)
     assert "du_max" not in metadata
-    assert "steady_input_weight" not in metadata
 
 
 def test_oracle_setpoint_preview_is_opt_in_and_uses_future_task_events():
@@ -317,7 +415,8 @@ def test_zero_boundary_oracle_falls_back_to_nominal_initial_guess():
     target = protocol.make_env().model.default_setpoint_vector()
 
     assert controller.orc._steady_action_target(target) == pytest.approx(controller.orc.u_init)
-    assert "u_target" not in controller.orc.par
+    assert "u_target" in controller.orc.par
+    assert controller.orc.steady_input_weight == pytest.approx(0.0)
     assert "steady_weight" not in controller.orc.par
 
 

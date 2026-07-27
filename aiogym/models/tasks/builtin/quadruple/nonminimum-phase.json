@@ -9,6 +9,11 @@
   "objectives": {
     "tracking": {"tracking_q_y": 0.7, "tracking_r_move": 0.3}
   },
+  "controllers": {
+    "pid": {"profile": "quadruple-nonminimum-phase-benchmark"},
+    "mpc": {"profile": "quadruple-nonminimum-phase"},
+    "oracle": {"profile": "quadruple-nonminimum-phase"}
+  },
   "environment": {
     "control_dt": 1.0,
     "episode_steps": 1800,

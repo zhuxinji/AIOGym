@@ -15,7 +15,7 @@ def test_all_builtins_have_non_mutating_parameter_profiles():
         model = aiogym.make_model(scenario)
         before = dict(model.p)
         profile = aiogym.load_parameter_profile(scenario)
-        card = model.model_card()
+        metadata = model.metadata()
         assert profile["scenario"] == scenario
         expected_status = {
             "quadruple": "reference-parameterized",
@@ -23,20 +23,23 @@ def test_all_builtins_have_non_mutating_parameter_profiles():
         }.get(scenario, "legacy-unverified")
         assert profile["status"] == expected_status
         assert model.p == before
-        assert card["physical_metadata"]["parameter_status"] == expected_status
-        assert card["solver"]["method"] == "rk4"
-        assert card["solver"]["max_step"] == pytest.approx(model.dt_micro)
+        assert metadata["physical_metadata"]["parameter_status"] == expected_status
+        assert metadata["solver"]["method"] == "rk4"
+        assert metadata["solver"]["max_step"] == pytest.approx(model.dt_micro)
         if scenario == "cascade":
             assert {
-                row["status"] for row in card["parameters"].values()
+                row["status"] for row in metadata["parameters"].values()
             } == {"legacy-unverified", "assumed-benchmark"}
         elif scenario == "cascade-recirculating":
-            statuses = {row["status"] for row in card["parameters"].values()}
+            statuses = {row["status"] for row in metadata["parameters"].values()}
             assert "design-specified" in statuses
             assert "assumed-benchmark" in statuses
             assert "legacy-unverified" in statuses
         elif scenario != "quadruple":
-            assert all(row["status"] == "legacy-unverified" for row in card["parameters"].values())
+            assert all(
+                row["status"] == "legacy-unverified"
+                for row in metadata["parameters"].values()
+            )
 
 
 def test_all_builtins_pass_generic_readiness_checks():
@@ -123,13 +126,12 @@ def test_cascade_operation_profiles_are_validated_and_shared_with_controller_mod
 
     continuous = aiogym.load_task_profile("cascade/continuous-benchmark")
     assert aiogym.task_operation(continuous) == {
-        "mode": "continuous",
         "product_flow_sp": 4.0e-4,
         "min_product_flow": 4.0e-4,
     }
     invalid = dict(continuous)
-    invalid["operation"] = {"mode": "continuous"}
-    with pytest.raises(ValueError, match="requires product_flow_sp"):
+    invalid["operation"] = {"min_product_flow": 0.0}
+    with pytest.raises(ValueError, match="operation requires product_flow_sp"):
         aiogym.validate_task_profile(invalid)
 
     protocol = aiogym.BenchmarkProtocol.economic(
@@ -212,7 +214,7 @@ def test_removed_task_and_suite_dynamic_fields_are_rejected(tmp_path):
         "controllers": ["pid"],
         "dynamic": True,
     }))
-    from aiogym.cli.suite_benchmark import load_suite
+    from aiogym.cli.benchmark import load_suite
 
     with pytest.raises(ValueError, match="unsupported suite option.*dynamic"):
         load_suite(str(suite_path))
@@ -235,7 +237,6 @@ def test_benchmark_runner_aligns_oracle_with_primary_tracking_error_weights():
         seeds=[0],
         controller_config={
             "profile": "quadruple-minimum-phase",
-            "mode": "tracking",
             "horizon": 1,
             "r_move": 0.7,
             "terminal_weight": 0.6,
@@ -247,7 +248,7 @@ def test_benchmark_runner_aligns_oracle_with_primary_tracking_error_weights():
     assert metadata["q_y"] == pytest.approx([2.0, 3.0])
     assert metadata["r_move"] == pytest.approx(0.7)
     assert metadata["terminal_weight"] == pytest.approx(0.6)
-    assert "steady_input_weight" not in metadata
+    assert metadata["steady_input_weight"] == pytest.approx(0.0)
 
 
 def test_benchmark_runner_aligns_mpc_move_weight_with_tracking_protocol():
@@ -315,12 +316,36 @@ def test_scheduled_setpoint_is_visible_before_its_control_step():
     assert second_info["y_sp"] == pytest.approx(scheduled)
 
 
-def test_tracking_action_weights_default_to_one():
+def test_tracking_action_weights_default_to_seventy_thirty():
     env = aiogym.AIOGymNativeEnv("quadruple", reward_mode="tracking")
     protocol = aiogym.BenchmarkProtocol.tracking("quadruple")
 
-    assert env.tracking_r_move == pytest.approx(1.0)
-    assert protocol.tracking_r_move == pytest.approx(1.0)
+    assert env.tracking_q_y == pytest.approx([0.7, 0.7])
+    assert env.tracking_r_move == pytest.approx(0.3)
+    assert protocol.tracking_q_y == pytest.approx(0.7)
+    assert protocol.tracking_r_move == pytest.approx(0.3)
+
+
+def test_default_tracking_weights_are_forwarded_to_oracle():
+    from aiogym.evaluation.execution import run_evaluation_case
+
+    protocol = aiogym.BenchmarkProtocol.tracking(
+        "cascade",
+        task="commissioning",
+        episode_steps=1,
+    )
+    case = run_evaluation_case(
+        scenario="cascade",
+        controller="oracle",
+        protocol=protocol,
+        seeds=[0],
+        controller_config={"profile": "cascade-control-benchmark"},
+        include_episodes=False,
+    )
+    metadata = case["controller"].metadata()
+
+    assert metadata["q_y"] == pytest.approx([0.7] * 6)
+    assert metadata["r_move"] == pytest.approx(0.3)
 
 
 def test_profile_scenario_mismatches_are_rejected():
@@ -331,7 +356,7 @@ def test_profile_scenario_mismatches_are_rejected():
 
 
 def test_explicit_suite_cases_keep_task_identity_and_controller_profiles():
-    from aiogym.cli.suite_benchmark import build_cases
+    from aiogym.cli.benchmark import build_cases
 
     args = SimpleNamespace(
         suite="quadruple-phase-comparison",
@@ -366,8 +391,134 @@ def test_explicit_suite_cases_keep_task_identity_and_controller_profiles():
     assert nonminimum_pid["controller_config"]["profile"] == "quadruple-nonminimum-phase-benchmark"
 
 
+def test_single_and_suite_cases_share_task_controller_defaults():
+    from aiogym.cli.benchmark import build_cases
+    from aiogym.evaluation import BenchmarkCase, resolve_protocol
+
+    for suite_name in ("quadruple", "cascade-control"):
+        args = SimpleNamespace(
+            suite=suite_name,
+            scenarios=None,
+            objectives=None,
+            controllers=None,
+            seed_list=None,
+            seed=7,
+            episodes=1,
+            episode_steps=None,
+            control_dt=None,
+            randomize_setpoints=None,
+            sb3_path=None,
+            sb3_algo="sac",
+            onnx_path=None,
+        )
+        _, suite_cases = build_cases(args)
+        for suite_case in suite_cases:
+            protocol = resolve_protocol(
+                suite_case["scenario"],
+                None,
+                {
+                    "task": suite_case["task"],
+                    "action_mode": suite_case["action_mode"],
+                },
+            )
+            single_case = BenchmarkCase.from_protocol(
+                protocol,
+                controller=suite_case["controller"],
+                seeds=[7],
+            )
+            assert (
+                dict(single_case.controller_config)
+                == suite_case["controller_config"]
+                == dict(suite_case["case_spec"].controller_config)
+            )
+
+
+def test_suite_cli_can_override_task_setpoint_randomization():
+    from aiogym.cli.benchmark import build_cases
+
+    args = SimpleNamespace(
+        suite="quadruple-phase-comparison",
+        scenarios=None,
+        objectives=None,
+        controllers=None,
+        seed_list=None,
+        seed=9000,
+        episodes=3,
+        episode_steps=None,
+        control_dt=None,
+        randomize_setpoints=True,
+        sb3_path=None,
+        sb3_algo="sac",
+        onnx_path=None,
+    )
+    _, cases = build_cases(args)
+
+    assert len(cases) == 6
+    assert all(case["protocol"].randomize_setpoints for case in cases)
+    assert all(case["seeds"] == [9000, 9001, 9002] for case in cases)
+
+
+def test_scenario_target_expands_registered_tasks_without_a_suite_file():
+    from aiogym.cli.benchmark import build_cases
+
+    args = SimpleNamespace(
+        suite="cascade",
+        scenarios=None,
+        objectives=None,
+        controllers="pid",
+        seed_list=None,
+        seed=9000,
+        episodes=1,
+        episode_steps=None,
+        control_dt=None,
+        randomize_setpoints=None,
+        sb3_path=None,
+        sb3_algo="sac",
+        onnx_path=None,
+    )
+    suite, cases = build_cases(args)
+
+    assert suite["name"] == "cascade"
+    assert {case["task"] for case in cases} == {
+        "commissioning",
+        "continuous-benchmark",
+        "disturbance-rejection",
+        "safety-recovery",
+        "temperature-step",
+    }
+    assert len(cases) == 5
+
+
+def test_taskless_scenario_target_has_a_default_tracking_case():
+    from aiogym.cli.benchmark import build_cases
+
+    args = SimpleNamespace(
+        suite="cstr",
+        scenarios=None,
+        objectives=None,
+        controllers="pid",
+        seed_list=None,
+        seed=9000,
+        episodes=1,
+        episode_steps=None,
+        control_dt=None,
+        randomize_setpoints=None,
+        sb3_path=None,
+        sb3_algo="sac",
+        onnx_path=None,
+    )
+    suite, cases = build_cases(args)
+
+    assert suite["name"] == "cstr"
+    assert len(cases) == 1
+    assert cases[0]["task"] == "default"
+    assert cases[0]["objective"] == "tracking"
+    assert cases[0]["protocol"].episode_steps == 80
+    assert cases[0]["protocol"].control_dt == 0.5
+
+
 def test_quadruple_suite_runs_all_three_controllers_on_every_formal_task():
-    from aiogym.cli.suite_benchmark import build_cases
+    from aiogym.cli.benchmark import build_cases
 
     args = SimpleNamespace(
         suite="quadruple",
@@ -432,7 +583,7 @@ def test_quadruple_suite_runs_all_three_controllers_on_every_formal_task():
 
 
 def test_cascade_recirculating_suite_uses_formal_tasks_and_task_objectives():
-    from aiogym.cli.suite_benchmark import build_cases
+    from aiogym.cli.benchmark import build_cases
 
     args = SimpleNamespace(
         suite="cascade-recirculating",
@@ -478,13 +629,12 @@ def test_cascade_recirculating_suite_uses_formal_tasks_and_task_objectives():
 
 
 def test_single_benchmark_passes_oracle_specific_profile():
-    from aiogym.cli.single_benchmark import controller_specs
+    from aiogym.cli.benchmark import controller_specs
 
     args = SimpleNamespace(
         controllers="oracle",
         controller_profile=None,
         oracle_profile="quadruple-minimum-phase",
-        oracle_episodes=1,
         episodes=3,
         seed=9000,
         seed_list=None,
@@ -501,8 +651,37 @@ def test_single_benchmark_passes_oracle_specific_profile():
     specs = controller_specs(args, protocol)
 
     assert specs[0]["config"] == {
-        "mode": "tracking",
         "profile": "quadruple-minimum-phase",
+    }
+    assert specs[0]["seed_list"] == [9000, 9001, 9002]
+
+
+@pytest.mark.parametrize("objective", ["kpi", "robustness", "safety"])
+def test_single_benchmark_does_not_set_oracle_objective(objective):
+    from aiogym.cli.benchmark import controller_specs
+
+    args = SimpleNamespace(
+        controllers="oracle",
+        controller_profile="cascade-control-benchmark",
+        oracle_profile=None,
+        episodes=1,
+        seed=7,
+        seed_list=None,
+        sb3_path=None,
+        sb3_algo="sac",
+        sb3_action_mode="setpoint",
+        onnx_path=None,
+        onnx_action_mode="setpoint",
+    )
+    protocol = getattr(aiogym.BenchmarkProtocol, objective)(
+        "cascade",
+        episode_steps=1,
+    )
+
+    specs = controller_specs(args, protocol)
+
+    assert specs[0]["config"] == {
+        "profile": "cascade-control-benchmark",
     }
 
 
@@ -660,10 +839,10 @@ def test_quadruple_tracking_plot_uses_controlled_levels_and_pump_signals(tmp_pat
 
 
 def test_named_task_suite_inherits_task_timing_instead_of_runner_defaults():
-    from aiogym.cli.suite_benchmark import build_cases
+    from aiogym.cli.benchmark import build_cases
 
     args = SimpleNamespace(
-        suite="quadruple-disturbance-rejection",
+        suite="quadruple",
         scenarios=None,
         objectives=None,
         controllers="pid",
@@ -677,13 +856,16 @@ def test_named_task_suite_inherits_task_timing_instead_of_runner_defaults():
         onnx_path=None,
     )
     _, cases = build_cases(args)
-    assert len(cases) == 1
-    assert cases[0]["protocol"].episode_steps == 900
-    assert cases[0]["protocol"].control_dt == 1.0
+    assert len(cases) == 4
+    disturbance = next(
+        case for case in cases if case["task"] == "disturbance-rejection"
+    )
+    assert disturbance["protocol"].episode_steps == 900
+    assert disturbance["protocol"].control_dt == 1.0
 
 
 def test_economic_suites_exclude_models_without_meaningful_economics():
-    from aiogym.cli.suite_benchmark import build_cases, load_suite
+    from aiogym.cli.benchmark import build_cases, load_suite
 
     valid_economic = {"cascade", "cstr", "hvac", "heater"}
     args = SimpleNamespace(
@@ -717,41 +899,13 @@ def test_economic_suites_exclude_models_without_meaningful_economics():
         if case["scenario"] == "cascade" and case["objective"] == "economic"
     } == {"continuous-benchmark"}
 
-    args.suite = "all-actuator"
-    _, all_cases = build_cases(args)
-    assert {
-        case["scenario"] for case in all_cases if case["objective"] == "tracking"
-    } == set(aiogym.list_scenarios())
-    assert {
-        case["scenario"] for case in all_cases if case["objective"] == "economic"
-    } == valid_economic
-    assert next(
-        case for case in all_cases
-        if case["scenario"] == "cascade" and case["objective"] == "economic"
-    )["task"] == "continuous-benchmark"
-
-    args.suite = "core"
-    _, core_cases = build_cases(args)
-    assert {
-        case["scenario"] for case in core_cases if case["objective"] == "tracking"
-    } == {"cascade", "quadruple", "cstr", "hvac"}
-    assert {
-        case["scenario"] for case in core_cases if case["objective"] == "economic"
-    } == {"cascade", "cstr", "hvac"}
-    assert next(
-        case for case in core_cases
-        if case["scenario"] == "cascade" and case["objective"] == "economic"
-    )["task"] == "continuous-benchmark"
-
     assert set(load_suite("economic-actuator")["scenarios"]) == valid_economic
-    assert set(load_suite("economic-supervisory")["scenarios"]) == valid_economic
-    for suite_name in ("economic-actuator", "economic-supervisory"):
-        cascade_cases = [
-            case for case in load_suite(suite_name)["cases"]
-            if case.get("scenarios") == ["cascade"]
-        ]
-        assert len(cascade_cases) == 1
-        assert cascade_cases[0]["task"] == "continuous-benchmark"
+    cascade_cases = [
+        case for case in load_suite("economic-actuator")["cases"]
+        if case.get("scenarios") == ["cascade"]
+    ]
+    assert len(cascade_cases) == 1
+    assert cascade_cases[0]["task"] == "continuous-benchmark"
 
 
 def test_leaderboard_ranks_restart_for_each_task():
@@ -898,7 +1052,10 @@ def test_high_level_reward_mode_option_is_rejected():
 
 
 def test_training_cli_objective_resolution_and_metadata():
-    from aiogym.rl.train_rlpd import configure_training_objective as configure_rlpd
+    from aiogym.rl.train_rlpd import (
+        configure_training_objective as configure_rlpd,
+        configure_training_task as configure_rlpd_task,
+    )
     from aiogym.rl.train_sb3 import (
         configure_training_auto_events,
         configure_training_objective as configure_sb3,
@@ -954,6 +1111,35 @@ def test_training_cli_objective_resolution_and_metadata():
     assert task_args.previous_action_obs is True
     assert task_args.normalize_observations is True
     assert task_args.tracking_error_obs is True
+
+    rlpd_task_args = SimpleNamespace(
+        scenario="quadruple",
+        task="minimum-phase",
+        objective="tracking",
+        action_mode="setpoint",
+        control_dt=None,
+        episode_steps=None,
+        tracking_q_y=None,
+        tracking_r_move=None,
+        disturbance_obs=None,
+        previous_action_obs=None,
+        normalize_observations=None,
+        tracking_error_obs=None,
+    )
+    configure_rlpd_task(
+        rlpd_task_args,
+        episode_steps_attr="episode_steps",
+        eval_episode_steps_attr=None,
+    )
+    assert rlpd_task_args.control_dt == pytest.approx(task_args.control_dt)
+    assert rlpd_task_args.episode_steps == task_args.train_episode_steps
+    assert rlpd_task_args.tracking_q_y == pytest.approx(task_args.tracking_q_y)
+    assert rlpd_task_args.tracking_r_move == pytest.approx(task_args.tracking_r_move)
+    assert rlpd_task_args.previous_action_obs is task_args.previous_action_obs
+    assert (
+        rlpd_task_args.normalize_observations
+        is task_args.normalize_observations
+    )
 
     metadata_args = SimpleNamespace(
         algo="sac",

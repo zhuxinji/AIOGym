@@ -1,16 +1,18 @@
 # Built-in capability matrix
 
 This page distinguishes model-level interface support from formal task and
-benchmark evidence. It was checked against Git revision `7bf0b08` on
-2026-07-21. The executable registries and JSON declarations remain the source of
-truth after later changes.
+benchmark evidence. The executable registries and JSON declarations are the
+source of truth.
 
 ## How to read the matrix
 
 - **Model objectives** come from each model's `supported_objectives`. They mean
   the environment can construct those scoring semantics; they do not prove that
   a formal task or tuned baseline exists.
-- **Bundled tasks** are the 11 JSON task specs returned by
+- **Benchmark objectives** come from each model's `benchmark_objectives`. Suite
+  groups use this narrower evidence declaration, so technical scoring support is
+  not mistaken for a validated built-in benchmark.
+- **Bundled tasks** are the 13 JSON task specs returned by
   `aiogym.list_tasks()` at the stated revision.
 - **Task objectives** are narrower declarations enforced by those task specs.
 - **Action modes** come from the actuator contract and optional
@@ -23,7 +25,7 @@ Abbreviations: T = tracking, E = economic, K = KPI, R = robustness, S = safety.
 
 | Scenario | Bundled task specs | Task objectives | Model objectives | Action modes |
 | --- | --- | --- | --- | --- |
-| `cascade` | `continuous-benchmark` | E (default E) | T, E, K, R, S | actuator; setpoint (3) |
+| `cascade` | `continuous-benchmark`; `commissioning`; `temperature-step`; `disturbance-rejection`; `safety-recovery` | E for the economic task; T, K, R, S for control tasks; defaults vary | T, E, K, R, S | actuator; setpoint (3) |
 | `cascade-recirculating` | `commissioning`; `temperature-step`; `disturbance-rejection`; `safety-recovery` | T, K, R, S; defaults vary by task | T, K, R, S; E intentionally unsupported | actuator; setpoint (1) |
 | `quadruple` | `minimum-phase`; `nonminimum-phase`; `zero-boundary-stress`; `disturbance-rejection` | T/K/S for phase tasks; T/K/R/S for stress and disturbance tasks | T, E, K, R, S | actuator; setpoint (2) |
 | `cstr` | none; direct environment and suites only | — | T, E, K, R, S | actuator; setpoint (2) |
@@ -40,6 +42,10 @@ underlying actuator dimension.
 | Task ID | Status | Default objective | Allowed objectives |
 | --- | --- | --- | --- |
 | `cascade/continuous-benchmark` | assumed benchmark | economic | economic |
+| `cascade/commissioning` | assumed benchmark | tracking | tracking, KPI, robustness, safety |
+| `cascade/temperature-step` | benchmark designed | tracking | tracking, KPI, robustness, safety |
+| `cascade/disturbance-rejection` | benchmark designed | robustness | tracking, KPI, robustness, safety |
+| `cascade/safety-recovery` | benchmark designed | safety | tracking, KPI, robustness, safety |
 | `cascade-recirculating/commissioning` | design-derived benchmark | tracking | tracking, KPI, robustness, safety |
 | `cascade-recirculating/temperature-step` | benchmark designed | tracking | tracking, KPI, robustness, safety |
 | `cascade-recirculating/disturbance-rejection` | benchmark designed | robustness | tracking, KPI, robustness, safety |

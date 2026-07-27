@@ -9,6 +9,11 @@
   "objectives": {
     "tracking": {"tracking_q_y": 0.7, "tracking_r_move": 0.3}
   },
+  "controllers": {
+    "pid": {"profile": "quadruple-zero-boundary"},
+    "mpc": {"profile": "quadruple-zero-boundary"},
+    "oracle": {"profile": "quadruple-zero-boundary"}
+  },
   "environment": {
     "control_dt": 1.0,
     "episode_steps": 1800,

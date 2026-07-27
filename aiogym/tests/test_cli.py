@@ -34,8 +34,7 @@ def test_list_tasks_can_filter_by_scenario(capsys):
 @pytest.mark.parametrize(
     ("route", "target"),
     [
-        (("benchmark", "run"), "_single_benchmark"),
-        (("benchmark", "suite"), "_suite_benchmark"),
+        (("benchmark", "suite"), "_benchmark"),
         (("train", "sb3"), "_train_sb3"),
         (("train", "rlpd"), "_train_rlpd"),
         (("artifacts", "report"), "_artifact_report"),
@@ -61,31 +60,47 @@ def test_group_without_leaf_prints_group_help(capsys):
     assert cli.main(["benchmark"]) == 0
     output = capsys.readouterr().out
     assert "usage: aiogym benchmark" in output
-    assert "run" in output
     assert "suite" in output
 
 
-def test_benchmark_options_use_direct_single_benchmark(monkeypatch):
-    received = []
+def test_suite_command_requires_an_explicit_suite_id():
+    from aiogym.cli.benchmark import main
 
-    def fake_handler(argv):
-        received.append(argv)
-        return 17
+    with pytest.raises(SystemExit) as exc_info:
+        main([])
 
-    monkeypatch.setattr(cli, "_direct_benchmark", fake_handler)
+    assert exc_info.value.code == 2
 
-    result = cli.main([
-        "benchmark", "--scenario", "quadruple", "--task", "minimum-phase"
-    ])
 
-    assert result == 17
-    assert received == [[
-        "--scenario", "quadruple", "--task", "minimum-phase"
-    ]]
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["benchmark", "run", "quadruple", "minimum-phase"],
+        ["benchmark", "--scenario", "quadruple", "--task", "minimum-phase"],
+    ],
+)
+def test_removed_benchmark_entrypoints_are_rejected(argv):
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(argv)
+
+    assert exc_info.value.code == 2
+
+
+def test_benchmark_help_exposes_unified_target_and_task(capsys):
+    from aiogym.cli.benchmark import main
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--help"], prog="aiogym benchmark suite")
+
+    assert exc_info.value.code == 0
+    output = capsys.readouterr().out
+    assert "TARGET [TASK]" in output
+    assert "--setpoint-step" in output
+    assert "--fail-on-degraded" in output
 
 
 def test_benchmark_setpoint_parser():
-    from aiogym.cli.single_benchmark import parse_setpoint_step
+    from aiogym.cli.benchmark import parse_setpoint_step
 
     assert parse_setpoint_step("120:13.25,11.75") == {
         "at_step": 120,
@@ -101,7 +116,7 @@ def test_console_script_metadata_exposes_only_unified_cli():
 
     assert 'aiogym = "aiogym.cli.main:main"' in text
     for removed in (
-        "aiogym-artifact-check", "aiogym-model-cards", "aiogym-report",
+        "aiogym-artifact-check", "aiogym-report",
         "aiogym-single-benchmark", "aiogym-suite-benchmark",
         "aiogym-train-rlpd", "aiogym-train-sb3",
     ):

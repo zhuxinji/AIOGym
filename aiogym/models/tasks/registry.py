@@ -105,6 +105,18 @@ def task_objective_options(
     return copy.deepcopy(profile.get("objectives", {}).get(objective, {}))
 
 
+def task_controller_config(
+    profile: Mapping[str, Any] | None,
+    controller: str,
+) -> dict[str, Any]:
+    """Return task-owned defaults for one controller."""
+
+    if profile is None:
+        return {}
+    validate_task_profile(profile)
+    return copy.deepcopy(profile.get("controllers", {}).get(controller, {}))
+
+
 def resolve_environment_options(
     *,
     scenario: str,
@@ -183,22 +195,17 @@ def resolve_environment_options(
 
 
 def task_operation(profile: Mapping[str, Any]) -> dict[str, Any] | None:
-    """Return a normalized batch/continuous operation declaration, if present."""
+    """Return a normalized throughput declaration, if present."""
 
     validate_task_profile(profile)
     operation = profile.get("operation")
     if operation is None:
         return None
-    mode = str(operation["mode"])
-    product_flow_sp = float(operation.get("product_flow_sp", 0.0))
+    product_flow_sp = float(operation["product_flow_sp"])
     min_product_flow = float(
-        operation.get(
-            "min_product_flow",
-            product_flow_sp if mode == "continuous" else 0.0,
-        )
+        operation.get("min_product_flow", product_flow_sp)
     )
     return {
-        "mode": mode,
         "product_flow_sp": product_flow_sp,
         "min_product_flow": min_product_flow,
     }
@@ -253,6 +260,7 @@ __all__ = [
     "list_tasks",
     "load_task_profile",
     "resolve_environment_options",
+    "task_controller_config",
     "task_environment",
     "task_identity",
     "task_objective_options",

@@ -1,91 +1,57 @@
-"""Evaluation protocols, metrics, and artifact reports."""
+"""Evaluation protocols, metrics, and artifact reports, loaded by responsibility."""
+from __future__ import annotations
 
-from .objectives import StageRewardContext, StageRewardResult, stage_reward
-from .results import evaluate_task_acceptance
+from aiogym._internal.lazy import exported_dir, resolve_export
 
-from .metric_catalog import (
-    EVALUATION_SCHEMA_VERSION,
-    METRIC_DEFINITIONS,
-    METRIC_DIRECTIONS,
-    PRIMARY_METRICS,
-    PROTOCOL_METRICS,
-    PUBLIC_BENCHMARK_SCHEMA_VERSION,
-    ROLLOUT_SCHEMA,
-    metric_definitions,
-    metric_direction,
-    primary_metric_for_objective,
-)
-from .cases import BenchmarkCase, EnvironmentSpec
-from .objective_specs import (
-    ObjectiveSpec,
-    metric_for_reward_mode,
-    reward_mode_for_objective,
-    objective_spec,
-    resolve_objective,
-)
-from .protocols import (
-    BenchmarkProtocol,
-    resolve_protocol,
-)
-from .results import build_evaluation_report, result_schema
-from .execution import evaluate_controller
-from .metrics.tracking import tracking_step_metrics as _tracking_step_metrics
-from .execution import rollout_controller, run_benchmark
-from .artifact import (
-    ARTIFACT_CHECK_SCHEMA_VERSION,
-    REPORT_SCHEMA_VERSION,
-    check_benchmark_artifacts,
-    finalize_benchmark_artifacts,
-    plot_constraint_timeline,
-    plot_leaderboard,
-    plot_learning_curve,
-    plot_results,
-    plot_rollouts,
-    plot_summary,
-    render_benchmark_report,
-    write_benchmark_artifacts,
-)
 
-__all__ = [
-    "StageRewardContext",
-    "StageRewardResult",
-    "stage_reward",
-    "evaluate_task_acceptance",
-    "EVALUATION_SCHEMA_VERSION",
-    "ROLLOUT_SCHEMA",
-    "METRIC_DEFINITIONS",
-    "PROTOCOL_METRICS",
-    "PRIMARY_METRICS",
-    "METRIC_DIRECTIONS",
-    "PUBLIC_BENCHMARK_SCHEMA_VERSION",
-    "BenchmarkCase",
-    "BenchmarkProtocol",
-    "EnvironmentSpec",
-    "ObjectiveSpec",
-    "metric_for_reward_mode",
-    "reward_mode_for_objective",
-    "objective_spec",
-    "primary_metric_for_objective",
-    "metric_direction",
-    "metric_definitions",
-    "resolve_objective",
-    "resolve_protocol",
-    "evaluate_controller",
-    "rollout_controller",
-    "run_benchmark",
-    "result_schema",
-    "build_evaluation_report",
-    "_tracking_step_metrics",
-    "REPORT_SCHEMA_VERSION",
-    "ARTIFACT_CHECK_SCHEMA_VERSION",
-    "render_benchmark_report",
-    "check_benchmark_artifacts",
-    "write_benchmark_artifacts",
-    "finalize_benchmark_artifacts",
-    "plot_results",
-    "plot_summary",
-    "plot_rollouts",
-    "plot_leaderboard",
-    "plot_constraint_timeline",
-    "plot_learning_curve",
-]
+_EXPORTS = {
+    "StageRewardContext": ".objectives",
+    "StageRewardResult": ".objectives",
+    "stage_reward": ".objectives",
+    "evaluate_task_acceptance": ".results",
+    "EVALUATION_SCHEMA_VERSION": ".metric_catalog",
+    "ROLLOUT_SCHEMA": ".metric_catalog",
+    "METRIC_DEFINITIONS": ".metric_catalog",
+    "PROTOCOL_METRICS": ".metric_catalog",
+    "PRIMARY_METRICS": ".metric_catalog",
+    "METRIC_DIRECTIONS": ".metric_catalog",
+    "PUBLIC_BENCHMARK_SCHEMA_VERSION": ".metric_catalog",
+    "primary_metric_for_objective": ".metric_catalog",
+    "metric_direction": ".metric_catalog",
+    "metric_definitions": ".metric_catalog",
+    "BenchmarkCase": ".cases",
+    "EnvironmentSpec": ".cases",
+    "ObjectiveSpec": ".objective_specs",
+    "metric_for_reward_mode": ".objective_specs",
+    "reward_mode_for_objective": ".objective_specs",
+    "objective_spec": ".objective_specs",
+    "resolve_objective": ".objective_specs",
+    "BenchmarkProtocol": ".protocols",
+    "resolve_protocol": ".protocols",
+    "result_schema": ".results",
+    "build_evaluation_report": ".results",
+    "evaluate_controller": ".execution",
+    "rollout_controller": ".execution",
+    "run_benchmark": ".execution",
+    "REPORT_SCHEMA_VERSION": ".artifact",
+    "ARTIFACT_CHECK_SCHEMA_VERSION": ".artifact",
+    "render_benchmark_report": ".artifact",
+    "check_benchmark_artifacts": ".artifact",
+    "write_benchmark_artifacts": ".artifact",
+    "finalize_benchmark_artifacts": ".artifact",
+    "plot_results": ".artifact",
+    "plot_summary": ".artifact",
+    "plot_rollouts": ".artifact",
+    "plot_leaderboard": ".artifact",
+    "plot_constraint_timeline": ".artifact",
+    "plot_learning_curve": ".artifact",
+}
+__all__ = sorted(_EXPORTS)
+
+
+def __getattr__(name):
+    return resolve_export(globals(), __name__, _EXPORTS, name)
+
+
+def __dir__():
+    return exported_dir(globals(), _EXPORTS)

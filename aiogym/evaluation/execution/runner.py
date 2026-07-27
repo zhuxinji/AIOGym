@@ -11,6 +11,7 @@ from .evaluator import evaluate_controller
 from .rollouts import rollout_controller
 from ..cases import BenchmarkCase
 from ..metric_catalog import primary_metric_for_objective
+from ..objective_specs import DEFAULT_TRACKING_Q_Y, DEFAULT_TRACKING_R_MOVE
 from ..protocols import BenchmarkProtocol
 from ..results import compact_result_row
 from ...models.tasks import configure_model_for_task
@@ -54,23 +55,40 @@ def run_evaluation_case(
         raise ValueError("benchmark case must include at least one seed")
     config = dict(case.controller_config)
     if controller == "oracle":
+        # The resolved task/case objective is the single source of truth for
+        # Oracle optimization semantics. Controller profiles tune numerical
+        # behavior but do not select a separate optimization mode.
+        config["objective"] = case.objective.name
+        config.pop("mode", None)
         parameters = dict(config.get("parameters") or {})
+        parameters.pop("mode", None)
+        if "parameters" in config:
+            config["parameters"] = parameters
         if "control_dt" not in config and "control_dt" not in parameters:
             config["control_dt"] = float(case.environment.control_dt)
         if case.objective.name == "tracking":
-            # Tracking benchmarks rank normalized output-error cost. The
-            # objective spec owns those output weights; controller profiles may keep
-            # small input regularizers and finite-horizon terms for numerical
-            # behavior, but they do not change the reported primary metric.
-            config["q_y"] = case.objective.reward_options.get("tracking_q_y", 1.0)
-            config["r_move"] = case.objective.reward_options.get("tracking_r_move", 1.0)
+            # The objective spec owns the normalized output and input-move
+            # weights. Controller profiles may keep finite-horizon terms for
+            # numerical behavior, but they do not change the reported metric.
+            config["q_y"] = case.objective.reward_options.get(
+                "tracking_q_y",
+                DEFAULT_TRACKING_Q_Y,
+            )
+            config["r_move"] = case.objective.reward_options.get(
+                "tracking_r_move",
+                DEFAULT_TRACKING_R_MOVE,
+            )
     elif controller == "mpc" and case.objective.name == "tracking":
         # Keep the baseline MPC's internal quadratic weights aligned with the
         # benchmark objective. Otherwise the reported Q/R can differ from the
         # weights optimized by the controller.
-        config["q_y"] = case.objective.reward_options.get("tracking_q_y", 1.0)
+        config["q_y"] = case.objective.reward_options.get(
+            "tracking_q_y",
+            DEFAULT_TRACKING_Q_Y,
+        )
         config["move_supp"] = case.objective.reward_options.get(
-            "tracking_r_move", 1.0
+            "tracking_r_move",
+            DEFAULT_TRACKING_R_MOVE,
         )
     controller_model = apply_model_params(
         make_model(scenario), case.environment.model_params

@@ -13,20 +13,8 @@ from aiogym.catalog import (
 )
 
 
-def _single_benchmark(argv):
-    from aiogym.cli.single_benchmark import main
-
-    return main(argv, prog="aiogym benchmark run")
-
-
-def _direct_benchmark(argv):
-    from aiogym.cli.single_benchmark import main
-
-    return main(argv, prog="aiogym benchmark")
-
-
-def _suite_benchmark(argv):
-    from aiogym.cli.suite_benchmark import main
+def _benchmark(argv):
+    from aiogym.cli.benchmark import main
 
     return main(argv, prog="aiogym benchmark suite")
 
@@ -44,13 +32,13 @@ def _train_rlpd(argv):
 
 
 def _artifact_report(argv):
-    from aiogym.cli.artifact_tools import report_main
+    from aiogym.cli.artifact_commands import report_main
 
     return report_main(argv, prog="aiogym artifacts report")
 
 
 def _artifact_check(argv):
-    from aiogym.cli.artifact_tools import artifact_check_main
+    from aiogym.cli.artifact_commands import artifact_check_main
 
     return artifact_check_main(argv, prog="aiogym artifacts check")
 
@@ -116,8 +104,12 @@ def build_parser():
     benchmark = commands.add_parser("benchmark", help="run benchmarks")
     benchmark.set_defaults(selected_parser=benchmark)
     benchmark_commands = benchmark.add_subparsers(dest="benchmark_command", metavar="COMMAND")
-    _add_delegate(benchmark_commands, "run", "single benchmark", _single_benchmark)
-    _add_delegate(benchmark_commands, "suite", "benchmark suite", _suite_benchmark)
+    _add_delegate(
+        benchmark_commands,
+        "suite",
+        "single-task or multi-task benchmark",
+        _benchmark,
+    )
 
     train = commands.add_parser("train", help="train reinforcement-learning agents")
     train.set_defaults(selected_parser=train)
@@ -137,8 +129,7 @@ def build_parser():
 def main(argv=None):
     raw_args = list(sys.argv[1:] if argv is None else argv)
     delegated_commands = {
-        ("benchmark", "run"): _single_benchmark,
-        ("benchmark", "suite"): _suite_benchmark,
+        ("benchmark", "suite"): _benchmark,
         ("train", "sb3"): _train_sb3,
         ("train", "rlpd"): _train_rlpd,
         ("artifacts", "report"): _artifact_report,
@@ -147,8 +138,6 @@ def main(argv=None):
     for route, handler in delegated_commands.items():
         if tuple(raw_args[:len(route)]) == route:
             return handler(raw_args[len(route):])
-    if len(raw_args) > 1 and raw_args[0] == "benchmark":
-        return _direct_benchmark(raw_args[1:])
 
     parser = build_parser()
     args = parser.parse_args(raw_args)

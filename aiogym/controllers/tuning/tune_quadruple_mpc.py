@@ -28,6 +28,11 @@ def main() -> None:
     parser.add_argument("--profile", default=None)
     parser.add_argument("--horizons", default="10", help="comma-separated integers")
     parser.add_argument("--move-weights", default="0", help="comma-separated floats")
+    parser.add_argument(
+        "--steady-input-weights",
+        default="0",
+        help="comma-separated steady-state input regularization weights",
+    )
     parser.add_argument("--error-weight", type=float, default=1.0)
     parser.add_argument(
         "--ranking-metric",
@@ -43,10 +48,11 @@ def main() -> None:
     grid = itertools.product(
         _csv(args.horizons, int),
         _csv(args.move_weights, float),
+        _csv(args.steady_input_weights, float),
         _csv(args.cv_scales, float),
     )
     rows = []
-    for horizon, move, cv_scale in grid:
+    for horizon, move, steady_input_weight, cv_scale in grid:
         protocol = resolve_protocol(
             "quadruple",
             "tracking",
@@ -61,6 +67,7 @@ def main() -> None:
         parameters = {
             "P": horizon,
             "move_supp": move,
+            "steady_input_weight": steady_input_weight,
             "cv_scale": [cv_scale, cv_scale],
         }
         started = perf_counter()

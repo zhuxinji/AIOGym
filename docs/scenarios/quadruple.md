@@ -76,7 +76,8 @@ The task uses 1 s control intervals for 600 steps. It starts at the exact 3 V
 equilibrium, applies an opposed 1 cm setpoint move at step 120, and reverses to
 an asymmetric target at step 360.
 
-The `quadruple` benchmark uses a family-tuned PID profile.
+The task binds PID, MPC, and Oracle to their family-tuned profiles, so direct
+single-task and suite benchmarks use identical controller parameters.
 The successive-linearization MPC uses a short task-validated prediction horizon
 for the minimum-phase response; the longer horizon previously used here made its
 single-move approximation unnecessarily sluggish.
@@ -84,7 +85,9 @@ single-move approximation unnecessarily sluggish.
 Run the complete PID/MPC/NMPC comparison with:
 
 ```bash
-aiogym benchmark suite --suite quadruple-classic --episodes 1
+aiogym benchmark suite quadruple minimum-phase \
+  --controllers pid,mpc,oracle \
+  --episodes 1
 ```
 
 ## Nonminimum-phase task
@@ -95,8 +98,9 @@ task. It runs for 1800 s because the P+ response reported by Johansson is much
 slower. The benchmark-tuned PID uses cross pairing for this nonminimum-phase
 plant because it performed substantially better on the P+ benchmark. The
 MPC profile combines a longer prediction horizon with a model-derived
-steady-state pump target so the initial inverse response does not send the pump
-allocation in the wrong long-term direction.
+steady-state pump target. It recomputes that target when the setpoint changes
+and regularizes the optimized pump allocation around it, so the short-term
+inverse response does not send the pumps in the wrong long-term direction.
 
 ```python
 env = aiogym.make_env(
@@ -109,9 +113,26 @@ env = aiogym.make_env(
 Run it alone or compare both physical configurations:
 
 ```bash
-aiogym benchmark suite --suite quadruple-nonminimum --episodes 1
-aiogym benchmark suite --suite quadruple-phase-comparison --episodes 1
+aiogym benchmark suite quadruple nonminimum-phase \
+  --controllers pid,mpc,oracle \
+  --episodes 1
+aiogym benchmark suite quadruple-phase-comparison --episodes 1
 ```
+
+To evaluate the same P+ plant over ten different reachable targets:
+
+```bash
+aiogym benchmark suite quadruple nonminimum-phase \
+  --controllers pid,mpc,oracle \
+  --episodes 10 \
+  --randomize-setpoints
+```
+
+The initial P+ equilibrium remains fixed. Each seed samples the scheduled lower
+tank target, verifies the corresponding pump input and all four equilibrium
+levels, and resamples rejected candidates. The zero-boundary task samples a
+safe pump equilibrium and maps it forward because its lower-tank steady-state
+inverse is singular.
 
 The comparison suite produces separate leaderboards for the two tasks. A lower
 tracking error cost in P− and a lower tracking error cost in P+ are two distinct ranking
@@ -120,7 +141,7 @@ claims; the tool does not rank them against each other.
 Run all four formal quadruple-tank tasks with:
 
 ```bash
-aiogym benchmark suite --suite quadruple --episodes 1
+aiogym benchmark suite quadruple --episodes 1
 ```
 
 The `quadruple` suite runs PID, MPC, and NMPC Oracle on every formal task.
@@ -159,7 +180,9 @@ independent 0.5 cm `h1` demand therefore tests offset, integral windup, slow
 response, and constraint handling close to the fundamental limit.
 
 ```bash
-aiogym benchmark suite --suite quadruple-zero-boundary --episodes 1
+aiogym benchmark suite quadruple zero-boundary-stress \
+  --controllers pid,mpc,oracle \
+  --episodes 1
 ```
 
 ## Deterministic disturbance rejection
@@ -171,7 +194,9 @@ observe the changed disturbance values after they occur, and the exact schedule
 is recorded in benchmark artifacts.
 
 ```bash
-aiogym benchmark suite --suite quadruple-disturbance-rejection --episodes 1
+aiogym benchmark suite quadruple disturbance-rejection \
+  --controllers pid,mpc,oracle \
+  --episodes 1
 ```
 
 ## Acceptance tests

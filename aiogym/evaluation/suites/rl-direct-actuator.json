@@ -1,8 +1,0 @@
-{
-  "description": "RL policies with direct actuator authority.",
-  "scenarios": "ALL_SCENARIOS",
-  "objectives": ["kpi"],
-  "controllers": ["sb3"],
-  "action_mode": "actuator",
-  "preset": "environment/rl-randomized"
-}

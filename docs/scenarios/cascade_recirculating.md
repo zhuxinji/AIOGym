@@ -40,13 +40,11 @@ differential equations or a task's deterministic event schedule.
 
 ## Benchmark workflows
 
-Use the single benchmark when developing or comparing controllers on one fixed
+Specify a task when developing or comparing controllers on one fixed
 experiment. Omitting `--objective` uses the selected task's default:
 
 ```bash
-aiogym benchmark \
-  --scenario cascade-recirculating \
-  --task temperature-step \
+aiogym benchmark suite cascade-recirculating temperature-step \
   --controllers pid,mpc \
   --episodes 3 \
   --save-rollouts
@@ -58,8 +56,7 @@ This command compares both controllers only on
 Use the built-in suite for a formal multi-task comparison:
 
 ```bash
-aiogym benchmark suite \
-  --suite cascade-recirculating \
+aiogym benchmark suite cascade-recirculating \
   --episodes 3
 ```
 

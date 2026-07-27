@@ -15,8 +15,8 @@ import pytest
 import aiogym
 from aiogym import make_env
 from aiogym._internal.config import parse_seed_list
-from aiogym.cli.single_benchmark import main as single_benchmark_main
-from aiogym.cli.suite_benchmark import run_case
+from aiogym.cli.benchmark import main as benchmark_main
+from aiogym.cli.benchmark import run_case
 from aiogym.evaluation.suite import controller_config_for
 from aiogym.controllers import (
     ControllerContext,
@@ -336,9 +336,21 @@ def test_hvac_oracle_builds_with_casadi_outputs():
 
 
 def test_oracle_scenario_overrides_are_exposed_in_metadata():
-    hvac = make_controller("oracle", scenario="hvac", config={"profile": "tracking", "mode": "tracking"}).metadata()
-    extraction = make_controller("oracle", scenario="extraction", config={"profile": "tracking", "mode": "tracking"}).metadata()
-    heater = make_controller("oracle", scenario="heater", config={"profile": "tracking", "mode": "tracking"}).metadata()
+    hvac = make_controller(
+        "oracle",
+        scenario="hvac",
+        config={"profile": "tracking", "objective": "tracking"},
+    ).metadata()
+    extraction = make_controller(
+        "oracle",
+        scenario="extraction",
+        config={"profile": "tracking", "objective": "tracking"},
+    ).metadata()
+    heater = make_controller(
+        "oracle",
+        scenario="heater",
+        config={"profile": "tracking", "objective": "tracking"},
+    ).metadata()
     heater_economic = make_controller("oracle", scenario="heater").metadata()
     assert hvac["warm_start"] is True
     assert extraction["control_dt"] == 0.05 and extraction["ipopt_max_iter"] == 120
@@ -346,7 +358,7 @@ def test_oracle_scenario_overrides_are_exposed_in_metadata():
         assert tracking_oracle["r_move"] == 1.0
         assert tracking_oracle["terminal_weight"] == 0.0
         assert "du_max" not in tracking_oracle
-        assert "steady_input_weight" not in tracking_oracle
+        assert tracking_oracle["steady_input_weight"] == pytest.approx(0.0)
     assert heater["transcription"] == "single_shooting"
     assert heater["enforce_state_bounds"] is False
     assert heater["enforce_temperature_cap"] is False
@@ -354,11 +366,9 @@ def test_oracle_scenario_overrides_are_exposed_in_metadata():
     assert heater_economic["enforce_state_bounds"] is True
 
 
-def test_tracking_suite_uses_tracking_oracle_objective():
+def test_suite_controller_defaults_do_not_depend_on_objective():
     args = SimpleNamespace(sb3_path=None, sb3_algo="sac", onnx_path=None)
-    assert controller_config_for(args, "oracle", "actuator", "tracking") == {
-        "profile": "tracking", "mode": "tracking"
-    }
+    assert controller_config_for(args, "oracle", "actuator", "tracking") == {}
     assert controller_config_for(args, "oracle", "actuator", "economic") == {}
 
 
@@ -424,14 +434,14 @@ def test_artifact_check_accepts_failed_rows_and_model_metadata_paths():
 
 def test_single_benchmark_rejects_removed_legacy_output_option():
     with pytest.raises(SystemExit):
-        single_benchmark_main(["--out", "report.json"])
+        benchmark_main(["cstr", "--out", "report.json"])
 
 
 def test_single_benchmark_writes_checkable_standard_artifacts(tmp_path):
     artifact_dir = tmp_path / "single-artifacts"
 
-    single_benchmark_main([
-        "--scenario", "cstr",
+    benchmark_main([
+        "quadruple", "minimum-phase",
         "--objective", "tracking",
         "--controllers", "pid",
         "--episodes", "1",
@@ -447,7 +457,7 @@ def test_single_benchmark_writes_checkable_standard_artifacts(tmp_path):
 
     benchmark = json.loads((artifact_dir / "benchmark.json").read_text())
     assert benchmark["benchmark"] == "public_benchmark"
-    assert benchmark["scenario"] == "cstr"
+    assert benchmark["scenario"] == "quadruple"
     assert benchmark["controllers"] == ["pid"]
     assert benchmark["config"]["output_dir"] == str(artifact_dir)
     assert benchmark["config"]["tracking_q_y"] == 0.7
@@ -462,14 +472,48 @@ def test_single_benchmark_writes_checkable_standard_artifacts(tmp_path):
     assert benchmark["protocol"]["tracking_error_obs"] is True
     assert benchmark["protocol"]["objective_spec"]["reward_options"]["tracking_q_y"] == 0.7
     assert benchmark["protocol"]["objective_spec"]["reward_options"]["tracking_r_move"] == 0.0
+    assert benchmark["config"]["save_rollouts"] is True
+    assert "rollouts" not in benchmark
     assert (artifact_dir / "config" / "config.json").is_file()
     assert (artifact_dir / "metadata" / "model_metadata.json").is_file()
     assert (artifact_dir / "summary" / "summary.csv").is_file()
     assert (artifact_dir / "results" / "results.json").is_file()
+    rollout_path = artifact_dir / "rollouts" / "rollouts.json"
+    assert rollout_path.is_file()
+    assert len(json.loads(rollout_path.read_text())) == 1
     assert (artifact_dir / "figures" / "summary.svg").is_file()
+    assert any(
+        (artifact_dir / "figures").glob("tracking_control_quadruple*.svg")
+    )
     assert (artifact_dir / "report.md").is_file()
     check_result = check_benchmark_artifacts(artifact_dir)
     assert check_result["ok"], check_result["failed"]
+
+
+def test_single_benchmark_default_dir_replaces_managed_artifacts(
+    monkeypatch,
+    tmp_path,
+):
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv("AIOGYM_RUNS_DIR", str(runs_root))
+    artifact_dir = runs_root / "quadruple" / "minimum-phase"
+    stale_rollout = artifact_dir / "rollouts" / "rollouts.json"
+    stale_rollout.parent.mkdir(parents=True)
+    stale_rollout.write_text("stale")
+    review_notes = artifact_dir / "review-notes.md"
+    review_notes.write_text("keep")
+
+    benchmark_main([
+        "quadruple", "minimum-phase",
+        "--objective", "tracking",
+        "--controllers", "pid",
+        "--episodes", "1",
+        "--episode-steps", "1",
+    ])
+
+    assert (artifact_dir / "benchmark.json").is_file()
+    assert len(json.loads(stale_rollout.read_text())) == 1
+    assert review_notes.read_text() == "keep"
 
 
 def test_pid_json_is_the_single_default_config_source():
@@ -504,7 +548,7 @@ def test_predictive_controller_configs_fail_at_construction():
     invalid_oracle = (
         ({"horizon": 0}, "horizon"),
         ({"control_dt": 0}, "control_dt"),
-        ({"mode": "trackingg"}, "mode"),
+        ({"objective": "trackingg"}, "objective"),
         ({"ipopt_tol": float("inf")}, "ipopt_tol"),
         ({"terminal_weight": -1.0}, "terminal_weight"),
         ({"q_y": [1.0, 2.0]}, "q_y"),
@@ -559,6 +603,11 @@ def test_removed_compatibility_surfaces_stay_removed():
         lambda: run_benchmark({"scenario": "cstr", "objective": "tracking", "controller": "pid"}),
         lambda: load_task_profile("quadruple/minimum-phase-tracking"),
         lambda: make_controller("nmpc", scenario="cstr"),
+        lambda: make_controller(
+            "oracle",
+            scenario="cstr",
+            config={"mode": "economic"},
+        ),
     ):
         try:
             build()

@@ -81,6 +81,9 @@ def rollout_controller(agent, env, seed: int = 0, max_steps: int | None = None,
             }
         ),
         "controller": controller.metadata(),
+        "setpoint_schedule": _jsonable(
+            getattr(env, "_episode_setpoint_events", {})
+        ),
         "scorer": _jsonable(env.scorer.report()),
         "rollout_schema": result_schema()["rollout"],
         "rollout": rows,

@@ -11,6 +11,7 @@ class CrystallizationModel(ProcessModelContract):
     """
 
     scenario = "crystallization"
+    benchmark_objectives = ("tracking", "kpi", "robustness", "safety")
     display_name = "Batch Crystallization"
     summary = "Single-actuator crystallization benchmark with moment dynamics and Ln/CV quality targets."
     n = 1
@@ -60,7 +61,6 @@ class CrystallizationModel(ProcessModelContract):
     )
     energy_scored = False
     oracle_temperature_cap = False
-    supports_generic_setpoint_randomization = False
     supports_integral_observation = False
     randomize_common_temperatures = False
 
@@ -258,9 +258,16 @@ class CrystallizationModel(ProcessModelContract):
     def sample_env_setpoints(self, y_sp, rng, options=None):
         options = dict(options or {})
         sampled = list(y_sp)
-        if options.get("crystal_random_targets"):
-            sampled[1] = float(rng.uniform(*options["crystal_ln_range"]))
-            sampled[0] = float(rng.uniform(*options["crystal_cv_range"]))
+        if (
+            options.get("crystal_random_targets")
+            or options.get("randomize_setpoints")
+        ):
+            sampled[1] = float(rng.uniform(
+                *options.get("crystal_ln_range", (10.0, 11.5))
+            ))
+            sampled[0] = float(rng.uniform(
+                *options.get("crystal_cv_range", (0.75, 0.95))
+            ))
         return sampled
 
     def default_action(self):

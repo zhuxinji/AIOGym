@@ -1,14 +1,22 @@
 """Benchmark execution pipeline."""
+from __future__ import annotations
 
-from .benchmark import run_benchmark
-from .evaluator import evaluate_controller
-from .rollouts import rollout_controller
-from .runner import execute_benchmark_case, run_evaluation_case
+from aiogym._internal.lazy import exported_dir, resolve_export
 
-__all__ = [
-    "evaluate_controller",
-    "execute_benchmark_case",
-    "rollout_controller",
-    "run_benchmark",
-    "run_evaluation_case",
-]
+
+_EXPORTS = {
+    "run_benchmark": ".benchmark",
+    "evaluate_controller": ".evaluator",
+    "rollout_controller": ".rollouts",
+    "execute_benchmark_case": ".runner",
+    "run_evaluation_case": ".runner",
+}
+__all__ = sorted(_EXPORTS)
+
+
+def __getattr__(name):
+    return resolve_export(globals(), __name__, _EXPORTS, name)
+
+
+def __dir__():
+    return exported_dir(globals(), _EXPORTS)

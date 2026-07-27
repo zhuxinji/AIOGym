@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 
-EVALUATION_SCHEMA_VERSION = "aiogym.evaluation.v3"
-PUBLIC_BENCHMARK_SCHEMA_VERSION = "aiogym.public_benchmark.v2"
+EVALUATION_SCHEMA_VERSION = "aiogym.evaluation.v4"
+PUBLIC_BENCHMARK_SCHEMA_VERSION = "aiogym.public_benchmark.v3"
 
 ROLLOUT_SCHEMA = {
     "step": "integer control-step index",
@@ -21,6 +21,7 @@ ROLLOUT_SCHEMA = {
 
 METRIC_DEFINITIONS = {
     "return": "sum of environment reward over the rollout; reward is the training signal",
+    "track": "cumulative absolute tracking error normalized by each controlled-output range",
     "profit": "time-integrated economic profit over the rollout",
     "normalized_score": "0-100 KPI score from KPIScorer; score is for reporting, not raw economics",
     "production": "time-integrated process production over the rollout",
@@ -32,12 +33,13 @@ METRIC_DEFINITIONS = {
     "tracking_return": "negative cumulative tracking_cost, matching the tracking reward returned by the environment",
     "tracking_error_cost": "cumulative squared setpoint-tracking error normalized by each controlled-output range and weighted by the protocol Q",
     "tracking_move_cost": "cumulative squared control move normalized by each actuator range and weighted by the protocol R",
-    "tracking_mse": "mean squared raw tracking error over time and tracked outputs",
-    "tracking_iae": "integral absolute raw tracking error",
-    "tracking_ise": "integral squared raw tracking error",
-    "tracking_itae": "time-weighted integral absolute raw tracking error",
-    "tracking_overshoot": "largest positive raw excursion above the active setpoint",
-    "tracking_settling_time": "last time at which any tracked variable exceeded tolerance",
+    "tracking_mse": "time-mean squared tracking error normalized by each controlled-output range and averaged over tracked outputs",
+    "tracking_iae": "integral absolute tracking error normalized by each controlled-output range",
+    "tracking_ise": "integral squared tracking error normalized by each controlled-output range",
+    "tracking_itae": "time-weighted integral absolute tracking error normalized by each controlled-output range",
+    "tracking_overshoot": "largest positive excursion normalized by the corresponding controlled-output range",
+    "tracking_settling_time": "last time at which any normalized tracking error exceeded 2% of its controlled-output range",
+    "tracking_raw_by_output": "per-output raw physical-unit MSE, IAE, ISE, ITAE, overshoot, and settling time; outputs with different units are never summed",
     "constraint": "sum of normalized soft constraint penalty reported by the environment",
     "constraint_violation_count": "number of steps with any process constraint violation",
     "constraint_violation_duration": "seconds spent with any process constraint violation",
@@ -126,8 +128,10 @@ def metric_direction(metric: str) -> str:
 def metric_definitions(objective: str | None = None):
     if objective is None:
         return dict(METRIC_DEFINITIONS)
+    keys = list(PROTOCOL_METRICS.get(objective, ()))
+    keys.extend(["track", "tracking_raw_by_output"])
     return {
         key: METRIC_DEFINITIONS[key]
-        for key in PROTOCOL_METRICS.get(objective, ())
+        for key in keys
         if key in METRIC_DEFINITIONS
     }

@@ -6,17 +6,10 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .paths import resolve_artifact_path
+
 
 REPORT_SCHEMA_VERSION = "aiogym.offline_report.v1"
-
-
-def _resolve_artifact_path(root: Path, raw, default: str) -> Path:
-    if raw:
-        path = Path(raw)
-        if path.is_absolute() or path.exists():
-            return path
-        return root / path
-    return root / default
 
 
 def render_benchmark_report(artifact_dir: str | Path, out_path: str | Path | None = None) -> str:
@@ -246,7 +239,7 @@ def _artifact_mapping_rows(root: Path, artifacts: Mapping[str, Any], key: str) -
         return []
     rows = []
     for name, raw in _flatten_artifact_mapping(value):
-        path = _resolve_artifact_path(root, raw, "")
+        path = resolve_artifact_path(root, raw, "")
         if path.exists():
             rows.append([f"{key}:{name}", _rel(path)])
     return rows
@@ -291,7 +284,7 @@ def _read_model_metadata_manifest(
 def _artifact_path(root: Path, artifacts: Mapping[str, str], key: str, default: str) -> Path:
     raw = artifacts.get(key)
     if raw:
-        return _resolve_artifact_path(root, raw, default)
+        return resolve_artifact_path(root, raw, default)
     return root / default
 
 

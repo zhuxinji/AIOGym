@@ -1,6 +1,0 @@
-{
-  "extends": "economic-actuator",
-  "description": "Economic benchmark for supervisory setpoint policies.",
-  "controllers": ["sb3"],
-  "action_mode": "setpoint"
-}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Command-line tools for benchmark artifacts."""
+"""Command handlers for inspecting benchmark artifacts."""
 from __future__ import annotations
 
 import argparse
@@ -57,7 +57,7 @@ def main(argv=None):
     }
     args = list(sys.argv[1:] if argv is None else argv)
     if not args or args[0] in {"-h", "--help"}:
-        print("usage: python -m aiogym.cli.artifact_tools {report,check} ...")
+        print("usage: python -m aiogym.cli.artifact_commands {report,check} ...")
         return
     command = args[0]
     if command not in commands:

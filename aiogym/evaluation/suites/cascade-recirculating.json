@@ -3,22 +3,5 @@
   "scenarios": ["cascade-recirculating"],
   "controllers": ["pid", "mpc"],
   "action_mode": "actuator",
-  "cases": [
-    {
-      "scenario": "cascade-recirculating",
-      "task": "commissioning"
-    },
-    {
-      "scenario": "cascade-recirculating",
-      "task": "temperature-step"
-    },
-    {
-      "scenario": "cascade-recirculating",
-      "task": "disturbance-rejection"
-    },
-    {
-      "scenario": "cascade-recirculating",
-      "task": "safety-recovery"
-    }
-  ]
+  "tasks": "ALL_TASKS"
 }

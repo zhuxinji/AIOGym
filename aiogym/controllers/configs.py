@@ -19,7 +19,10 @@ _CONFIG_META_KEYS = {
 
 
 def load_controller_config(
-    name: str, scenario: str | None = None, profile: str | None = None
+    name: str,
+    scenario: str | None = None,
+    profile: str | None = None,
+    objective: str | None = None,
 ) -> dict[str, Any]:
     from .._internal.identifiers import canonical_scenario_id, internal_scenario_id
 
@@ -38,7 +41,13 @@ def load_controller_config(
         params.update(
             profile_data.get("scenarios", {}).get(internal_scenario_id(scenario), {})
         )
-    out = {k: v for k, v in data.items() if k not in {"parameters", "profiles"}}
+    if objective:
+        params.update(profile_data.get("objectives", {}).get(objective, {}))
+    out = {
+        k: v
+        for k, v in data.items()
+        if k not in {"parameters", "profiles", "objectives"}
+    }
     if isinstance(out.get("scenarios"), dict):
         out["scenarios"] = {
             canonical_scenario_id(key): value
@@ -53,7 +62,13 @@ def _merged_controller_config(
 ) -> dict[str, Any]:
     override = dict(config or {})
     explicit_profile = override.pop("profile", None)
-    base = load_controller_config(name, scenario, profile=explicit_profile)
+    requested_objective = override.get("objective")
+    base = load_controller_config(
+        name,
+        scenario,
+        profile=explicit_profile,
+        objective=requested_objective,
+    )
     params = dict(base.get("parameters", {}))
     params.update(override.pop("parameters", {}))
     flat = {k: v for k, v in override.items() if k not in _CONFIG_META_KEYS}

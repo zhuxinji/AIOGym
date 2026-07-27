@@ -29,7 +29,8 @@ requiring a browser or external simulator.
 - PyTorch and Stable-Baselines3 for training
 - ONNX and ONNX Runtime for policy export and inference
 
-The default installation includes the complete backend dependency stack.
+The default installation contains only the core environment stack. Optional
+extras install nonlinear optimization, training, and ONNX support when needed.
 
 ## Installation
 
@@ -39,10 +40,18 @@ Clone the repository and install it from the repository root:
 python -m pip install -e .
 ```
 
-Install the test dependency as well:
+Install optional functionality individually:
 
 ```bash
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[oracle]"
+python -m pip install -e ".[rl]"
+python -m pip install -e ".[onnx]"
+```
+
+Install the complete development stack:
+
+```bash
+python -m pip install -e ".[all,dev]"
 ```
 
 A non-editable local installation is also supported:
@@ -138,67 +147,104 @@ workflows. The unified `aiogym` command is the only installed CLI.
 
 ## Benchmarking
 
+The benchmark CLI uses one command shape:
+
+```text
+aiogym benchmark suite <scenario-or-suite-id> [task]
+```
+
+A scenario without `task` runs all of its registered tasks; adding `task` runs
+only that experiment. A named cross-scenario suite runs its declared cases.
+Scenarios without registered tasks run one default tracking case.
+
 Run the standard controller-comparison suite:
 
 ```bash
-aiogym benchmark suite \
-  --suite standard-baselines \
+aiogym benchmark suite standard-baselines \
   --episodes 3
 ```
 
 Run a smaller single-scenario comparison:
 
 ```bash
-aiogym benchmark \
-  --scenario cstr \
+aiogym benchmark suite cstr \
   --objective tracking \
-  --controllers pid,mpc \
-  --artifact-dir runs/cstr_tracking
+  --controllers pid,mpc
 ```
+
+Commands with a positional task default to `runs/<scenario>/<task>`. Targets
+without a task use `runs/<target>_suite`, even when a taskless scenario expands
+to only one default case. Re-running replaces the standard managed artifacts in
+that directory, so the latest result always has a stable review path. Tracking
+objectives automatically save rollout and control figures. Pass
+`--no-overwrite` to write a timestamped sibling directory, or `--artifact-dir`
+to choose another base directory.
 
 Compare the minimum- and nonminimum-phase quadruple-tank tasks without mixing
 their rankings:
 
 ```bash
-aiogym benchmark suite --suite quadruple-phase-comparison --episodes 1
+aiogym benchmark suite quadruple-phase-comparison --episodes 1
 ```
 
 Run one task with its default benchmark conditions, or replace its duration and
 absolute setpoint schedule:
 
 ```bash
-aiogym benchmark \
-  --scenario quadruple \
-  --task minimum-phase
+aiogym benchmark suite quadruple minimum-phase
 
-aiogym benchmark \
-  --scenario quadruple \
-  --task minimum-phase \
+aiogym benchmark suite quadruple minimum-phase \
   --episode-steps 360 \
   --setpoint-step "0:14.2629675195507,12.783158403008972"
 ```
 
+Use seeded per-episode targets when measuring generalization rather than strict
+reference reproduction:
+
+```bash
+aiogym benchmark suite quadruple nonminimum-phase \
+  --controllers pid,mpc,oracle \
+  --episodes 10 \
+  --randomize-setpoints
+```
+
+Each seed generates its target schedule during `env.reset(seed=...)`. Tasks
+with setpoint events retain their initial equilibrium and sample the event
+targets; tasks without events sample the initial target. The realized schedule
+is recorded in result and rollout metadata.
+
 Run the heated-tank cascade as an explicit continuous-production economic task:
 
 ```bash
-aiogym benchmark \
-  --scenario cascade \
-  --task continuous-benchmark \
+aiogym benchmark suite cascade continuous-benchmark \
   --objective economic \
   --controllers pid,mpc
 ```
 
-Direct `cascade` environments retain batch semantics. The
+Direct `cascade` environments use zero throughput targets. The
 continuous task's `4.0e-4 m3/s` target is an assumed benchmark throughput, not a
-validated equipment rating. See [the cascade scenario guide](https://github.com/zhuxinji/AIO-gym-temp/blob/main/docs/scenarios/cascade.md).
+validated equipment rating. There is no separate batch operation mode; setting
+`product_flow_sp=min_product_flow=0` disables production value and shortfall
+accounting. See [the cascade scenario guide](https://github.com/zhuxinji/AIO-gym-temp/blob/main/docs/scenarios/cascade.md).
+
+Run the four formal open-cascade control tasks under their task-owned default
+objectives:
+
+```bash
+aiogym benchmark suite cascade-control \
+  --episodes 3
+```
+
+The suite covers commissioning, a first-stage temperature step, deterministic
+disturbance rejection, and recoverable heater-interlock conditions with PID and
+MPC. These tasks reuse the continuous benchmark's assumed throughput but keep
+tracking, robustness, and safety rankings separate from production economics.
 
 Run the PDF-derived closed-loop retrofit independently from the historical
 open cascade:
 
 ```bash
-aiogym benchmark \
-  --scenario cascade-recirculating \
-  --task commissioning \
+aiogym benchmark suite cascade-recirculating commissioning \
   --objective tracking \
   --controllers pid,mpc,oracle
 ```
@@ -207,8 +253,7 @@ Run all four formal recirculating tasks under their task-owned default
 objectives with PID and MPC:
 
 ```bash
-aiogym benchmark suite \
-  --suite cascade-recirculating \
+aiogym benchmark suite cascade-recirculating \
   --episodes 3
 ```
 
@@ -221,22 +266,26 @@ Run all four formal quadruple-tank tasks with PID, MPC, and NMPC Oracle on every
 task:
 
 ```bash
-aiogym benchmark suite --suite quadruple --episodes 1
+aiogym benchmark suite quadruple --episodes 1
 ```
 
 Run the zero-boundary or deterministic-disturbance subsets:
 
 ```bash
-aiogym benchmark suite --suite quadruple-zero-boundary --episodes 1
-aiogym benchmark suite --suite quadruple-disturbance-rejection --episodes 1
+aiogym benchmark suite quadruple zero-boundary-stress \
+  --controllers pid,mpc,oracle \
+  --episodes 1
+
+aiogym benchmark suite quadruple disturbance-rejection \
+  --controllers pid,mpc,oracle \
+  --episodes 1
 ```
 
 Use an ONNX policy:
 
 ```bash
-aiogym benchmark suite \
-  --suite economic-supervisory \
-  --scenarios cstr \
+aiogym benchmark suite cstr \
+  --objective economic \
   --controllers onnx \
   --onnx-path path/to/policy.onnx \
   --episodes 1
@@ -258,7 +307,7 @@ payload = aiogym.run_benchmark({
 
 ## Benchmark Artifacts
 
-Single, suite, and Python API benchmark runs write the same standard artifact
+Single-task, multi-task, and Python API benchmark runs write the same standard artifact
 directory contract:
 
 ```text
@@ -282,11 +331,17 @@ aiogym artifacts check path/to/artifact_dir
 ```
 
 Default generated outputs use the current working directory's `runs/` folder.
-Set `AIOGYM_RUNS_DIR` to choose another default root, or pass an explicit option
-such as `--out-dir` or `--artifact-dir` when a stable path is required. Explicit
-paths take precedence over the environment variable.
+Single-task benchmarks use the stable `runs/<scenario>/<task>` layout and
+suite benchmarks use `runs/<suite>_suite`. Both replace their previous managed
+artifacts by default. Use `--no-overwrite` to create a timestamped sibling
+directory. Set `AIOGYM_RUNS_DIR` to choose another default root, or pass an
+explicit base path such as `--out-dir` or `--artifact-dir`; explicit paths still
+obey the overwrite switch.
 
 Benchmark commands always write the standard artifact directory contract.
+Large rollout trajectories are stored only in `rollouts/rollouts.json`;
+`benchmark.json` references that file through its `artifacts` mapping instead
+of embedding a duplicate copy.
 
 ## Training
 
@@ -334,8 +389,8 @@ Run the offline-to-online RLPD workflow:
 
 ```bash
 aiogym train rlpd \
-  --scenario cstr \
-  --objective kpi \
+  --scenario quadruple \
+  --task minimum-phase \
   --offline-episodes 20 \
   --online-steps 10000
 ```
@@ -345,6 +400,9 @@ and standard benchmark artifacts. High-level training commands accept all five
 public objectives; `robustness` and `safety` resolve to the KPI environment
 reward while retaining their own evaluation identity. Select it with
 `--objective`; training commands do not accept a separate reward-mode option.
+SB3 and RLPD resolve `--task`, task-owned timing, tracking weights, observation
+contracts, and generated run identities through the same configuration layer.
+Their algorithm-specific optimization flags remain separate.
 
 ## Custom Models and Controllers
 
@@ -398,8 +456,7 @@ python -m pytest -q
 Run a short end-to-end benchmark check:
 
 ```bash
-aiogym benchmark suite \
-  --suite standard-baselines \
+aiogym benchmark suite standard-baselines \
   --scenarios cstr \
   --objectives tracking \
   --controllers pid,mpc \

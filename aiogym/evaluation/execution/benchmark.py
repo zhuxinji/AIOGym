@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ..._internal.config import as_list, load_config, protocol_data
-from ..._internal.paths import run_path
+from ..._internal.paths import run_path, timestamped_artifact_path
 from ..._internal.serialization import jsonable
 from ..cases import BenchmarkCase
 from ..metric_catalog import PUBLIC_BENCHMARK_SCHEMA_VERSION
@@ -49,7 +49,6 @@ def run_benchmark(
         data=protocol_options,
     )
     scenario = protocol.scenario
-    objective_name = protocol.objective
     task_meta = protocol.metadata()["task_identity"]
     controller_names = as_list(cfg.get("controllers", ["pid"]))
     if not controller_names:
@@ -62,10 +61,19 @@ def run_benchmark(
     include_episodes = bool(cfg.get("include_episodes", True))
     save_rollouts = bool(cfg.get("save_rollouts", False))
     rollout_steps = cfg.get("rollout_steps")
-    out_dir = Path(cfg.get(
-        "output_dir",
-        run_path(f"benchmark_{scenario}_{task_meta['name']}_{objective_name}"),
-    ))
+    overwrite = cfg.get("overwrite", True)
+    if not isinstance(overwrite, bool):
+        raise TypeError("config['overwrite'] must be a boolean")
+    base_out_dir = Path(
+        cfg["output_dir"]
+        if "output_dir" in cfg
+        else run_path(scenario, task_meta["name"])
+    )
+    out_dir = (
+        base_out_dir
+        if overwrite
+        else timestamped_artifact_path(base_out_dir)
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
 
     results = []
@@ -136,7 +144,11 @@ def run_benchmark(
     }
     from ..artifact import finalize_benchmark_artifacts
 
-    return finalize_benchmark_artifacts(out_dir, payload)
+    return finalize_benchmark_artifacts(
+        out_dir,
+        payload,
+        replace_existing=overwrite,
+    )
 
 
 def _benchmark_config_dict(

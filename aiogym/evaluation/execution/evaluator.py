@@ -79,6 +79,7 @@ def evaluate_controller(agent, env, episodes: int = 20, seed: int = 0,
         controller.reset(seed=ep_seed)
         totals = _empty_episode_totals(ep, ep_seed)
         episode_schedules.append(_jsonable({
+            "setpoints": getattr(env, "_episode_setpoint_events", {}),
             "task": getattr(env, "_task_disturbance_events", {}),
             "auto_events": getattr(env, "_dist_events", []),
         }))
@@ -86,6 +87,7 @@ def evaluate_controller(agent, env, episodes: int = 20, seed: int = 0,
         steps = 0
         info = reset_info or {}
         last_unsettled_time = 0.0
+        raw_last_unsettled_time = {}
         while not done:
             context = build_context(env, info)
             action = validate_action(controller.act(obs, context), env, controller.name)
@@ -114,6 +116,12 @@ def evaluate_controller(agent, env, episodes: int = 20, seed: int = 0,
             totals["tracking_overshoot"] = max(totals["tracking_overshoot"], tracking["tracking_overshoot"])
             if not tracking["tracking_settled"]:
                 last_unsettled_time = time_sec
+            _accumulate_raw_tracking_metrics(
+                totals["tracking_raw_by_output"],
+                tracking["tracking_raw_by_output"],
+                raw_last_unsettled_time,
+                time_sec,
+            )
             for key, value in safety.items():
                 if key == "safety_margin_min":
                     totals[key] = min(totals[key], value)
@@ -130,6 +138,11 @@ def evaluate_controller(agent, env, episodes: int = 20, seed: int = 0,
         horizon_seconds = steps * float(env.control_dt)
         totals["tracking_mse"] = float(totals["tracking_mse"] / horizon_seconds) if horizon_seconds > 0 else 0.0
         totals["tracking_settling_time"] = float(last_unsettled_time)
+        totals["tracking_raw_by_output"] = _finalize_raw_tracking_metrics(
+            totals["tracking_raw_by_output"],
+            raw_last_unsettled_time,
+            horizon_seconds,
+        )
         controller_diag = _controller_diagnostics(controller)
         totals["controller_diagnostics"] = controller_diag
         totals.update(_controller_diagnostic_totals(controller_diag))
@@ -202,6 +215,10 @@ def evaluate_controller(agent, env, episodes: int = 20, seed: int = 0,
     for key in aggregate_keys:
         result.setdefault(key, mean(key))
         result.setdefault(f"{key}_std", std(key))
+    (
+        result["tracking_raw_by_output"],
+        result["tracking_raw_by_output_std"],
+    ) = _aggregate_raw_tracking_metrics(per_episode)
     result["execution_status"] = (
         "degraded" if result["controller_status"] == "degraded" else "passed"
     )
@@ -214,3 +231,75 @@ def evaluate_controller(agent, env, episodes: int = 20, seed: int = 0,
     if include_episodes:
         result["episode_metrics"] = per_episode
     return result
+
+
+def _accumulate_raw_tracking_metrics(
+    totals,
+    step_metrics,
+    last_unsettled_time,
+    time_sec,
+):
+    for name, row in step_metrics.items():
+        target = totals.setdefault(
+            name,
+            {
+                "unit": row.get("unit", ""),
+                "mse_integral": 0.0,
+                "iae": 0.0,
+                "ise": 0.0,
+                "itae": 0.0,
+                "overshoot": 0.0,
+            },
+        )
+        for key in ("mse_integral", "iae", "ise", "itae"):
+            target[key] += float(row[key])
+        target["overshoot"] = max(
+            float(target["overshoot"]),
+            float(row["overshoot"]),
+        )
+        if not row["settled"]:
+            last_unsettled_time[name] = float(time_sec)
+
+
+def _finalize_raw_tracking_metrics(totals, last_unsettled_time, horizon_seconds):
+    finalized = {}
+    for name, row in totals.items():
+        finalized[name] = {
+            "unit": row.get("unit", ""),
+            "mse": (
+                float(row["mse_integral"]) / float(horizon_seconds)
+                if horizon_seconds > 0
+                else 0.0
+            ),
+            "iae": float(row["iae"]),
+            "ise": float(row["ise"]),
+            "itae": float(row["itae"]),
+            "overshoot": float(row["overshoot"]),
+            "settling_time": float(last_unsettled_time.get(name, 0.0)),
+        }
+    return finalized
+
+
+def _aggregate_raw_tracking_metrics(per_episode):
+    names = sorted({
+        name
+        for episode in per_episode
+        for name in episode.get("tracking_raw_by_output", {})
+    })
+    aggregated = {}
+    deviations = {}
+    metric_keys = ("mse", "iae", "ise", "itae", "overshoot", "settling_time")
+    for name in names:
+        rows = [
+            episode["tracking_raw_by_output"][name]
+            for episode in per_episode
+            if name in episode.get("tracking_raw_by_output", {})
+        ]
+        unit = str(rows[0].get("unit", "")) if rows else ""
+        aggregated[name] = {"unit": unit}
+        deviations[name] = {"unit": unit}
+        for key in metric_keys:
+            values = [float(row[key]) for row in rows]
+            aggregated[name][key] = float(np.mean(values)) if values else 0.0
+            deviations[name][key] = float(np.std(values)) if values else 0.0
+    return aggregated, deviations

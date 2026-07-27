@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from .._internal.serialization import jsonable as _jsonable
+from .._internal.vocabulary import OBJECTIVE_NAMES
 from .metric_catalog import (
-    PRIMARY_METRICS,
     PROTOCOL_METRICS,
     metric_direction,
     primary_metric_for_objective,
@@ -21,11 +21,13 @@ OBJECTIVE_REWARD_MODES = {
     "safety": "kpi",
 }
 REWARD_MODES = frozenset(OBJECTIVE_REWARD_MODES.values())
+DEFAULT_TRACKING_Q_Y = 0.7
+DEFAULT_TRACKING_R_MOVE = 0.3
 
 
 def reward_mode_for_objective(objective: str) -> str:
     if objective not in OBJECTIVE_REWARD_MODES:
-        raise ValueError(f"objective must be one of: {', '.join(PRIMARY_METRICS)}")
+        raise ValueError(f"objective must be one of: {', '.join(OBJECTIVE_NAMES)}")
     return OBJECTIVE_REWARD_MODES[objective]
 
 
@@ -68,8 +70,8 @@ def objective_spec(
     source: str = "explicit",
     reward_options: Mapping[str, Any] | None = None,
 ) -> ObjectiveSpec:
-    if name not in PRIMARY_METRICS:
-        raise ValueError(f"objective must be one of: {', '.join(PRIMARY_METRICS)}")
+    if name not in OBJECTIVE_NAMES:
+        raise ValueError(f"objective must be one of: {', '.join(OBJECTIVE_NAMES)}")
     primary_metric = primary_metric_for_objective(name)
     return ObjectiveSpec(
         name=name,

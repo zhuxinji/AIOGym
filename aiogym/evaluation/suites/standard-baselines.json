@@ -1,5 +1,14 @@
 {
-  "extends": "all-actuator",
   "description": "Standard fixed-actuator baseline matrix for all built-in scenarios.",
-  "controllers": ["pid", "mpc", "oracle"]
+  "scenarios": "ALL_SCENARIOS",
+  "objectives": ["tracking", "economic"],
+  "controllers": ["pid", "mpc", "oracle"],
+  "action_mode": "actuator",
+  "episode_steps": 80,
+  "control_dt": 0.5,
+  "cases": [
+    {"case_ref": "tracking/deterministic"},
+    {"case_ref": "economic/cascade-continuous"},
+    {"case_ref": "economic/randomized"}
+  ]
 }

@@ -1,4 +1,6 @@
 """Controller evaluation, metrics, artifacts, and oracle tests."""
+import pytest
+
 from aiogym.tests.interface_support import *  # noqa: F403
 
 def test_controller_evaluation_protocol():
@@ -32,7 +34,11 @@ def test_controller_evaluation_protocol():
     extraction_pid_defaults = load_controller_config("pid", "extraction")
     pid_controller = make_controller("pid", scenario="cstr")
     mpc_controller = make_controller("mpc", scenario="cstr", config={"P": 4})
-    oracle_controller = make_controller("oracle", scenario="cstr", config={"mode": "economic", "horizon": 4})
+    oracle_controller = make_controller(
+        "oracle",
+        scenario="cstr",
+        config={"objective": "economic", "horizon": 4},
+    )
     extraction_pid_controller = make_controller("pid", scenario="extraction")
     registry_ok = registry_ok and config_shape_ok
     registry_ok = registry_ok and pid_defaults["parameters"]["loops"][0]["pid"] == [0.08, 0.02, 0.0]
@@ -57,11 +63,14 @@ def test_controller_evaluation_protocol():
         pid["controller_name"] == "PID"
         and pid["episodes"] == 2
         and pid["seed_list"] == [123, 124]
-        and pid["schema_version"] == "aiogym.evaluation.v3"
+        and pid["schema_version"] == "aiogym.evaluation.v4"
         and pid["protocol"]["objective"] == "tracking"
         and pid["controller"]["api"] == "aiogym.controller.v1"
         and pid["controller"]["control_structure"] == "fixed_sp_pid"
         and "tracking_iae" in pid
+        and pid["tracking_raw_by_output"]
+        and pid["tracking_raw_by_output_std"]
+        and pid["episode_metrics"][0]["tracking_raw_by_output"]
         and "energy_kwh" in pid
         and "constraint_violation_count" in pid
         and "metric_definitions" in pid
@@ -244,7 +253,9 @@ def test_benchmark_config_and_report_schema():
 
 def test_kpi_tracking_setpoint_alignment():
     """KPI and tracking metrics should use the same active setpoint semantics."""
-    from aiogym.evaluation import _tracking_step_metrics
+    from aiogym.evaluation.metrics.tracking import (
+        tracking_step_metrics as _tracking_step_metrics,
+    )
     from aiogym.evaluation.metrics.kpi import W_TRACKING
 
     env = AIOGymNativeEnv("heater", reward_mode="tracking", action_mode="actuator",
@@ -256,21 +267,42 @@ def test_kpi_tracking_setpoint_alignment():
     raw_temp_err = abs(info["y"][1] - env.y_sp[1])
     normalized_level_err = raw_level_err / (5.0 - 1.8)
     normalized_temp_err = raw_temp_err / (372.0 - 364.0)
-    expected_error_cost = normalized_level_err ** 2 + normalized_temp_err ** 2
+    expected_error_cost = 0.7 * (
+        normalized_level_err ** 2 + normalized_temp_err ** 2
+    )
     expected_cost = expected_error_cost + info["tracking_move_cost"]
     mean_output_err = 0.5 * (normalized_temp_err + normalized_level_err)
     report = env.scorer.report()
     tracking = _tracking_step_metrics(info, {"y_sp": env.y_sp}, 0.0, env.control_dt, env)
+    raw_by_output = tracking["tracking_raw_by_output"]
     scaled_ok = (
         abs(report["comp_tracking"] - W_TRACKING * mean_output_err) < 1e-9
-        and abs(tracking["tracking_iae"] - (raw_temp_err + raw_level_err) * env.control_dt) < 1e-9
+        and abs(
+            tracking["tracking_iae"]
+            - (normalized_temp_err + normalized_level_err) * env.control_dt
+        ) < 1e-9
         and abs(info["tracking_error_cost"] - expected_error_cost) < 1e-9
         and abs(tracking["tracking_cost"] - expected_cost) < 1e-9
         and abs(info["tracking_cost"] - expected_cost) < 1e-9
         and abs(reward + info["tracking_cost"]) < 1e-9
         and abs(info["tracking_return"] + info["tracking_cost"]) < 1e-9
-        and abs(tracking["tracking_mse"] - 0.5 * (raw_level_err ** 2 + raw_temp_err ** 2) * env.control_dt) < 1e-9
+        and abs(
+            tracking["tracking_mse"]
+            - 0.5
+            * (normalized_level_err ** 2 + normalized_temp_err ** 2)
+            * env.control_dt
+        ) < 1e-9
         and abs(info["track"] - (normalized_temp_err + normalized_level_err)) < 1e-9
+        and raw_by_output["flue_o2"]["unit"] == "%"
+        and raw_by_output["outlet_temperature"]["unit"] == "degC"
+        and abs(
+            raw_by_output["flue_o2"]["iae"]
+            - raw_level_err * env.control_dt
+        ) < 1e-9
+        and abs(
+            raw_by_output["outlet_temperature"]["iae"]
+            - raw_temp_err * env.control_dt
+        ) < 1e-9
     )
 
     class HighSetpointPolicy:
@@ -358,10 +390,39 @@ def test_setpoint_randomization_uses_model_bounds():
     check("setpoint randomization uses model-specific bounds", reset_bounds_ok and move_bounds_ok and legacy_water_range_ok)
 
 
+def test_seeded_setpoint_randomization_covers_all_builtin_sp_models():
+    for scenario in aiogym.list_scenarios():
+        env = AIOGymNativeEnv(
+            scenario,
+            reward_mode="tracking",
+            action_mode="actuator",
+            auto_events=False,
+            randomize=False,
+            randomize_setpoints=True,
+            episode_steps=1,
+        )
+        env.reset(seed=9000)
+        first = list(env.y_sp)
+        env.reset(seed=9001)
+        second = list(env.y_sp)
+        env.reset(seed=9000)
+        repeated = list(env.y_sp)
+
+        assert first == pytest.approx(repeated)
+        assert first != pytest.approx(second)
+        for value, row in zip(first, env.model.setpoint_schema()):
+            bounds = row.get("bounds")
+            if not isinstance(bounds, (tuple, list)) or len(bounds) != 2:
+                continue
+            lo, hi = bounds
+            assert lo is None or value >= float(lo)
+            assert hi is None or value <= float(hi)
+
+
 def test_benchmark_suite_configs():
     """Named benchmark suites are data configs, not hidden script constants."""
     from aiogym.evaluation import plot_results
-    from aiogym.cli.suite_benchmark import load_suite
+    from aiogym.cli.benchmark import load_suite
     from aiogym.evaluation.suite import (
         SUMMARY_COLUMNS,
         artifact_dir_for,
@@ -373,27 +434,24 @@ def test_benchmark_suite_configs():
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     cfg_dir = os.path.join(root, "aiogym", "evaluation", "suites")
     required = {
-        "core.json",
-        "all-actuator.json",
-        "tracking-actuator.json",
+        "cascade-control.json",
+        "cascade-recirculating.json",
+        "crystallization-tracking.json",
         "economic-actuator.json",
-        "economic-supervisory.json",
-        "rl-direct-actuator.json",
+        "quadruple.json",
+        "quadruple-phase-comparison.json",
         "robustness-actuator.json",
         "standard-baselines.json",
-        "crystallization-tracking.json",
+        "tracking-actuator.json",
     }
-    present = set(os.listdir(cfg_dir))
-    configs_ok = required.issubset(present)
+    present = {name for name in os.listdir(cfg_dir) if name.endswith(".json")}
+    configs_ok = required == present
     for name in required:
         cfg = load_suite(os.path.splitext(name)[0])
-        configs_ok = configs_ok and {"description", "scenarios", "objectives", "controllers", "action_mode"}.issubset(cfg)
+        configs_ok = configs_ok and {"description", "scenarios", "controllers", "action_mode"}.issubset(cfg)
         configs_ok = configs_ok and cfg["action_mode"] in {"actuator", "setpoint"}
-        configs_ok = configs_ok and bool(cfg["objectives"]) and bool(cfg["controllers"])
-    supervisory = load_suite("economic-supervisory")
-    direct = load_suite("rl-direct-actuator")
-    configs_ok = configs_ok and supervisory["action_mode"] == "setpoint" and supervisory["controllers"] == ["sb3"]
-    configs_ok = configs_ok and direct["action_mode"] == "actuator" and direct["controllers"] == ["sb3"]
+        configs_ok = configs_ok and bool(cfg["controllers"])
+        configs_ok = configs_ok and bool(cfg.get("objectives") or cfg.get("cases"))
     standard = load_suite("standard-baselines")
     configs_ok = configs_ok and set(standard["scenarios"]) == set(aiogym.list_scenarios())
     configs_ok = configs_ok and standard["objectives"] == ["tracking", "economic"]
@@ -443,8 +501,13 @@ def test_benchmark_suite_configs():
         and summary[0]["metric_mean"] == 0.5
         and summary[0]["metric_std"] == 0.1
         and summary[0]["seed_list"] == [11, 12]
-        and artifact_dir_for("example", run_id="20260708T120000000000Z")
-        == "runs/bench_suite_example_20260708T120000000000Z_artifacts"
+        and artifact_dir_for("example") == "runs/example_suite"
+        and artifact_dir_for(
+            "example",
+            overwrite=False,
+            run_id="20260708T120000000000Z",
+        )
+        == "runs/example_suite_20260708T120000000000Z"
         and artifact_dir_for("example", artifact_dir="custom/out") == "custom/out"
     )
     effective = effective_suite_config(standard, [
@@ -654,6 +717,10 @@ def test_oracle():
     from aiogym.controllers.pid import PIDAgent
     from aiogym.models import make_model
     mk = lambda: AIOGymNativeEnv("cstr", reward_mode="economic", episode_steps=120, auto_events=True, randomize_plant=True)
-    orc = evaluate_controller(OracleAgent("cstr", horizon=12, mode="economic"), mk(), episodes=2)["profit"]
+    orc = evaluate_controller(
+        OracleAgent("cstr", horizon=12, objective="economic"),
+        mk(),
+        episodes=2,
+    )["profit"]
     pid = evaluate_controller(PIDAgent(make_model("cstr")), mk(), episodes=2)["profit"]
     check(f"NMPC oracle {orc:.0f} > PID {pid:.0f}", orc > pid)

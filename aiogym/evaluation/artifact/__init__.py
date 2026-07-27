@@ -1,28 +1,29 @@
 """Benchmark artifact creation, rendering, plotting, and validation."""
+from __future__ import annotations
 
-from .checks import ARTIFACT_CHECK_SCHEMA_VERSION, check_benchmark_artifacts
-from .plotting import plot_results
-from .report import REPORT_SCHEMA_VERSION, render_benchmark_report
-from .svg import (
-    plot_constraint_timeline,
-    plot_leaderboard,
-    plot_learning_curve,
-    plot_rollouts,
-    plot_summary,
-)
-from .writers import finalize_benchmark_artifacts, write_benchmark_artifacts
+from aiogym._internal.lazy import exported_dir, resolve_export
 
-__all__ = [
-    "ARTIFACT_CHECK_SCHEMA_VERSION",
-    "REPORT_SCHEMA_VERSION",
-    "check_benchmark_artifacts",
-    "finalize_benchmark_artifacts",
-    "plot_constraint_timeline",
-    "plot_leaderboard",
-    "plot_learning_curve",
-    "plot_results",
-    "plot_rollouts",
-    "plot_summary",
-    "render_benchmark_report",
-    "write_benchmark_artifacts",
-]
+
+_EXPORTS = {
+    "ARTIFACT_CHECK_SCHEMA_VERSION": ".checks",
+    "check_benchmark_artifacts": ".checks",
+    "plot_results": ".plotting",
+    "REPORT_SCHEMA_VERSION": ".report",
+    "render_benchmark_report": ".report",
+    "plot_constraint_timeline": ".svg",
+    "plot_leaderboard": ".svg",
+    "plot_learning_curve": ".svg",
+    "plot_rollouts": ".svg",
+    "plot_summary": ".svg",
+    "finalize_benchmark_artifacts": ".writers",
+    "write_benchmark_artifacts": ".writers",
+}
+__all__ = sorted(_EXPORTS)
+
+
+def __getattr__(name):
+    return resolve_export(globals(), __name__, _EXPORTS, name)
+
+
+def __dir__():
+    return exported_dir(globals(), _EXPORTS)

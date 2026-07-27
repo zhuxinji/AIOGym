@@ -31,34 +31,6 @@
       "randomize_plant": true,
       "plant_drift": true,
       "noise": true
-    },
-    "controllers/quadruple-minimum-phase": {
-      "controller_configs": {
-        "pid": {"profile": "quadruple-minimum-phase-benchmark"},
-        "mpc": {"profile": "quadruple-minimum-phase"},
-        "oracle": {"profile": "quadruple-minimum-phase", "mode": "tracking"}
-      }
-    },
-    "controllers/quadruple-nonminimum-phase": {
-      "controller_configs": {
-        "pid": {"profile": "quadruple-nonminimum-phase-benchmark"},
-        "mpc": {"profile": "quadruple-nonminimum-phase"},
-        "oracle": {"profile": "quadruple-nonminimum-phase", "mode": "tracking"}
-      }
-    },
-    "controllers/quadruple-zero-boundary": {
-      "controller_configs": {
-        "pid": {"profile": "quadruple-zero-boundary"},
-        "mpc": {"profile": "quadruple-zero-boundary"},
-        "oracle": {"profile": "quadruple-zero-boundary", "mode": "tracking"}
-      }
-    },
-    "controllers/quadruple-disturbance-rejection": {
-      "controller_configs": {
-        "pid": {"profile": "quadruple-disturbance-rejection"},
-        "mpc": {"profile": "quadruple-disturbance-rejection"},
-        "oracle": {"profile": "quadruple-disturbance-rejection", "mode": "tracking"}
-      }
     }
   },
   "cases": {
@@ -80,26 +52,22 @@
     "quadruple/minimum-phase": {
       "scenario": "quadruple",
       "task": "minimum-phase",
-      "objective": "tracking",
-      "preset": "controllers/quadruple-minimum-phase"
+      "objective": "tracking"
     },
     "quadruple/nonminimum-phase": {
       "scenario": "quadruple",
       "task": "nonminimum-phase",
-      "objective": "tracking",
-      "preset": "controllers/quadruple-nonminimum-phase"
+      "objective": "tracking"
     },
     "quadruple/zero-boundary": {
       "scenario": "quadruple",
       "task": "zero-boundary-stress",
-      "objective": "tracking",
-      "preset": "controllers/quadruple-zero-boundary"
+      "objective": "tracking"
     },
     "quadruple/disturbance-rejection": {
       "scenario": "quadruple",
       "task": "disturbance-rejection",
-      "objective": "robustness",
-      "preset": "controllers/quadruple-disturbance-rejection"
+      "objective": "robustness"
     }
   }
 }

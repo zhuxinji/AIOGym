@@ -5,21 +5,45 @@ def test_model_contract():
     """Every process model exposes a usable backend contract for tooling."""
     for scn in SCENARIO_IDS:
         model = make_model(scn)
-        card = model.model_card()
+        metadata = model.metadata()
         n_act = model.action_dim()
-        params = card["parameters"]
-        state_ok = len(card["states"]) == len(model.initial_state())
-        action_ok = len(card["actions"]) == n_act
-        output_ok = len(card["controlled_outputs"]) == len(model.controlled_output(model.initial_state()))
-        output_ok = output_ok and card["controlled_output_vector"] == {"name": "y", "length": len(card["controlled_outputs"])}
-        vector_ok = card["state_vector"] == {"name": "x", "length": len(model.initial_state())}
-        vector_ok = vector_ok and card["action_vector"] == {"name": "u", "length": n_act}
-        vector_ok = vector_ok and card["dynamics_disturbances"] == list(model.dynamics_disturbance_names())
+        params = metadata["parameters"]
+        state_ok = len(metadata["states"]) == len(model.initial_state())
+        action_ok = len(metadata["actions"]) == n_act
+        output_ok = len(metadata["controlled_outputs"]) == len(
+            model.controlled_output(model.initial_state())
+        )
+        output_ok = output_ok and metadata["controlled_output_vector"] == {
+            "name": "y",
+            "length": len(metadata["controlled_outputs"]),
+        }
+        vector_ok = metadata["state_vector"] == {
+            "name": "x",
+            "length": len(model.initial_state()),
+        }
+        vector_ok = vector_ok and metadata["action_vector"] == {
+            "name": "u",
+            "length": n_act,
+        }
+        vector_ok = vector_ok and metadata["dynamics_disturbances"] == list(
+            model.dynamics_disturbance_names()
+        )
         param_ok = bool(params) and all("value" in row and "bounds" in row and "unit" in row for row in params.values())
-        bounds_ok = all("bounds" in row and row["bounds"] is not None for row in card["states"] + card["actions"])
-        meta_ok = card["scenario"] == scn and bool(card["name"]) and bool(card["constraints"])
-        meta_ok = meta_ok and bool(card["plant_regime"]) and bool(card["economic_config"])
-        meta_ok = meta_ok and isinstance(card["supervisory_layout"], list)
+        bounds_ok = all(
+            "bounds" in row and row["bounds"] is not None
+            for row in metadata["states"] + metadata["actions"]
+        )
+        meta_ok = (
+            metadata["scenario"] == scn
+            and bool(metadata["name"])
+            and bool(metadata["constraints"])
+        )
+        meta_ok = (
+            meta_ok
+            and bool(metadata["plant_regime"])
+            and bool(metadata["economic_config"])
+        )
+        meta_ok = meta_ok and isinstance(metadata["supervisory_layout"], list)
         u = [0.5] * n_act
         env = model.disturbance_defaults()
         dx_generic = model.dynamics(model.initial_state(), u, env)
@@ -39,34 +63,49 @@ def test_model_contract():
         generic_ok = generic_ok and casadi_ok
         generic_ok = generic_ok and meas["x"] == model.initial_state() and "y" in meas
         generic_ok = generic_ok and "levels" in meas and "temps" in meas
-        check(f"{scn:10s} model contract states={len(card['states'])} actions={len(card['actions'])} params={len(params)}", state_ok and action_ok and output_ok and vector_ok and param_ok and bounds_ok and meta_ok and generic_ok)
+        check(
+            f"{scn:10s} model contract states={len(metadata['states'])} "
+            f"actions={len(metadata['actions'])} params={len(params)}",
+            state_ok
+            and action_ok
+            and output_ok
+            and vector_ok
+            and param_ok
+            and bounds_ok
+            and meta_ok
+            and generic_ok,
+        )
 
 
 def test_model_metadata_export_and_scenario_docs():
     """Structured metadata and one canonical document cover every scenario."""
     from aiogym.models import (
-        MODEL_CARD_SCHEMA_VERSION,
-        collect_model_cards,
-        export_model_cards,
-        validate_model_card,
+        MODEL_METADATA_SCHEMA_VERSION,
+        collect_model_metadata,
+        export_model_metadata,
+        validate_model_metadata,
     )
 
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cards = collect_model_cards()
-    cards_ok = set(cards) == set(SCENARIO_IDS)
-    cards_ok = cards_ok and all(card["schema_version"] == MODEL_CARD_SCHEMA_VERSION for card in cards.values())
-    for scenario, card in cards.items():
-        validate_model_card(card, expected_scenario=scenario)
+    metadata_by_scenario = collect_model_metadata()
+    metadata_ok = set(metadata_by_scenario) == set(SCENARIO_IDS)
+    metadata_ok = metadata_ok and all(
+        metadata["schema_version"] == MODEL_METADATA_SCHEMA_VERSION
+        for metadata in metadata_by_scenario.values()
+    )
+    for scenario, metadata in metadata_by_scenario.items():
+        validate_model_metadata(metadata, expected_scenario=scenario)
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        manifest = export_model_cards(tmpdir)
+        manifest = export_model_metadata(tmpdir)
         exported = set(manifest["scenarios"])
         files_ok = exported == set(SCENARIO_IDS)
+        files_ok = files_ok and set(manifest["models"]) == set(SCENARIO_IDS)
         for scenario in SCENARIO_IDS:
             path = os.path.join(tmpdir, f"{scenario}.json")
             files_ok = files_ok and os.path.exists(path)
             with open(path) as f:
-                validate_model_card(json.load(f), expected_scenario=scenario)
+                validate_model_metadata(json.load(f), expected_scenario=scenario)
         files_ok = files_ok and os.path.exists(os.path.join(tmpdir, "manifest.json"))
 
     docs_path = os.path.join(root, "README.md")
@@ -79,13 +118,10 @@ def test_model_metadata_export_and_scenario_docs():
             filename = "cascade_recirculating" if scenario == "cascade-recirculating" else scenario
             scenario_path = os.path.join(root, "docs", "scenarios", f"{filename}.md")
             docs_ok = docs_ok and os.path.exists(scenario_path)
-        docs_ok = docs_ok and not os.path.exists(
-            os.path.join(root, "docs", "model_cards")
-        )
 
     check(
         "model metadata and canonical scenario docs cover registered built-ins",
-        cards_ok and files_ok and docs_ok,
+        metadata_ok and files_ok and docs_ok,
     )
 
 
@@ -113,9 +149,15 @@ def test_custom_model_entrypoints():
     }))
     try:
         model = make_model("mini_tank")
-        card = model.model_card()
-        contract_ok = card["scenario"] == "mini_tank" and card["disturbance_defaults"]["feed_bias"] == 0.0
-        contract_ok = contract_ok and card["controlled_outputs"][0]["name"] == "tank_temperature"
+        metadata = model.metadata()
+        contract_ok = (
+            metadata["scenario"] == "mini_tank"
+            and metadata["disturbance_defaults"]["feed_bias"] == 0.0
+        )
+        contract_ok = (
+            contract_ok
+            and metadata["controlled_outputs"][0]["name"] == "tank_temperature"
+        )
         contract_ok = contract_ok and model.controlled_output_scales() == [60.0]
         env = AIOGymNativeEnv("mini_tank", auto_events=False, randomize=False, randomize_setpoints=False)
         obs, _ = env.reset(seed=0)
@@ -161,8 +203,16 @@ def test_custom_model_entrypoints():
             ), dtype=float).reshape(-1)
             declarative_ok = declarative_ok and np.allclose(decl_casadi, decl_dx)
             from aiogym.controllers.oracle import OracleAgent
-            oracle_agent = OracleAgent("declarative_vector", horizon=2, mode="tracking", ipopt_max_iter=30)
-            declarative_ok = declarative_ok and oracle_agent.metadata()["mode"] == "tracking"
+            oracle_agent = OracleAgent(
+                "declarative_vector",
+                horizon=2,
+                objective="tracking",
+                ipopt_max_iter=30,
+            )
+            declarative_ok = (
+                declarative_ok
+                and oracle_agent.metadata()["objective"] == "tracking"
+            )
             oracle_env = AIOGymNativeEnv("declarative_vector", auto_events=False, randomize=False,
                                          randomize_setpoints=False, episode_steps=1)
             oracle_env.reset(seed=0)
@@ -253,7 +303,7 @@ def test_public_api_entrypoints():
         })
         benchmark_path = os.path.join(tmpdir, "benchmark.json")
         figures = aiogym.plot_results(tmpdir)
-        api_ok = payload["schema_version"] == "aiogym.public_benchmark.v2"
+        api_ok = payload["schema_version"] == "aiogym.public_benchmark.v3"
         api_ok = api_ok and payload["scenario"] == "cstr" and payload["objective"] == "tracking"
         api_ok = api_ok and payload["results"][0]["model"]["parameters"]["Dmax"]["value"] == 0.015
         api_ok = api_ok and payload["results"][0]["protocol"]["model_params"]["Dmax"] == 0.015

@@ -14,17 +14,23 @@ import math
 import os
 import time
 
-from aiogym._internal.config import parse_seed_list, resolve_auto_events
+from aiogym._internal.config import parse_seed_list
 from aiogym._internal.paths import run_path
+from aiogym._internal.vocabulary import OBJECTIVE_NAMES
 from aiogym.controllers import make_controller
 from aiogym.env import AIOGymNativeEnv
 from aiogym.evaluation import (
     evaluate_controller,
-    reward_mode_for_objective,
     resolve_protocol,
     rollout_controller,
 )
-from aiogym.rl.artifacts import (
+from aiogym.rl.training_config import (
+    configure_training_auto_events,
+    configure_training_objective,
+    configure_training_task,
+    training_identity,
+)
+from aiogym.rl.training_artifacts import (
     learning_curve_point,
     result_row,
     rl_payload,
@@ -80,8 +86,8 @@ def build_algo(args, env):
         from stable_baselines3 import PPO, SAC, TD3
     except ModuleNotFoundError as ex:
         raise SystemExit(
-            "stable-baselines3 is not installed. Install the package dependencies "
-            "with `pip install -e .` from the repository root."
+            "stable-baselines3 is required for training; install AIO-Gym "
+            "with `pip install 'aiogym[rl]'`."
         ) from ex
 
     algo = args.algo.lower()
@@ -307,77 +313,11 @@ def run_name_for(args, run_id: str | None = None) -> str:
     if args.name:
         return args.name
     objective = getattr(args, "objective", None) or "kpi"
-    task = getattr(args, "task", None)
-    identity = f"{args.scenario}_{task}" if task else args.scenario
-    stem = f"{args.algo}_{identity}_{args.action_mode}_{objective}_seed{args.seed}"
-    return f"{stem}_{run_id or utc_run_id()}"
-
-
-def configure_training_objective(args):
-    """Resolve the public training objective and its internal environment reward."""
-
-    if getattr(args, "reward_mode", None) is not None:
-        raise ValueError("reward_mode is not supported; use objective")
-    objective = getattr(args, "objective", None)
-    task_name = getattr(args, "task", None)
-    if objective is None and task_name:
-        from aiogym.models.tasks import load_task_profile
-
-        task = load_task_profile(task_name, scenario=args.scenario)
-        objective = task.get("default_objective")
-    objective = objective or "kpi"
-    reward_mode = reward_mode_for_objective(objective)
-    args.objective = objective
-    args.resolved_reward_mode = reward_mode
-    if hasattr(args, "eval_objective") and args.eval_objective is None:
-        args.eval_objective = objective
-    return args
-
-
-def configure_training_auto_events(args):
-    """Resolve the automatic-event flag."""
-
-    if getattr(args, "dynamic", None) is not None:
-        raise ValueError("dynamic is not supported; use auto_events")
-    args.auto_events = resolve_auto_events(
-        getattr(args, "auto_events", None), default=False
+    stem = (
+        f"{args.algo}_{training_identity(args)}_{args.action_mode}_"
+        f"{objective}_seed{args.seed}"
     )
-    return args
-
-
-def configure_training_task(args):
-    """Resolve task-owned timing while preserving explicit CLI overrides."""
-
-    config = {
-        "action_mode": args.action_mode,
-        "tracking_q_y": args.tracking_q_y,
-        "tracking_r_move": args.tracking_r_move,
-        "disturbance_obs": args.disturbance_obs,
-        "previous_action_obs": args.previous_action_obs,
-        "normalize_observations": args.normalize_observations,
-        "tracking_error_obs": args.tracking_error_obs,
-    }
-    if args.task:
-        config["task"] = args.task
-    if args.control_dt is not None:
-        config["control_dt"] = args.control_dt
-    if args.train_episode_steps is not None:
-        config["episode_steps"] = args.train_episode_steps
-    protocol = resolve_protocol(args.scenario, args.objective, config)
-    args.control_dt = protocol.control_dt
-    args.train_episode_steps = protocol.episode_steps
-    args.tracking_q_y = protocol.tracking_q_y
-    args.tracking_r_move = protocol.tracking_r_move
-    for name in (
-        "disturbance_obs",
-        "previous_action_obs",
-        "normalize_observations",
-        "tracking_error_obs",
-    ):
-        setattr(args, name, getattr(protocol, name))
-    if args.eval_episode_steps is None:
-        args.eval_episode_steps = protocol.episode_steps if args.task else 80
-    return args
+    return f"{stem}_{run_id or utc_run_id()}"
 
 
 def _learning_curve_point_is_better(row, best_metric_value):
@@ -452,13 +392,13 @@ def require_onnx_export_dependencies():
         import torch  # noqa: F401
     except ModuleNotFoundError as ex:
         raise SystemExit(
-            "torch is required for ONNX export. Install the package dependencies "
-            "with `pip install -e .` from the repository root."
+            "torch is required for ONNX export; install AIO-Gym "
+            "with `pip install 'aiogym[rl]'`."
         ) from ex
     if importlib.util.find_spec("onnx") is None:
         raise SystemExit(
-            "onnx is required for ONNX export. Install the package dependencies "
-            "with `pip install -e .` from the repository root."
+            "onnx is required for ONNX export; install AIO-Gym "
+            "with `pip install 'aiogym[rl]'`."
         )
 
 
@@ -471,7 +411,7 @@ def main(argv=None, prog=None):
     ap.add_argument(
         "--objective",
         default=None,
-        choices=["economic", "tracking", "robustness", "safety", "kpi"],
+        choices=OBJECTIVE_NAMES,
         help="training objective; task-owned when available, otherwise kpi",
     )
     ap.add_argument("--steps", type=int, default=10000)
@@ -563,7 +503,7 @@ def main(argv=None, prog=None):
     ap.add_argument(
         "--eval-objective",
         default=None,
-        choices=["economic", "tracking", "robustness", "safety", "kpi"],
+        choices=OBJECTIVE_NAMES,
         help="evaluation objective; defaults to the training objective",
     )
     ap.add_argument("--eval-episodes", type=int, default=3)
@@ -598,8 +538,8 @@ def main(argv=None, prog=None):
         import torch
     except ModuleNotFoundError as ex:
         raise SystemExit(
-            "stable-baselines3 is not installed. Install the package dependencies "
-            "with `pip install -e .` from the repository root."
+            "stable-baselines3 and torch are required for training; install "
+            "AIO-Gym with `pip install 'aiogym[rl]'`."
         ) from ex
     args.device = args.device or best_device()
     torch.set_num_threads(max(1, int(args.torch_threads)))

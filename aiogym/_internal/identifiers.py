@@ -58,15 +58,6 @@ def canonical_task_id(value: str) -> str:
     return f"{canonical_scenario_id(internal_scenario_id(parts[0]))}/{parts[1]}"
 
 
-def internal_task_id(value: str) -> str:
-    """Resolve the scenario prefix of a ``scenario/task`` ID for storage."""
-
-    parts = value.split("/", 1)
-    if len(parts) != 2:
-        return value
-    return f"{internal_scenario_id(parts[0])}/{parts[1]}"
-
-
 def suite_catalog_text(canonical_ids: Sequence[str]) -> str:
     return ", ".join(sorted(canonical_ids))
 
@@ -99,7 +90,6 @@ __all__ = [
     "canonical_task_id",
     "canonicalize_artifact_ids",
     "internal_scenario_id",
-    "internal_task_id",
     "require_canonical_scenario_id",
     "scenario_catalog_text",
     "suite_catalog_text",

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ..._internal.serialization import write_json as _write_json
+from .paths import resolve_artifact_path
 from .tables import (
     _benchmark_case_key,
     _leaderboard,
@@ -90,8 +91,9 @@ def plot_results(run_dir: str | Path) -> dict[str, str]:
             figures["leaderboard_by_scenario"] = str(leaderboard_path)
             artifact_figures["summary_figures"] = summary_figures
             artifact_figures["leaderboard_figure"] = str(leaderboard_path)
-    rollouts = _resolved_rollouts(payload)
-    payload["rollouts"] = rollouts
+    rollouts = _resolved_rollouts(payload, run_path)
+    if "rollouts" in payload:
+        payload["rollouts"] = rollouts
     tracking_rollout_groups = _tracking_rollout_groups(rollouts)
     if tracking_rollout_groups:
         control_figures = {}
@@ -136,11 +138,23 @@ def _clear_comparison_figures(figures_dir: Path) -> None:
             path.unlink()
 
 
-def _resolved_rollouts(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _resolved_rollouts(
+    payload: Mapping[str, Any], root: Path | None = None
+) -> list[dict[str, Any]]:
     """Backfill rollout identity fields missing from older benchmark artifacts."""
 
+    raw_rollouts = payload.get("rollouts")
+    if raw_rollouts is None and root is not None:
+        artifacts = dict(payload.get("artifacts") or {})
+        raw_path = artifacts.get("rollouts")
+        rollout_path = resolve_artifact_path(
+            root, raw_path, "rollouts/rollouts.json"
+        )
+        if rollout_path.exists():
+            with rollout_path.open() as stream:
+                raw_rollouts = json.load(stream)
     resolved = []
-    for raw_rollout in payload.get("rollouts") or []:
+    for raw_rollout in raw_rollouts or []:
         rollout = dict(raw_rollout)
         protocol = rollout.get("protocol") or {}
         protocol_task = protocol.get("task")

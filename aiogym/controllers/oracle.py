@@ -5,14 +5,15 @@ controller RL/PID/APC-MPC are measured against.
 Selectable multiple- or single-shooting transcription: RK4 over each control
 interval, IPOPT NLP.
 Plant dynamics are supplied by the model contract through
-``model.dynamics(..., backend="casadi")``. Two objectives:
+``model.dynamics(..., backend="casadi")``. The resolved task objective is
+supplied by the benchmark execution path:
   - "tracking": Σ normalized(y-y_sp)ᵀQ normalized(y-y_sp) + ΔuᵀRΔu
-                (PC-Gym-style setpoint tracking)
-  - "economic": maximize the economic stage profit (value − energy − violation),
-                the right oracle for the economic scenarios (hugs the safe edge).
+  - "economic": maximize economic stage profit (value − energy − violation)
+  - "kpi"/"robustness": minimize the benchmark KPI stage penalty
+  - "safety": minimize a continuous process-safety violation surrogate
 
 Usage:
-    orc = NMPCOracle("cstr", horizon=20, mode="economic")
+    orc = NMPCOracle("cstr", horizon=20, objective="economic")
     u = orc.solve(x, t_cold, t_amb, disturbances=meas, y_sp=y_sp)
 """
 from __future__ import annotations
@@ -21,6 +22,7 @@ import math
 import numpy as np
 
 from .._internal.validation import nonnegative_float, positive_float, positive_int
+from .._internal.vocabulary import OBJECTIVE_NAMES
 
 try:
     import casadi as ca
@@ -36,21 +38,31 @@ def copy_economic_config(model):
 
 
 class NMPCOracle:
-    def __init__(self, scenario="cstr", horizon=20, control_dt=0.5, mode="economic",
+    _OBJECTIVES = frozenset(OBJECTIVE_NAMES)
+
+    def __init__(self, scenario="cstr", horizon=20, control_dt=0.5,
+                 objective=None,
                  q_y=1.0, r_move=0.05, terminal_weight=1.0,
+                 steady_input_weight=0.0,
                  ipopt_max_iter=80, ipopt_tol=1e-4, warm_start=False,
                  transcription="multiple_shooting", enforce_state_bounds=True,
                  enforce_temperature_cap=True, model=None):
         if not _HAVE_CASADI:
-            raise RuntimeError("casadi not installed — pip install casadi")
+            raise RuntimeError(
+                "casadi is required for the Oracle controller; "
+                "install AIO-Gym with `pip install 'aiogym[oracle]'`"
+            )
         self.model = make_model(model if model is not None else scenario)
         self.scenario = self.model.scenario
         self.p = self.model.p
         self.N = positive_int("horizon", horizon)
         self.dt = positive_float("control_dt", control_dt)
-        if mode not in {"economic", "tracking"}:
-            raise ValueError("mode must be one of: economic, tracking")
-        self.mode = mode
+        resolved_objective = objective or "economic"
+        if resolved_objective not in self._OBJECTIVES:
+            raise ValueError(
+                f"objective must be one of: {', '.join(sorted(self._OBJECTIVES))}"
+            )
+        self.objective = str(resolved_objective)
         self.integration_max_step = positive_float(
             "model solver max_step", self.model.solver_settings()["max_step"]
         )
@@ -71,6 +83,9 @@ class NMPCOracle:
         self.q_y = self._resolve_q_y(q_y)
         self.r_move = nonnegative_float("r_move", r_move)
         self.terminal_weight = nonnegative_float("terminal_weight", terminal_weight)
+        self.steady_input_weight = nonnegative_float(
+            "steady_input_weight", steady_input_weight
+        )
         self.econ = copy_economic_config(self.model)
         self.nd = len(self.model.dynamics_disturbance_names())
         self.state_bounds = self._state_bounds() if self.enforce_state_bounds else [(None, None)] * self.nx
@@ -99,7 +114,11 @@ class NMPCOracle:
 
     def _initial_action(self):
         initializer = getattr(self.model, "mpc_init", None)
-        values = initializer() if callable(initializer) else [0.5] * self.nu
+        values = (
+            initializer()
+            if callable(initializer)
+            else self.model.default_action()
+        )
         action = np.asarray(values, dtype=float).reshape(-1)
         if len(action) != self.nu:
             raise ValueError(f"model.mpc_init() must contain {self.nu} values, got {len(action)}")
@@ -157,10 +176,14 @@ class NMPCOracle:
             x = x + (h / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
         return x
 
-    def _stage_cost(self, x, u, sp, d):
-        if self.mode == "economic":
+    def _stage_cost(self, x, u, sp, d, ideal_energy):
+        if self.objective == "economic":
             return -self._econ_profit(x, u, d)            # minimize -profit
-        return self._tracking_state_cost(x, sp)
+        if self.objective == "tracking":
+            return self._tracking_state_cost(x, sp)
+        if self.objective == "safety":
+            return self._safety_state_cost(x)
+        return self._kpi_stage_cost(x, u, sp, ideal_energy)
 
     def _tracking_state_cost(self, x, sp):
         y = self.model.controlled_output(x, backend="casadi", ca=ca)
@@ -171,6 +194,52 @@ class NMPCOracle:
             scale = float(scales[i]) if i < len(scales) else 1.0
             c += weight * ((yi - sp["y_sp"][i]) / max(scale, 1e-12)) ** 2
         return c
+
+    @staticmethod
+    def _smooth_abs(value, epsilon=1e-2):
+        return ca.sqrt(value * value + epsilon * epsilon) - epsilon
+
+    @classmethod
+    def _smooth_positive(cls, value, epsilon=1e-2):
+        return 0.5 * (value + cls._smooth_abs(value, epsilon) + epsilon)
+
+    def _normalized_absolute_tracking_error(self, x, sp):
+        y = self.model.controlled_output(x, backend="casadi", ca=ca)
+        scales = self.model.controlled_output_scales()
+        total = 0
+        for i, yi in enumerate(y):
+            scale = float(scales[i]) if i < len(scales) else 1.0
+            error = (yi - sp["y_sp"][i]) / max(scale, 1e-12)
+            total += self._smooth_abs(error)
+        return total / max(len(y), 1)
+
+    def _safety_state_cost(self, x):
+        """Continuous surrogate for the evaluator's per-step safety indicator."""
+
+        display = self.model.display_outputs(x, backend="casadi", ca=ca)
+        levels = list(display.get("levels", []))
+        temps = list(display.get("temps", []))
+        heights = list(getattr(self.model, "height_max", []))
+        cost = 0
+        for i, level in enumerate(levels):
+            height = float(heights[i]) if i < len(heights) else 1.0
+            scale = max(0.1 * height, 1e-9)
+            cost += self._smooth_positive((0.15 * height - level) / scale)
+            cost += self._smooth_positive((level - 0.90 * height) / scale)
+        for temp in temps:
+            cost += self._smooth_positive((temp - 80.0) / 10.0)
+            cost += self._smooth_positive((temp - 92.0) / 10.0)
+        return cost
+
+    def _kpi_stage_cost(self, x, u, sp, ideal_energy):
+        mean_error = self._normalized_absolute_tracking_error(x, sp)
+        energy_cost = 0
+        if bool(getattr(self.model, "energy_scored", True)):
+            energy = self.model.energy_kw(u, backend="casadi", ca=ca)
+            energy_cost = 0.5 * self._smooth_positive(energy - ideal_energy)
+        safety_violation = self._safety_state_cost(x)
+        safety_cost = 60.0 * safety_violation / (1.0 + safety_violation)
+        return 20.0 * mean_error + energy_cost + safety_cost
 
     def _econ_profit(self, x, u, d):
         cfg = self.econ
@@ -242,7 +311,9 @@ class NMPCOracle:
         x0 = opti.parameter(nx)
         d = opti.parameter(self.nd)
         u_prev = opti.parameter(nu)
+        u_target = opti.parameter(nu)
         ysp = opti.parameter(self.ny, N)
+        ideal_energy = opti.parameter()
         J = 0
         opti.subject_to(X[:, 0] == x0)
         slack = opti.variable(1, N)                                    # shared state/cap feasibility slack
@@ -269,12 +340,12 @@ class NMPCOracle:
             if self.t_safe is not None:
                 for temp in temps:                                     # soft safety cap on temperature outputs
                     opti.subject_to(temp <= self.t_safe + slack[0, k])
-            stage_state = X[:, k + 1] if self.mode == "tracking" else X[:, k]
             J += (
-                self._stage_cost(stage_state, U[:, k], sp, d)
+                self._stage_cost(X[:, k + 1], U[:, k], sp, d, ideal_energy)
                 + self.r_move * ca.sumsqr(U[:, k] - up)
+                + self.steady_input_weight * ca.sumsqr(U[:, k] - u_target)
             )
-        if self.mode == "tracking":
+        if self.objective == "tracking":
             terminal_sp = {"y_sp": [ysp[i, N - 1] for i in range(self.ny)]}
             J += self.terminal_weight * self._tracking_state_cost(X[:, N], terminal_sp)
         J += 1e4 * ca.sumsqr(slack)                                    # heavily discourage cap violation
@@ -282,7 +353,8 @@ class NMPCOracle:
         opti.solver("ipopt", self._solver_options())
         self.opti, self.X, self.U, self.slack = opti, X, U, slack
         self.par = {
-            "x0": x0, "d": d, "u_prev": u_prev, "ysp": ysp,
+            "x0": x0, "d": d, "u_prev": u_prev, "u_target": u_target, "ysp": ysp,
+            "ideal_energy": ideal_energy,
         }
 
     def _build_single_shooting(self):
@@ -292,7 +364,9 @@ class NMPCOracle:
         x0 = opti.parameter(nx)
         d = opti.parameter(self.nd)
         u_prev = opti.parameter(nu)
+        u_target = opti.parameter(nu)
         ysp = opti.parameter(self.ny, N)
+        ideal_energy = opti.parameter()
         slack = opti.variable(1, N)
         opti.subject_to(slack >= 0)
         x = x0
@@ -302,10 +376,10 @@ class NMPCOracle:
             up = u_prev if k == 0 else U[:, k - 1]
             opti.subject_to(opti.bounded(0.0, U[:, k], 1.0))
             x_next = self._rk4(x, U[:, k], d)
-            stage_state = x_next if self.mode == "tracking" else x
             J += (
-                self._stage_cost(stage_state, U[:, k], sp, d)
+                self._stage_cost(x_next, U[:, k], sp, d, ideal_energy)
                 + self.r_move * ca.sumsqr(U[:, k] - up)
+                + self.steady_input_weight * ca.sumsqr(U[:, k] - u_target)
             )
             x = x_next
             self._constrain_state(opti, x, slack=slack[0, k])
@@ -313,7 +387,7 @@ class NMPCOracle:
             if self.t_safe is not None:
                 for temp in temps:
                     opti.subject_to(temp <= self.t_safe + slack[0, k])
-        if self.mode == "tracking":
+        if self.objective == "tracking":
             terminal_sp = {"y_sp": [ysp[i, N - 1] for i in range(self.ny)]}
             J += self.terminal_weight * self._tracking_state_cost(x, terminal_sp)
         J += 1e4 * ca.sumsqr(slack)
@@ -321,7 +395,8 @@ class NMPCOracle:
         opti.solver("ipopt", self._solver_options())
         self.opti, self.X, self.U, self.slack = opti, None, U, slack
         self.par = {
-            "x0": x0, "d": d, "u_prev": u_prev, "ysp": ysp,
+            "x0": x0, "d": d, "u_prev": u_prev, "u_target": u_target, "ysp": ysp,
+            "ideal_energy": ideal_energy,
         }
 
     def _numeric_rk4(self, x, u, disturbances):
@@ -362,7 +437,8 @@ class NMPCOracle:
 
     def _steady_action_target(self, target):
         resolver = getattr(self.model, "tracking_steady_state_action", None)
-        values = resolver(target) if self.mode == "tracking" and callable(resolver) else None
+        uses_setpoint = self.objective in {"tracking", "kpi", "robustness"}
+        values = resolver(target) if uses_setpoint and callable(resolver) else None
         if values is None:
             return self.u_init.copy()
         action = np.asarray(values, dtype=float).reshape(-1)
@@ -397,9 +473,23 @@ class NMPCOracle:
         target, target_trajectory = self._setpoint_trajectory(y_sp, y_sp_preview)
         o.set_value(self.par["ysp"], target_trajectory)
         initial_action = self._steady_action_target(target)
+        o.set_value(self.par["u_target"], initial_action)
+        dvec = self._disturbance_vector(t_cold, t_amb, disturbances)
+        disturbance_map = self.model.dynamics_disturbance_map(dvec)
+        try:
+            ideal_energy = self.model.ideal_energy_kw(
+                np.asarray(x, float),
+                target,
+                disturbance_map,
+                initial_action,
+            )
+        except (TypeError, ValueError, KeyError):
+            ideal_energy = 0.0
+        if not np.isfinite(ideal_energy):
+            ideal_energy = 0.0
+        o.set_value(self.par["ideal_energy"], float(ideal_energy))
         target_signature = tuple(float(value) for value in target)
         try:
-            dvec = self._disturbance_vector(t_cold, t_amb, disturbances)
             use_warm_start = (
                 self.warm_start
                 and self._warm is not None
@@ -479,14 +569,17 @@ class OracleAgent:
                 "action_mode": self.action_mode, "control_structure": self.control_structure,
                 "solve_every": self.solve_every,
                 "preview_setpoints": self.preview_setpoints,
-                "horizon": self.orc.N, "control_dt": self.orc.dt, "mode": self.orc.mode,
+                "horizon": self.orc.N, "control_dt": self.orc.dt,
+                "objective": self.orc.objective,
                 "q_y": list(self.orc.q_y),
                 "r_move": self.orc.r_move,
                 "terminal_weight": self.orc.terminal_weight,
+                "steady_input_weight": self.orc.steady_input_weight,
                 "initialization": "tracking_steady_state_action",
                 "integration_max_step": self.orc.integration_max_step,
                 "integration_substeps": self.orc.integration_substeps,
                 "ipopt_max_iter": self.orc.ipopt_max_iter,
+                "ipopt_tol": self.orc.ipopt_tol,
                 "warm_start": self.orc.warm_start,
                 "transcription": self.orc.transcription,
                 "enforce_state_bounds": self.orc.enforce_state_bounds,
@@ -533,7 +626,7 @@ class OracleAgent:
         if env is None:
             return [current] * self.orc.N
         step = int(getattr(env, "_k", 0))
-        events = dict(getattr(env, "_task_setpoint_events", {}) or {})
+        events = dict(getattr(env, "_episode_setpoint_events", {}) or {})
         targets = []
         active = current
         for offset in range(self.orc.N):

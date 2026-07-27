@@ -116,15 +116,26 @@ an `AIOGymNativeEnv` through the protocol itself.
 Results distinguish `execution_status` (`passed`, `degraded`, or `failed`) from
 `objective_status` (`met`, `not-met`, or `not-defined`).
 
-Controller tuning is selected independently with a controller `profile`. This
-keeps controller parameters out of the task definition while still allowing a
-suite to bind a suitable baseline to each operating point.
+Controller parameters remain in controller `profile` files. A task may bind
+controller IDs to default profile names through its `controllers` mapping.
+`BenchmarkCase` resolves that mapping for single-task, suite, and Python API
+runs alike, so changing the entry point does not silently change controller
+tuning. Explicit controller configuration can still override the task default.
 
 Task setpoint and disturbance events are executable. Events at step zero are
 applied before the initial controller observation; later disturbance events are
 applied before process integration at their declared step and are recorded in
 the result schedule. Event names must exist in the model disturbance schema and
 values must respect its bounds.
+
+The environment calls `model.sample_env_setpoints(...)` when seeded target
+randomization is requested. `ProcessModelContract` supplies bounded relative
+sampling and `is_setpoint_reachable(...)` validation. A custom model with an
+analytic steady-state calculation should override `is_setpoint_reachable` to
+reject targets that satisfy metadata bounds but cannot be maintained by valid
+actuators. Models with a singular target inverse may override
+`sample_env_setpoints` and sample a steady actuator/state before mapping it to
+controlled outputs.
 
 ## Numerical readiness
 

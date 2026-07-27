@@ -491,6 +491,36 @@ def test_steady_state_requirements_report_feasibility(model, nominal_env):
     assert "feed_pump" in impossible["infeasible_reasons"]
 
 
+def test_zero_throughput_target_needs_no_separate_operation_mode(model, nominal_env):
+    assert model.operation == {
+        "product_flow_sp": 0.0,
+        "min_product_flow": 0.0,
+    }
+    state = [0.45, 35.0, 0.45, 50.0, 0.45, 65.0]
+    flowing_action = [0.25, 0.25, 0.25, 0.25, 0.4, 0.3, 0.3]
+
+    assert model.production(state, flowing_action, nominal_env) == pytest.approx(0.0)
+    assert model.product_flow_shortfall(0.0) == pytest.approx(0.0)
+    with pytest.raises(ValueError, match="unknown cascade operation fields: mode"):
+        model.configure_operation({
+            "mode": "continuous",
+            "product_flow_sp": 4.0e-4,
+        })
+
+
+def test_configured_throughput_sets_cascade_default_and_mpc_actions(model):
+    model.configure_operation({
+        "product_flow_sp": 4.0e-4,
+        "min_product_flow": 4.0e-4,
+    })
+    expected = model.steady_state_requirements(
+        model.default_setpoint_vector()
+    )["action"]
+
+    assert model.default_action() == pytest.approx(expected)
+    assert model.mpc_init() == pytest.approx(expected)
+
+
 def test_lower_heater_efficiency_increases_ideal_electric_power(model, nominal_env):
     efficient = model.steady_state_requirements(
         model.default_setpoint_vector(),
@@ -511,7 +541,7 @@ def test_lower_heater_efficiency_increases_ideal_electric_power(model, nominal_e
 
 def test_ideal_energy_uses_task_throughput_not_current_pump_action(model, nominal_env):
     model.configure_operation(
-        {"mode": "continuous", "product_flow_sp": 4.0e-4, "min_product_flow": 4.0e-4}
+        {"product_flow_sp": 4.0e-4, "min_product_flow": 4.0e-4}
     )
     target = model.default_setpoint_vector()
     requirements = model.steady_state_requirements(target, nominal_env)
@@ -527,7 +557,7 @@ def test_ideal_energy_uses_task_throughput_not_current_pump_action(model, nomina
 def test_numeric_and_casadi_continuous_economics_match(model, nominal_env):
     ca = pytest.importorskip("casadi")
     model.configure_operation(
-        {"mode": "continuous", "product_flow_sp": 4.0e-4, "min_product_flow": 4.0e-4}
+        {"product_flow_sp": 4.0e-4, "min_product_flow": 4.0e-4}
     )
     target = model.default_setpoint_vector()
     state = [target[0], target[3], target[1], target[4], target[2], target[5]]

@@ -15,6 +15,7 @@ class QuadrupleModel(ProcessModelContract):
     """
 
     scenario = "quadruple"
+    benchmark_objectives = ("tracking", "kpi", "robustness", "safety")
     display_name = "Johansson quadruple-tank process"
     summary = "Four-state, two-input nonlinear level process with adjustable minimum/nonminimum-phase behavior."
     n = 4
@@ -182,6 +183,64 @@ class QuadrupleModel(ProcessModelContract):
         v2 = (matrix[0][0] * required[1] - required[0] * matrix[1][0]) / determinant
         vmax = float(self.p["max_voltage"])
         return [max(0.0, min(1.0, v1 / vmax)), max(0.0, min(1.0, v2 / vmax))]
+
+    def is_setpoint_reachable(self, y_sp):
+        if not super().is_setpoint_reachable(y_sp):
+            return False
+        action = self.tracking_steady_state_action(y_sp)
+        if action is None:
+            return False
+        equilibrium = self.equilibrium_state(self.physical_action_vector(action))
+        output = self.controlled_output(equilibrium)
+        if any(abs(float(actual) - float(target)) > 1e-7
+               for actual, target in zip(output, y_sp)):
+            return False
+        for value, row in zip(equilibrium, self.state_schema()):
+            bounds = row.get("bounds")
+            if not isinstance(bounds, (tuple, list)) or len(bounds) != 2:
+                continue
+            lo, hi = bounds
+            if lo is not None and float(value) < float(lo):
+                return False
+            if hi is not None and float(value) > float(hi):
+                return False
+        return True
+
+    def sample_env_setpoints(self, y_sp, rng, options=None):
+        options = dict(options or {})
+        reference = [float(value) for value in y_sp]
+        if not options.get("randomize_setpoints", False):
+            return reference
+        sampled = super().sample_env_setpoints(reference, rng, options)
+        if sampled != reference or self.is_setpoint_reachable(sampled):
+            return sampled
+
+        # At gamma1 + gamma2 = 1 the lower-tank steady-state map is singular.
+        # Sampling a safe steady actuator pair and mapping it forward still
+        # produces a reproducible target on the physically reachable manifold.
+        anchor = self.tracking_steady_state_action(reference)
+        if anchor is None:
+            anchor = self.default_action()
+        for _ in range(64):
+            action = [
+                max(0.0, min(1.0, float(value) + float(rng.uniform(-0.05, 0.05))))
+                for value in anchor
+            ]
+            equilibrium = self.equilibrium_state(self.physical_action_vector(action))
+            safe = True
+            for value, row in zip(equilibrium, self.state_schema()):
+                bounds = row.get("bounds")
+                if not isinstance(bounds, (tuple, list)) or len(bounds) != 2:
+                    continue
+                lo, hi = bounds
+                safe = (
+                    safe
+                    and (lo is None or float(value) >= float(lo))
+                    and (hi is None or float(value) <= float(hi))
+                )
+            if safe:
+                return list(self.controlled_output(equilibrium))
+        return reference
 
     def initial_state(self):
         return self.equilibrium_state()

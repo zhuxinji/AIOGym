@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 from typing import Any, Mapping
 
 from ..._internal.identifiers import canonicalize_artifact_ids
 from ..._internal.serialization import write_json as _write_json
-from ...models import collect_model_cards
+from ...models import collect_model_metadata
 from .tables import (
     _artifact_scenarios,
     _leaderboard,
@@ -117,14 +118,9 @@ def _write_model_metadata_artifacts(
     scenarios = _artifact_scenarios(payload)
     if not scenarios:
         return {}
-    metadata = collect_model_cards(scenarios)
+    metadata = collect_model_metadata(scenarios)
     artifacts = {}
     models_dir = metadata_dir / "models"
-    legacy_cards_dir = metadata_dir / "model_cards"
-    _clear_json_files(legacy_cards_dir)
-    legacy_single_path = metadata_dir / "model_card.json"
-    if legacy_single_path.exists():
-        legacy_single_path.unlink()
     if len(metadata) == 1:
         _clear_json_files(models_dir)
         _, model_metadata = next(iter(metadata.items()))
@@ -173,27 +169,55 @@ def finalize_benchmark_artifacts(
     *,
     create_plots: bool = False,
     markdown_report: bool = False,
+    replace_existing: bool = False,
 ) -> dict[str, Any]:
     """Write one canonical benchmark payload and its derived outputs."""
 
     root = Path(out_dir)
+    if replace_existing:
+        _clear_managed_artifacts(root)
     root.mkdir(parents=True, exist_ok=True)
     data = canonicalize_artifact_ids(dict(payload))
     data["artifacts"] = write_benchmark_artifacts(root, data)
     benchmark_path = root / "benchmark.json"
-    _write_json(benchmark_path, data)
+    persisted_data = dict(data)
+    persisted_data.pop("rollouts", None)
+    _write_json(benchmark_path, persisted_data)
     if create_plots:
         from .plotting import plot_results
 
         plot_results(root)
         with benchmark_path.open() as stream:
-            data = json.load(stream)
+            persisted_data = json.load(stream)
     if markdown_report:
         from .report import render_benchmark_report
 
         report_path = root / "report.md"
         render_benchmark_report(root, out_path=report_path)
-        data.setdefault("artifacts", {})
-        data["artifacts"]["markdown_report"] = str(report_path)
-        _write_json(benchmark_path, data)
+        persisted_data.setdefault("artifacts", {})
+        persisted_data["artifacts"]["markdown_report"] = str(report_path)
+        _write_json(benchmark_path, persisted_data)
+    data["artifacts"] = persisted_data["artifacts"]
     return data
+
+
+def _clear_managed_artifacts(root: Path) -> None:
+    """Remove only files and directories owned by the artifact writer."""
+
+    managed = (
+        "benchmark.json",
+        "report.md",
+        "config",
+        "metadata",
+        "summary",
+        "results",
+        "rollouts",
+        "figures",
+        "training",
+    )
+    for name in managed:
+        path = root / name
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)

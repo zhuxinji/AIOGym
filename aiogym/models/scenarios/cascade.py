@@ -51,38 +51,29 @@ class CascadeModel(ProcessModelContract):
             if isinstance(row.get("bounds"), (tuple, list)) and len(row["bounds"]) == 2
         }
         self.operation = {
-            "mode": "batch",
             "product_flow_sp": 0.0,
             "min_product_flow": 0.0,
         }
 
     def configure_operation(self, operation):
-        """Configure batch/continuous economics without mutating physical parameters."""
+        """Configure throughput economics without mutating physical parameters."""
 
         values = dict(operation or {})
-        mode = values.get("mode", "batch")
-        if mode not in {"batch", "continuous"}:
-            raise ValueError("cascade operation mode must be one of: batch, continuous")
+        unknown = set(values) - {"product_flow_sp", "min_product_flow"}
+        if unknown:
+            raise ValueError(
+                f"unknown cascade operation fields: {', '.join(sorted(unknown))}"
+            )
         product_flow_sp = self._finite_nonnegative(
             "product_flow_sp", values.get("product_flow_sp", 0.0)
         )
-        if mode == "continuous" and product_flow_sp <= 0.0:
-            raise ValueError("continuous cascade operation requires positive product_flow_sp")
-        if mode == "batch" and product_flow_sp != 0.0:
-            raise ValueError("batch cascade operation requires product_flow_sp=0")
         min_product_flow = self._finite_nonnegative(
             "min_product_flow",
-            values.get(
-                "min_product_flow",
-                product_flow_sp if mode == "continuous" else 0.0,
-            ),
+            values.get("min_product_flow", product_flow_sp),
         )
         if min_product_flow > product_flow_sp:
             raise ValueError("min_product_flow must not exceed product_flow_sp")
-        if mode == "batch" and min_product_flow != 0.0:
-            raise ValueError("batch cascade operation requires min_product_flow=0")
         self.operation = {
-            "mode": mode,
             "product_flow_sp": product_flow_sp,
             "min_product_flow": min_product_flow,
         }
@@ -308,11 +299,7 @@ class CascadeModel(ProcessModelContract):
         ) = self._heater_terms(h, temperatures, u, env, _NUMERIC_OPS)
         product_flow = float(total_outflows[2])
         min_product_flow = float(self.operation["min_product_flow"])
-        product_flow_shortfall = (
-            max(0.0, min_product_flow - product_flow)
-            if self.operation["mode"] == "continuous"
-            else 0.0
-        )
+        product_flow_shortfall = max(0.0, min_product_flow - product_flow)
         return {
             "pump_flow_factor": env.get("pump_flow_factor", 1.0),
             "heater_efficiency": env.get("heater_efficiency", 1.0),
@@ -321,7 +308,6 @@ class CascadeModel(ProcessModelContract):
             "interstage_flow_01_m3s": float(valve_flows[0]),
             "interstage_flow_12_m3s": float(valve_flows[1]),
             "product_flow_m3s": product_flow,
-            "operation_mode": self.operation["mode"],
             "product_flow_sp_m3s": float(self.operation["product_flow_sp"]),
             "min_product_flow_m3s": min_product_flow,
             "product_flow_shortfall_m3s": product_flow_shortfall,
@@ -545,8 +531,35 @@ class CascadeModel(ProcessModelContract):
             "ideal_energy_kw": ideal_energy_kw,
         }
 
+    def default_action(self):
+        """Return the analytic steady input for the configured throughput."""
+
+        requirements = self.steady_state_requirements(self.default_setpoint_vector())
+        if requirements["feasible"]:
+            return list(requirements["action"])
+        return super().default_action()
+
+    def mpc_init(self):
+        return self.default_action()
+
+    def tracking_steady_state_action(self, y_sp):
+        """Return the nominal steady input for a feasible tracking target."""
+
+        requirements = self.steady_state_requirements(y_sp)
+        if not requirements["feasible"]:
+            return None
+        return list(requirements["action"])
+
+    def is_setpoint_reachable(self, y_sp):
+        if not super().is_setpoint_reachable(y_sp):
+            return False
+        try:
+            return bool(self.steady_state_requirements(y_sp)["feasible"])
+        except (TypeError, ValueError, KeyError):
+            return False
+
     def _economic_product_flow(self, x, u, env, ops):
-        if self.operation["mode"] != "continuous":
+        if self.operation["product_flow_sp"] <= 0.0:
             return 0.0
         context = self._resolved_env(env, ops)
         effective_action = self._effective_action(u, ops)
@@ -578,9 +591,9 @@ class CascadeModel(ProcessModelContract):
         raise ValueError(f"unknown dynamics backend: {backend!r}")
 
     def product_flow_shortfall(self, production, backend="numeric", ca=None):
-        if self.operation["mode"] != "continuous":
-            return 0.0
         target = float(self.operation["product_flow_sp"])
+        if target <= 0.0:
+            return 0.0
         minimum = float(self.operation["min_product_flow"])
         if backend == "numeric":
             return max(0.0, minimum - float(production)) / target

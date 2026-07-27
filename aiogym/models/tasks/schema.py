@@ -5,6 +5,7 @@ import math
 from collections.abc import Mapping
 
 from aiogym._internal.identifiers import internal_scenario_id
+from aiogym._internal.vocabulary import OBJECTIVE_NAMES
 
 
 TASK_PROFILE_SCHEMA_VERSION = "aiogym.task_profile.v1"
@@ -26,7 +27,7 @@ TASK_ENVIRONMENT_FIELDS = frozenset({
     "noise",
     "noise_pct",
 })
-TASK_OPERATION_FIELDS = frozenset({"mode", "product_flow_sp", "min_product_flow"})
+TASK_OPERATION_FIELDS = frozenset({"product_flow_sp", "min_product_flow"})
 ENVIRONMENT_BOOLEAN_FIELDS = (
     "auto_events",
     "randomize",
@@ -92,6 +93,28 @@ def validate_task_profile(
             raise ValueError("task noise_pct must be finite and non-negative")
     if "model_params" in profile and not isinstance(profile["model_params"], Mapping):
         raise TypeError("task profile model_params must be a mapping")
+    controllers = profile.get("controllers", {})
+    if not isinstance(controllers, Mapping):
+        raise TypeError("task profile controllers must be a mapping")
+    for controller, config in controllers.items():
+        if not isinstance(controller, str) or not controller:
+            raise TypeError("task controller IDs must be non-empty strings")
+        if not isinstance(config, Mapping):
+            raise TypeError(
+                f"task controller config for {controller!r} must be a mapping"
+            )
+        profile_name = config.get("profile")
+        if profile_name is not None and (
+            not isinstance(profile_name, str) or not profile_name
+        ):
+            raise TypeError(
+                f"task controller profile for {controller!r} must be a non-empty string"
+            )
+        parameters = config.get("parameters")
+        if parameters is not None and not isinstance(parameters, Mapping):
+            raise TypeError(
+                f"task controller parameters for {controller!r} must be a mapping"
+            )
     _validate_operation(profile.get("operation"))
     for section in ("initialization", "setpoints", "disturbances", "constraints", "acceptance"):
         if section in profile and not isinstance(profile[section], (Mapping, list)):
@@ -137,6 +160,12 @@ def validate_task_profile(
             raise TypeError("task supported_objectives must be a non-empty list")
         if any(not isinstance(value, str) or not value for value in supported):
             raise TypeError("task supported_objectives must contain non-empty strings")
+        unknown_supported = set(supported) - set(OBJECTIVE_NAMES)
+        if unknown_supported:
+            raise ValueError(
+                "unknown task supported objectives: "
+                + ", ".join(sorted(unknown_supported))
+            )
     default_objective = profile.get("default_objective")
     if default_objective is not None:
         if not isinstance(default_objective, str) or not default_objective:
@@ -205,24 +234,15 @@ def _validate_operation(operation) -> None:
     unknown = set(operation) - TASK_OPERATION_FIELDS
     if unknown:
         raise ValueError(f"unknown task operation fields: {', '.join(sorted(unknown))}")
-    mode = operation.get("mode")
-    if mode not in {"batch", "continuous"}:
-        raise ValueError("task operation mode must be one of: batch, continuous")
-    if mode == "continuous" and "product_flow_sp" not in operation:
-        raise ValueError("continuous task operation requires product_flow_sp")
+    if "product_flow_sp" not in operation:
+        raise ValueError("task operation requires product_flow_sp")
     product_flow_sp = _nonnegative_operation_value(
-        "task operation product_flow_sp", operation.get("product_flow_sp", 0.0)
+        "task operation product_flow_sp", operation["product_flow_sp"]
     )
-    if mode == "continuous" and product_flow_sp <= 0.0:
-        raise ValueError("continuous task product_flow_sp must be positive")
-    if mode == "batch" and product_flow_sp != 0.0:
-        raise ValueError("batch task product_flow_sp must be zero")
     min_product_flow = _nonnegative_operation_value(
         "task operation min_product_flow",
-        operation.get("min_product_flow", product_flow_sp if mode == "continuous" else 0.0),
+        operation.get("min_product_flow", product_flow_sp),
     )
-    if mode == "batch" and min_product_flow != 0.0:
-        raise ValueError("batch task min_product_flow must be zero")
     if min_product_flow > product_flow_sp:
         raise ValueError("task operation min_product_flow must not exceed product_flow_sp")
 

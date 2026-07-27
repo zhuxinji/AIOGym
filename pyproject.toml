@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Native Gymnasium backend and benchmark suite for AIO-Gym process-control environments."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
 authors = [
   { name = "AIO-Gym Contributors" }
 ]
@@ -16,11 +16,33 @@ authors = [
 dependencies = [
   "gymnasium>=0.29",
   "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+oracle = [
+  "casadi>=3.6",
+]
+rl = [
+  "stable-baselines3>=2.3",
+  "torch>=2.2",
+  "onnx>=1.16",
+]
+onnx = [
+  "onnx>=1.16",
+  "onnxruntime>=1.17",
+]
+all = [
   "casadi>=3.6",
   "stable-baselines3>=2.3",
   "torch>=2.2",
   "onnx>=1.16",
   "onnxruntime>=1.17",
+]
+dev = [
+  "build>=1.2",
+  "pytest>=8.0",
+  "ruff>=0.12",
+  "wheel>=0.45",
 ]
 
 [project.urls]
@@ -29,10 +51,17 @@ Documentation = "https://github.com/zhuxinji/AIO-gym-temp/blob/main/docs/index.m
 Repository = "https://github.com/zhuxinji/AIO-gym-temp"
 Issues = "https://github.com/zhuxinji/AIO-gym-temp/issues"
 
-[project.optional-dependencies]
-dev = [
-  "pytest>=8.0",
-]
+[tool.ruff]
+target-version = "py310"
+extend-exclude = ["aiogym/tests"]
+
+[tool.ruff.lint]
+select = ["F"]
+
+[tool.ruff.lint.per-file-ignores]
+"aiogym/controllers/__init__.py" = ["F401"]
+"aiogym/evaluation/protocols.py" = ["F401"]
+"aiogym/models/core.py" = ["F401"]
 
 [project.scripts]
 aiogym = "aiogym.cli.main:main"

@@ -85,6 +85,24 @@
     }
   },
   "profiles": {
+    "cascade-control-benchmark": {
+      "scenarios": {
+        "cascade": {
+          "loops": [
+            {"u_index": 0, "y_index": 0, "pid": [8.0, 0.4, 0.0], "bias": 0.25},
+            {"u_index": 1, "y_index": 1, "pid": [6.0, 0.3, 0.0], "bias": 0.22934030538459382},
+            {"u_index": 2, "y_index": 2, "pid": [6.0, 0.3, 0.0], "bias": 0.22934030538459382},
+            {"u_index": 4, "y_index": 3, "pid": [0.06, 0.01, 0.0], "bias": 0.37875555555555557},
+            {"u_index": 5, "y_index": 4, "pid": [0.06, 0.01, 0.0], "bias": 0.2924},
+            {"u_index": 6, "y_index": 5, "pid": [0.06, 0.01, 0.0], "bias": 0.29906666666666665}
+          ],
+          "demand_u_index": null,
+          "holds": [
+            {"u_index": 3, "value": 0.22934030538459382}
+          ]
+        }
+      }
+    },
     "quadruple-minimum-phase-benchmark": {
       "scenarios": {
         "quadruple": {

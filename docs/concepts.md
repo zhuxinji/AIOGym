@@ -74,7 +74,7 @@ A **task** is a versioned experiment declaration. It may select:
 - deterministic setpoint or disturbance events;
 - control interval and episode length;
 - action mode, noise, randomization, and termination settings;
-- runtime `model_params` and batch/continuous operation semantics;
+- runtime `model_params` and optional production-throughput targets;
 - supported and default objectives;
 - constraints and acceptance thresholds.
 
@@ -107,7 +107,7 @@ The five public objectives map to three internal environment reward modes:
 
 | Objective | Internal reward mode | Primary metric | Direction |
 | --- | --- | --- | --- |
-| `tracking` | `tracking` | `tracking_error_cost` | minimize |
+| `tracking` | `tracking` | `tracking_cost` | minimize |
 | `economic` | `economic` | `profit` | maximize |
 | `kpi` | `kpi` | `normalized_score` | maximize |
 | `robustness` | `kpi` | `normalized_score` | maximize |
@@ -118,6 +118,18 @@ chosen by that objective; it is not a substitute identity for robustness or
 safety benchmarks. High-level APIs and training CLIs accept only `objective`.
 Resolved metadata records
 `resolved_reward_mode` for diagnostics without replacing the objective identity.
+
+Unless a task or runtime override declares different weights, tracking uses
+`Q=0.7` for normalized squared output error and `R=0.3` for normalized squared
+input movement:
+
+```text
+tracking_cost = 0.7 * sum(normalized_error²)
+              + 0.3 * sum(normalized_input_move²)
+```
+
+The resolved Q/R values are also forwarded to MPC and Oracle so their internal
+tracking objective matches the reported benchmark objective.
 
 Evaluation internals separate metric catalog, objective resolution, benchmark
 case models, execution, rollout recording, aggregation, and metadata. Public
@@ -133,6 +145,12 @@ named set of tuning parameters for a scenario or operating point. It changes
 controller behavior but must not redefine the task. PID, MPC, and Oracle are
 built-in algorithmic controllers; policy, SB3, and ONNX adapters require a
 policy object or model artifact supplied by the caller.
+
+Named tasks may bind default profiles through their `controllers` mapping.
+Single-task, suite, and Python API benchmarks all resolve that mapping when
+constructing a `BenchmarkCase`; selecting a suite does not select a different
+controller tuning. Explicit controller configuration remains a higher-priority
+override.
 
 Controller contracts, policy adapters, configuration loading, and registry
 factories live in focused modules under `aiogym.controllers`. The package-level
@@ -164,6 +182,24 @@ physical model is integrated on every step.
 A reproducible task can set `auto_events: false` and still declare deterministic
 events under `setpoints.schedule` or `disturbances`. `auto_events` is the only
 accepted configuration field.
+
+### Seeded setpoint randomization
+
+`randomize_setpoints=True` samples targets during `env.reset(seed=...)`; it is
+independent of `auto_events`. The same seed reproduces the same target, while a
+multi-seed evaluation receives one target schedule per episode.
+
+For a task with declared setpoint events, the initial reference equilibrium is
+preserved and the event values are sampled. For a task without setpoint events,
+the initial reference is sampled. Sampling honors each model's setpoint bounds.
+Models with analytic steady-state feasibility, including `quadruple` and
+`cascade`, reject unreachable targets. At the quadruple zero boundary, the
+sampler instead samples a safe steady actuator pair and maps its equilibrium
+forward onto the reachable output manifold.
+
+Reference-derived tasks keep this option disabled by default. Increasing
+`episodes` never enables randomization implicitly; callers must request it so
+changing the number of episodes does not silently change task semantics.
 
 ## Suite and resolved case
 

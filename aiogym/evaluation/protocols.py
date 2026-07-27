@@ -25,6 +25,8 @@ from .metric_catalog import (
     primary_metric_for_objective,
 )
 from .objective_specs import (
+    DEFAULT_TRACKING_Q_Y,
+    DEFAULT_TRACKING_R_MOVE,
     OBJECTIVE_REWARD_MODES,
     REWARD_MODES,
     ObjectiveSpec,
@@ -56,6 +58,7 @@ def _empty_episode_totals(ep: int, seed: int):
         "tracking_itae": 0.0,
         "tracking_overshoot": 0.0,
         "tracking_settling_time": 0.0,
+        "tracking_raw_by_output": {},
         "constraint_violation_count": 0.0,
         "constraint_violation_duration": 0.0,
         "constraint_violation_severity": 0.0,
@@ -253,12 +256,15 @@ class BenchmarkProtocol:
         tracking_q_y = (
             self.tracking_q_y
             if self.tracking_q_y is not None
-            else tracking_options.get("tracking_q_y", 1.0)
+            else tracking_options.get("tracking_q_y", DEFAULT_TRACKING_Q_Y)
         )
         tracking_r_move = float(
             self.tracking_r_move
             if self.tracking_r_move is not None
-            else tracking_options.get("tracking_r_move", 1.0)
+            else tracking_options.get(
+                "tracking_r_move",
+                DEFAULT_TRACKING_R_MOVE,
+            )
         )
         if not math.isfinite(tracking_r_move) or tracking_r_move < 0:
             raise ValueError("tracking_r_move must be finite and non-negative")
@@ -382,7 +388,6 @@ def resolve_protocol(
         task = load_task_profile(cfg["task"], scenario=scenario)
         cfg["task"] = task
     case_value = case_objective if case_objective is not None else configured
-    task_default = (task or {}).get("default_objective")
     resolved = resolve_objective(
         explicit=explicit,
         case_config=case_value,

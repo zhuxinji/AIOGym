@@ -62,15 +62,15 @@ def test_pump_recirculates_tank3_temperature_into_tank1():
     assert hot_dx[1] > cold_dx[1]
 
 
-def test_foundational_model_card_and_environment_step_are_finite():
+def test_foundational_model_metadata_and_environment_step_are_finite():
     model = aiogym.make_model("cascade-recirculating")
     readiness = aiogym.validate_model_readiness(model)
     assert readiness["passed"], readiness
 
-    card = model.model_card()
-    assert card["scenario"] == "cascade-recirculating"
-    assert card["action_vector"]["length"] == 4
-    assert card["physical_metadata"]["parameter_status"] == "design-provisional"
+    metadata = model.metadata()
+    assert metadata["scenario"] == "cascade-recirculating"
+    assert metadata["action_vector"]["length"] == 4
+    assert metadata["physical_metadata"]["parameter_status"] == "design-provisional"
 
     env = aiogym.AIOGymNativeEnv(
         "cascade-recirculating",
@@ -485,7 +485,6 @@ def test_safety_recovery_task_starts_with_recoverable_protection_layers():
         (
             "oracle",
             {
-                "mode": "tracking",
                 "horizon": 1,
                 "ipopt_max_iter": 60,
                 "warm_start": False,

@@ -8,8 +8,8 @@ import json
 import pytest
 
 import aiogym
-from aiogym.cli import suite_benchmark
-from aiogym.cli.suite_benchmark import load_suite
+from aiogym.cli import benchmark
+from aiogym.cli.benchmark import load_suite
 from aiogym.evaluation import finalize_benchmark_artifacts, resolve_protocol
 
 
@@ -20,18 +20,31 @@ def test_public_catalog_lists_current_canonical_ids():
 
     tasks = aiogym.list_tasks()
     assert not hasattr(aiogym, "list_task_profiles")
-    assert len(tasks) == 9
+    assert len(tasks) == 13
     assert aiogym.list_tasks("cascade") == (
+        "cascade/commissioning",
         "cascade/continuous-benchmark",
+        "cascade/disturbance-rejection",
+        "cascade/safety-recovery",
+        "cascade/temperature-step",
     )
     assert aiogym.list_tasks("cstr") == ()
     with pytest.raises(ValueError, match="not canonical"):
         aiogym.list_tasks("cascade_recirculating")
 
     suites = aiogym.list_suites()
-    assert len(suites) == 16
+    assert suites == (
+        "cascade-control",
+        "cascade-recirculating",
+        "crystallization-tracking",
+        "economic-actuator",
+        "quadruple",
+        "quadruple-phase-comparison",
+        "robustness-actuator",
+        "standard-baselines",
+        "tracking-actuator",
+    )
     assert "quadruple-paper-reference" not in suites
-    assert "standard-baselines" in suites
 
     assert not hasattr(aiogym, "registered_controllers")
     assert aiogym.list_controllers() == (
@@ -51,10 +64,12 @@ def test_task_runtime_is_owned_by_models_without_evaluation_facade():
 
     builtin_dir = Path(model_tasks.__file__).with_name("builtin")
     assert builtin_dir.is_dir()
-    assert len(tuple(builtin_dir.glob("*/*.json"))) == 9
+    assert len(tuple(builtin_dir.glob("*/*.json"))) == 13
 
 
 def test_public_catalog_tracks_runtime_registrations():
+    from aiogym.evaluation.suite import scenario_groups
+
     model = aiogym.make_model("cstr")
     model.scenario = "catalog_test_model"
     aiogym.register_model("catalog_test_model", model)
@@ -62,6 +77,8 @@ def test_public_catalog_tracks_runtime_registrations():
     try:
         assert "catalog_test_model" in aiogym.list_scenarios()
         assert "catalog_test_controller" in aiogym.list_controllers()
+        assert "catalog_test_model" in scenario_groups()["ALL_SCENARIOS"]
+        assert "catalog_test_model" in scenario_groups()["ECONOMIC_SCENARIOS"]
     finally:
         aiogym.unregister_controller("catalog_test_controller")
         aiogym.unregister_model("catalog_test_model")
@@ -81,15 +98,17 @@ def test_noncanonical_scenario_task_and_suite_ids_are_rejected():
         resolve_protocol("cascade_recirculating", "tracking", {"task": "commissioning"})
 
 
-def test_builtin_suite_reuse_resolves_to_self_contained_declarations():
-    inherited = load_suite("standard-baselines")
-    base = load_suite("all-actuator")
+def test_builtin_suites_resolve_to_self_contained_declarations():
+    standard = load_suite("standard-baselines")
     quadruple = load_suite("quadruple")
 
-    assert inherited["controllers"] == ["pid", "mpc", "oracle"]
-    assert inherited["cases"] == base["cases"]
+    assert standard["controllers"] == ["pid", "mpc", "oracle"]
+    assert len(standard["cases"]) == 3
     assert quadruple["cases"][0]["task"] == "minimum-phase"
-    assert quadruple["cases"][0]["controller_configs"]["pid"] == {
+    assert "controller_configs" not in quadruple["cases"][0]
+    assert aiogym.load_task_profile(
+        "quadruple/minimum-phase"
+    )["controllers"]["pid"] == {
         "profile": "quadruple-minimum-phase-benchmark"
     }
 
@@ -102,7 +121,7 @@ def test_builtin_suite_reuse_resolves_to_self_contained_declarations():
             for item in value:
                 assert_resolved(item)
 
-    assert_resolved(inherited)
+    assert_resolved(standard)
     assert_resolved(quadruple)
 
 
@@ -191,7 +210,7 @@ def test_suite_preset_and_case_reference_cycles_are_rejected(tmp_path, monkeypat
             "case/b": {"case_ref": "case/a"},
         },
     }))
-    monkeypatch.setattr(suite_benchmark, "PRESET_DIR", preset_dir)
+    monkeypatch.setattr(benchmark, "PRESET_DIR", preset_dir)
 
     preset_suite = tmp_path / "preset-cycle.json"
     preset_suite.write_text(json.dumps({"preset": "preset/a"}))

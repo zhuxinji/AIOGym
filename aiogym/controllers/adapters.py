@@ -60,20 +60,26 @@ class SB3PolicyController(PolicyController):
     @classmethod
     def load(cls, path: str, algo: str = "sac", **kw):
         algo_key = algo.lower()
-        if algo_key == "sac":
-            from stable_baselines3 import SAC
+        try:
+            if algo_key == "sac":
+                from stable_baselines3 import SAC
 
-            policy = SAC.load(path)
-        elif algo_key == "ppo":
-            from stable_baselines3 import PPO
+                policy = SAC.load(path)
+            elif algo_key == "ppo":
+                from stable_baselines3 import PPO
 
-            policy = PPO.load(path)
-        elif algo_key == "td3":
-            from stable_baselines3 import TD3
+                policy = PPO.load(path)
+            elif algo_key == "td3":
+                from stable_baselines3 import TD3
 
-            policy = TD3.load(path)
-        else:
-            raise ValueError(f"unsupported SB3 algorithm: {algo}")
+                policy = TD3.load(path)
+            else:
+                raise ValueError(f"unsupported SB3 algorithm: {algo}")
+        except ModuleNotFoundError as ex:
+            raise RuntimeError(
+                "stable-baselines3 is required for SB3 policies; install "
+                "AIO-Gym with `pip install 'aiogym[rl]'`"
+            ) from ex
         return cls(policy, name=kw.pop("name", f"SB3-{algo_key.upper()}"), **kw)
 
 

@@ -21,17 +21,23 @@ from datetime import datetime, timezone
 import numpy as np
 
 from aiogym._internal.paths import run_path
+from aiogym._internal.vocabulary import OBJECTIVE_NAMES
 from aiogym.controllers import build_context, make_controller, validate_action
 from aiogym.evaluation import (
     evaluate_controller,
     metric_direction,
     metric_for_reward_mode,
     primary_metric_for_objective,
-    reward_mode_for_objective,
-    resolve_protocol,
     rollout_controller,
 )
-from aiogym.rl.artifacts import (
+from aiogym.rl.training_config import (
+    configure_training_auto_events,
+    configure_training_objective,
+    configure_training_task,
+    training_identity,
+    training_protocol,
+)
+from aiogym.rl.training_artifacts import (
     learning_curve_point,
     result_row,
     rl_payload,
@@ -71,35 +77,68 @@ def artifact_dir_for(args, base: str) -> str:
 def output_base_for(args, run_id: str | None = None) -> str:
     if args.out:
         return args.out
-    return str(run_path("rl", "rlpd", f"{args.scenario}_{run_id or utc_run_id()}"))
-
-
-def configure_training_objective(args):
-    """Resolve the public training objective and its internal environment reward."""
-
-    if getattr(args, "reward_mode", None) is not None:
-        raise ValueError("reward_mode is not supported; use objective")
-    objective = getattr(args, "objective", None) or "kpi"
-    reward_mode = reward_mode_for_objective(objective)
-    args.objective = objective
-    args.resolved_reward_mode = reward_mode
-    return args
+    return str(
+        run_path("rl", "rlpd", f"{training_identity(args)}_{run_id or utc_run_id()}")
+    )
 
 
 def main(argv=None, prog=None):
     ap = argparse.ArgumentParser(prog=prog)
-    ap.add_argument("--scenario", default="cascade", choices=["cascade", "quadruple", "cstr", "hvac"])
+    ap.add_argument("--scenario", default="cascade")
+    ap.add_argument("--task", default=None, help="named scenario task profile")
     ap.add_argument(
         "--objective",
         default=None,
-        choices=["economic", "tracking", "robustness", "safety", "kpi"],
-        help="training and evaluation objective; defaults to kpi",
+        choices=OBJECTIVE_NAMES,
+        help="training and evaluation objective; task-owned when available, otherwise kpi",
     )
-    ap.add_argument("--control-dt", type=float, default=0.5)
-    ap.add_argument("--episode-steps", type=int, default=400)
+    ap.add_argument("--control-dt", type=float, default=None,
+                    help="override task control interval; task/default owns it when omitted")
+    ap.add_argument("--episode-steps", type=int, default=None,
+                    help="override task episode length; task/default owns it when omitted")
+    ap.add_argument("--tracking-q-y", type=float, default=None,
+                    help="override scalar tracking weight Q; task-owned when omitted")
+    ap.add_argument("--tracking-r-move", type=float, default=None,
+                    help="override move weight R; task-owned when omitted")
     ap.add_argument("--offline-episodes", type=int, default=40)
-    ap.add_argument("--randomize-plant", action="store_true", default=True)
-    ap.add_argument("--no-randomize-plant", dest="randomize_plant", action="store_false")
+    ap.add_argument(
+        "--auto-events",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="enable generic automatically generated within-episode events",
+    )
+    ap.add_argument("--randomize", action=argparse.BooleanOptionalAction, default=True)
+    ap.add_argument("--randomize-setpoints", action=argparse.BooleanOptionalAction, default=None)
+    ap.add_argument("--randomize-plant", action=argparse.BooleanOptionalAction, default=True)
+    ap.add_argument("--plant-drift", action=argparse.BooleanOptionalAction, default=None)
+    ap.add_argument("--integral-obs", action=argparse.BooleanOptionalAction, default=False)
+    ap.add_argument(
+        "--disturbance-obs",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="include current disturbances; task-owned when omitted",
+    )
+    ap.add_argument(
+        "--previous-action-obs",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="include the previous action; task-owned when omitted",
+    )
+    ap.add_argument(
+        "--normalize-observations",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="scale observations with fixed bounds; task-owned when omitted",
+    )
+    ap.add_argument(
+        "--tracking-error-obs",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="replace setpoints with tracking errors; task-owned when omitted",
+    )
+    ap.add_argument("--terminate-on-runaway", action=argparse.BooleanOptionalAction, default=False)
+    ap.add_argument("--noise", action=argparse.BooleanOptionalAction, default=False)
+    ap.add_argument("--noise-pct", type=float, default=0.01)
     ap.add_argument("--action-mode", default="actuator", choices=["actuator", "setpoint"])
     ap.add_argument("--bc-steps", type=int, default=4000)
     ap.add_argument("--pretrain-updates", type=int, default=5000)
@@ -115,6 +154,14 @@ def main(argv=None, prog=None):
     ap.add_argument("--rollout-steps", type=int, default=None)
     args = ap.parse_args(argv)
     configure_training_objective(args)
+    configure_training_auto_events(args)
+    if args.plant_drift is None:
+        args.plant_drift = args.randomize_plant
+    configure_training_task(
+        args,
+        episode_steps_attr="episode_steps",
+        eval_episode_steps_attr=None,
+    )
 
     import torch
     from aiogym.rl import RLPD
@@ -125,19 +172,10 @@ def main(argv=None, prog=None):
     def protocol(mode=None):
         # RL uses the requested action_mode (setpoint = supervisory RL-on-PID); baselines
         # run on an actuator-mode env (they ARE fixed-SP controllers).
-        return resolve_protocol(
-            args.scenario,
-            args.objective,
-            {
-                "control_dt": args.control_dt,
-                "episode_steps": args.episode_steps,
-                "action_mode": mode or args.action_mode,
-                "randomize": True,
-                "randomize_plant": args.randomize_plant,
-                "plant_drift": args.randomize_plant,
-                "integral_obs": False,
-                "terminate_on_runaway": False,
-            },
+        return training_protocol(
+            args,
+            action_mode=mode,
+            episode_steps_attr="episode_steps",
         )
 
     def mkenv(mode=None):
@@ -284,6 +322,7 @@ def main(argv=None, prog=None):
     training = {
         "algo": "rlpd",
         "scenario": args.scenario,
+        "task": args.task,
         "action_mode": args.action_mode,
         "objective": args.objective,
         "resolved_reward_mode": args.resolved_reward_mode,

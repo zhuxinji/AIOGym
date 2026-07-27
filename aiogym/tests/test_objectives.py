@@ -18,7 +18,6 @@ class StageRewardContractTests(unittest.TestCase):
     def test_continuous_cascade_penalizes_product_flow_shortfall(self):
         model = make_model("cascade")
         model.configure_operation({
-            "mode": "continuous",
             "product_flow_sp": 4.0e-4,
             "min_product_flow": 4.0e-4,
         })
@@ -58,17 +57,19 @@ class StageRewardContractTests(unittest.TestCase):
         self.assertAlmostEqual(producing.info["production"], 4.0e-4)
         self.assertAlmostEqual(producing.info["product_flow_shortfall_m3s"], 0.0)
 
-        batch = make_model("cascade")
-        batch_result = stage_reward(
-            batch,
+        zero_target = make_model("cascade")
+        zero_target_result = stage_reward(
+            zero_target,
             state,
             [0.0] * 7,
             state,
             previous_action=[0.0] * 7,
             **context,
         )
-        self.assertAlmostEqual(batch_result.info["profit"], 0.0)
-        self.assertAlmostEqual(batch_result.info["product_flow_shortfall_m3s"], 0.0)
+        self.assertAlmostEqual(zero_target_result.info["profit"], 0.0)
+        self.assertAlmostEqual(
+            zero_target_result.info["product_flow_shortfall_m3s"], 0.0
+        )
 
     def test_economic_terms_integrate_time_and_use_reported_action_energy(self):
         cstr = make_model("cstr")

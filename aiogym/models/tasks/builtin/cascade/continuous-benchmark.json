@@ -20,7 +20,6 @@
     "noise": false
   },
   "operation": {
-    "mode": "continuous",
     "product_flow_sp": 0.0004,
     "min_product_flow": 0.0004
   },

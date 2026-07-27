@@ -121,15 +121,14 @@ class ObservationRuntimeMixin:
         return bounds
 
     def _randomize_setpoints(self, rng):
-        bounds = self._setpoint_bounds()
-        next_sp = []
-        for i, value in enumerate(self.y_sp):
-            lo, hi = bounds[i] if i < len(bounds) else (None, None)
-            trial = float(value * (1 + 0.10 * rng.uniform(-1, 1)))
-            if lo is not None and hi is not None:
-                trial = float(np.clip(trial, lo, hi))
-            next_sp.append(trial)
-        self.y_sp = next_sp
+        self.y_sp = self.model.sample_env_setpoints(
+            self.y_sp,
+            rng,
+            {
+                **self._model_env_options,
+                "randomize_setpoints": True,
+            },
+        )
     def default_sp_action(self):
         """Normalized supervisory action that reproduces the default setpoints (= the
         fixed-SP PID baseline), the offline prior to learn from."""

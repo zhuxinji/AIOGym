@@ -5,10 +5,10 @@
   "parameters": {
     "horizon": 4,
     "control_dt": 0.5,
-    "mode": "economic",
     "q_y": 1.0,
     "r_move": 0.0,
     "terminal_weight": 1.0,
+    "steady_input_weight": 0.0,
     "ipopt_max_iter": 80,
     "ipopt_tol": 0.0001,
     "warm_start": false,
@@ -16,12 +16,42 @@
   },
   "scenarios": {
     "cascade_recirculating": {
-      "mode": "tracking",
       "horizon": 4,
       "warm_start": true
     }
   },
   "profiles": {
+    "cascade-control-benchmark": {
+      "scenarios": {
+        "cascade": {
+          "horizon": 16,
+          "terminal_weight": 20.0,
+          "ipopt_max_iter": 1000,
+          "ipopt_tol": 1e-4,
+          "warm_start": true,
+          "solve_every": 4,
+          "enforce_temperature_cap": false
+        }
+      },
+      "objectives": {
+        "economic": {
+          "horizon": 4,
+          "terminal_weight": 0.0
+        },
+        "kpi": {
+          "horizon": 4,
+          "terminal_weight": 0.0
+        },
+        "robustness": {
+          "horizon": 4,
+          "terminal_weight": 0.0
+        },
+        "safety": {
+          "horizon": 4,
+          "terminal_weight": 0.0
+        }
+      }
+    },
     "tracking": {
       "parameters": {
         "q_y": 1.0,
@@ -57,7 +87,6 @@
         "quadruple": {
           "horizon": 12,
           "control_dt": 1.0,
-          "mode": "tracking",
           "q_y": [1.0, 1.0],
           "r_move": 1.0,
           "terminal_weight": 0.0,
@@ -74,17 +103,17 @@
     "quadruple-nonminimum-phase": {
       "scenarios": {
         "quadruple": {
-          "horizon": 180,
+          "horizon": 8,
           "control_dt": 1.0,
-          "mode": "tracking",
           "q_y": [1.0, 1.0],
           "r_move": 1.0,
           "terminal_weight": 0.0,
-          "ipopt_max_iter": 200,
-          "ipopt_tol": 0.00001,
+          "steady_input_weight": 1.0,
+          "ipopt_max_iter": 100,
+          "ipopt_tol": 0.0001,
           "warm_start": true,
-          "solve_every": 10,
-          "transcription": "multiple_shooting",
+          "solve_every": 8,
+          "transcription": "single_shooting",
           "enforce_state_bounds": true,
           "enforce_temperature_cap": false
         }
@@ -95,7 +124,6 @@
         "quadruple": {
           "horizon": 4,
           "control_dt": 1.0,
-          "mode": "tracking",
           "q_y": [1.0, 1.0],
           "r_move": 1.0,
           "terminal_weight": 0.0,
@@ -114,7 +142,6 @@
         "quadruple": {
           "horizon": 3,
           "control_dt": 1.0,
-          "mode": "tracking",
           "q_y": [1.0, 1.0],
           "r_move": 1.0,
           "terminal_weight": 0.0,

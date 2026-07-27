@@ -67,7 +67,7 @@ AIO-Gym/
 |   |   |-- registry.py             model registry and construction
 |   |   |-- declarative.py          declarative custom-model support
 |   |   |-- validation.py           numerical readiness checks
-|   |   |-- cards.py                structured model metadata validation
+|   |   |-- metadata.py             structured model metadata validation
 |   |   |-- scenarios/              eight built-in process models
 |   |   |-- parameters/             parameter metadata JSON files
 |   |   |-- tasks/                  task schema, registry, and built-in task JSON
@@ -96,7 +96,7 @@ AIO-Gym/
 |   |   |-- suites/                 built-in suite JSON and shared presets
 |   |
 |   |-- cli/                        command-line adapters
-|   |-- rl/                         SB3/RLPD training and transition datasets
+|   |-- rl/                         shared training config, SB3/RLPD, and transition datasets
 |   `-- tests/                      contract, regression, physics, and API tests
 |
 |-- docs/                           user and contributor documentation
@@ -111,7 +111,9 @@ AIO-Gym/
 `aiogym` exposes the supported user API, while `aiogym.controllers` and
 `aiogym.models` expose their documented extension contracts. Evaluation
 implementation modules are organized by responsibility and are not compatibility
-import surfaces.
+import surfaces. These package facades load implementation groups lazily, so
+importing `aiogym` registers Gymnasium IDs without also importing reporting,
+plotting, Oracle, ONNX, or reinforcement-learning integrations.
 
 ## Configuration and generated data
 

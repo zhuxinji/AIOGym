@@ -1,86 +1,84 @@
-"""aiogym — native Gymnasium environments for process-control research.
+"""Native Gymnasium environments for process-control research.
 
-Fast, synchronous, seedable, and vectorizable for controller benchmarking,
-offline-data generation, and RL training (SAC / RLPD / Cal-QL).
-
-    import gymnasium as gym, aiogym          # registers the ids on import
-    env = gym.make("AIOGym/Cascade-v0")
-    # or:  from aiogym import AIOGymNativeEnv;  env = AIOGymNativeEnv("cstr")
+The package registers built-in Gymnasium IDs on import. Public implementation
+groups are otherwise loaded lazily so core environment use does not import
+benchmark reporting, plotting, controller adapters, or optional integrations.
 """
-from .models import (
-    MODEL_CARD_SCHEMA_VERSION,
-    PARAMETER_PROFILE_SCHEMA_VERSION,
-    TASK_PROFILE_SCHEMA_VERSION,
-    Integrator,
-    ProcessModelContract,
-    builtin_gym_ids,
-    collect_model_cards,
-    define_model,
-    export_model_cards,
-    make_model,
-    list_parameter_profiles,
-    load_parameter_profile,
-    load_task_profile,
-    register_model,
-    unregister_model,
-    task_operation,
-    validate_model_card,
-    validate_model_readiness,
-    validate_parameter_profile,
-    validate_task_profile,
-)
-from .env import AIOGymNativeEnv
-from .env_factory import make_env
-from .evaluation.objectives import StageRewardContext, StageRewardResult, stage_reward
-from .evaluation import (
-    ARTIFACT_CHECK_SCHEMA_VERSION,
-    REPORT_SCHEMA_VERSION,
-    BenchmarkCase,
-    BenchmarkProtocol,
-    EnvironmentSpec,
-    ObjectiveSpec,
-    build_evaluation_report,
-    check_benchmark_artifacts,
-    evaluate_controller,
-    plot_results,
-    render_benchmark_report,
-    reward_mode_for_objective,
-    objective_spec,
-    resolve_objective,
-    run_benchmark,
-)
-from .controllers import (
-    load_controller_config,
-    make_controller,
-    register_controller,
-    unregister_controller,
-)
-from .catalog import list_controllers, list_scenarios, list_suites, list_tasks
-
-__all__ = ["AIOGymNativeEnv", "StageRewardContext", "StageRewardResult", "stage_reward",
-           "make_model", "register_model", "unregister_model", "Integrator",
-           "ProcessModelContract", "define_model",
-           "PARAMETER_PROFILE_SCHEMA_VERSION", "list_parameter_profiles", "load_parameter_profile",
-           "validate_parameter_profile", "validate_model_readiness",
-           "BenchmarkProtocol", "BenchmarkCase", "EnvironmentSpec",
-           "ObjectiveSpec", "objective_spec", "resolve_objective",
-           "reward_mode_for_objective",
-           "build_evaluation_report", "evaluate_controller",
-           "TASK_PROFILE_SCHEMA_VERSION", "load_task_profile", "task_operation", "validate_task_profile",
-           "make_controller", "register_controller", "unregister_controller",
-           "load_controller_config",
-           "list_controllers", "list_scenarios", "list_suites", "list_tasks",
-           "MODEL_CARD_SCHEMA_VERSION", "collect_model_cards", "export_model_cards",
-           "validate_model_card",
-           "make_env", "plot_results", "run_benchmark",
-           "REPORT_SCHEMA_VERSION", "render_benchmark_report",
-           "ARTIFACT_CHECK_SCHEMA_VERSION", "check_benchmark_artifacts"]
+from __future__ import annotations
 
 from gymnasium.envs.registration import register, registry
-from ._internal.identifiers import canonical_scenario_id
 
-for _scn, _name in builtin_gym_ids().items():
-    _env_id = f"AIOGym/{_name}-v0"
+from ._internal.identifiers import canonical_scenario_id
+from ._internal.lazy import exported_dir, resolve_export
+from .models.registry import builtin_gym_ids
+
+
+_EXPORTS = {
+    "AIOGymNativeEnv": ".env",
+    "make_env": ".env_factory",
+    "StageRewardContext": ".evaluation.objectives",
+    "StageRewardResult": ".evaluation.objectives",
+    "stage_reward": ".evaluation.objectives",
+    "ARTIFACT_CHECK_SCHEMA_VERSION": ".evaluation",
+    "REPORT_SCHEMA_VERSION": ".evaluation",
+    "BenchmarkCase": ".evaluation",
+    "BenchmarkProtocol": ".evaluation",
+    "EnvironmentSpec": ".evaluation",
+    "ObjectiveSpec": ".evaluation",
+    "build_evaluation_report": ".evaluation",
+    "check_benchmark_artifacts": ".evaluation",
+    "evaluate_controller": ".evaluation",
+    "plot_results": ".evaluation",
+    "render_benchmark_report": ".evaluation",
+    "reward_mode_for_objective": ".evaluation",
+    "objective_spec": ".evaluation",
+    "resolve_objective": ".evaluation",
+    "run_benchmark": ".evaluation",
+    "load_controller_config": ".controllers",
+    "make_controller": ".controllers",
+    "register_controller": ".controllers",
+    "unregister_controller": ".controllers",
+    "list_controllers": ".catalog",
+    "list_scenarios": ".catalog",
+    "list_suites": ".catalog",
+    "list_tasks": ".catalog",
+    "MODEL_METADATA_SCHEMA_VERSION": ".models",
+    "PARAMETER_PROFILE_SCHEMA_VERSION": ".models",
+    "TASK_PROFILE_SCHEMA_VERSION": ".models",
+    "Integrator": ".models",
+    "ProcessModelContract": ".models",
+    "builtin_gym_ids": ".models",
+    "collect_model_metadata": ".models",
+    "define_model": ".models",
+    "export_model_metadata": ".models",
+    "make_model": ".models",
+    "list_parameter_profiles": ".models",
+    "load_parameter_profile": ".models",
+    "load_task_profile": ".models",
+    "register_model": ".models",
+    "unregister_model": ".models",
+    "task_operation": ".models",
+    "validate_model_metadata": ".models",
+    "validate_model_readiness": ".models",
+    "validate_parameter_profile": ".models",
+    "validate_task_profile": ".models",
+}
+__all__ = sorted(_EXPORTS)
+
+
+def __getattr__(name):
+    return resolve_export(globals(), __name__, _EXPORTS, name)
+
+
+def __dir__():
+    return exported_dir(globals(), _EXPORTS)
+
+
+for _scenario, _gym_name in builtin_gym_ids().items():
+    _env_id = f"AIOGym/{_gym_name}-v0"
     if _env_id not in registry:
-        register(id=f"AIOGym/{_name}-v0", entry_point="aiogym.env:AIOGymNativeEnv",
-                 kwargs={"scenario": canonical_scenario_id(_scn)})
+        register(
+            id=_env_id,
+            entry_point="aiogym.env:AIOGymNativeEnv",
+            kwargs={"scenario": canonical_scenario_id(_scenario)},
+        )

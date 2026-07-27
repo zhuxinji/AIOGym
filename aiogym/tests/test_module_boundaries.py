@@ -1,6 +1,29 @@
 """Checks for responsibility-based package boundaries."""
 
 import importlib.util
+import subprocess
+import sys
+
+
+def test_top_level_import_keeps_optional_feature_groups_lazy():
+    code = """
+import sys
+import aiogym
+
+unexpected = {
+    "aiogym.controllers",
+    "aiogym.evaluation",
+    "aiogym.rl",
+    "casadi",
+    "onnx",
+    "onnxruntime",
+    "stable_baselines3",
+    "torch",
+}.intersection(sys.modules)
+assert not unexpected, sorted(unexpected)
+assert aiogym.builtin_gym_ids()
+"""
+    subprocess.run([sys.executable, "-c", code], check=True)
 
 
 def test_controller_public_api_exposes_current_implementations():
@@ -43,6 +66,13 @@ def test_model_core_uses_backend_and_integrator_implementations():
     assert core._maxv is backends._maxv
 
 
+def test_model_metadata_has_a_single_current_module():
+    from aiogym.models import metadata
+
+    assert importlib.util.find_spec("aiogym.models.cards") is None
+    assert metadata.MODEL_METADATA_SCHEMA_VERSION == "aiogym.model_metadata.v1"
+
+
 def test_environment_class_composes_focused_runtime_mixins():
     from aiogym._environment.disturbances import DisturbanceRuntimeMixin
     from aiogym._environment.observations import ObservationRuntimeMixin
@@ -54,14 +84,30 @@ def test_environment_class_composes_focused_runtime_mixins():
     assert AIOGymNativeEnv.evaluate_transition is TransitionRuntimeMixin.evaluate_transition
 
 
-def test_suite_cli_uses_suite_modules():
-    from aiogym.cli import suite_benchmark as facade
+def test_unified_benchmark_cli_uses_suite_modules():
+    from aiogym.cli import benchmark as facade
     from aiogym.evaluation import suite
 
+    assert importlib.util.find_spec("aiogym.cli.single_benchmark") is None
+    assert importlib.util.find_spec("aiogym.cli.suite_benchmark") is None
     assert not hasattr(facade, "expand_scenarios")
     assert not hasattr(facade, "controller_config_for")
     assert not hasattr(facade, "SUMMARY_COLUMNS")
-    assert facade.load_suite("core") == suite.load_suite("core")
+    assert facade.load_suite("standard-baselines") == suite.load_suite("standard-baselines")
+
+
+def test_artifact_adapters_have_role_specific_module_names():
+    from aiogym.cli import artifact_commands
+    from aiogym.evaluation import artifact
+    from aiogym.rl import training_artifacts
+
+    assert importlib.util.find_spec("aiogym.cli.artifact_tools") is None
+    assert importlib.util.find_spec("aiogym.rl.artifacts") is None
+    assert artifact_commands.check_benchmark_artifacts is artifact.check_benchmark_artifacts
+    assert (
+        training_artifacts.finalize_benchmark_artifacts
+        is artifact.finalize_benchmark_artifacts
+    )
 
 
 def test_removed_evaluation_modules_are_absent():

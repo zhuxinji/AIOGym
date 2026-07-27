@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import CONTROLLER_API_VERSION, ControllerContext
+from .contracts import CONTROLLER_API_VERSION, ControllerContext
 
 
 class ONNXPolicyController:
@@ -57,7 +57,8 @@ class ONNXPolicyController:
             import onnxruntime as ort
         except ModuleNotFoundError as ex:
             raise RuntimeError(
-                "onnxruntime is required for ONNX policies; install the AIO-Gym dependencies"
+                "onnxruntime is required for ONNX policies; install AIO-Gym "
+                "with `pip install 'aiogym[onnx]'`"
             ) from ex
         session_kwargs = {"providers": list(providers)} if providers else {}
         session = ort.InferenceSession(str(policy_path), **session_kwargs)

@@ -3,6 +3,7 @@ from ..core import ProcessModelContract
 
 class ExtractionModel(ProcessModelContract):
     scenario = "extraction"
+    benchmark_objectives = ("tracking", "kpi", "robustness", "safety")
     display_name = "Multistage Extraction Column"
     summary = "Five-stage counter-current liquid-gas extraction column from the PC-Gym benchmark."
     n = 5

@@ -1,102 +1,60 @@
-"""Process-model package for AIO-Gym."""
+"""Process-model public API with implementation groups loaded lazily."""
+from __future__ import annotations
 
-from .core import (
-    CP,
-    G,
-    RHO,
-    RHO_CP,
-    ProcessModelContract,
-)
-from .integration import Integrator
-from .declarative import DeclarativeProcessModel, define_model
-from .scenarios import (
-    CascadeModel,
-    RecirculatingCascadeModel,
-    QuadrupleModel,
-    CSTRModel,
-    HVACModel,
-    ExtractionModel,
-    FiredHeaterModel,
-    CrystallizationModel,
-)
-from .registry import (
-    MODELS,
-    BUILTIN_MODELS,
-    apply_model_params,
-    builtin_gym_ids,
-    gym_id_name,
-    make_model,
-    register_model,
-    unregister_model,
-    validate_model_contract,
-)
-from .cards import (
-    MODEL_CARD_SCHEMA_VERSION,
-    collect_model_cards,
-    export_model_cards,
-    iter_model_cards,
-    validate_model_card,
-)
-from .parameter_profiles import (
-    PARAMETER_PROFILE_SCHEMA_VERSION,
-    list_parameter_profiles,
-    load_parameter_profile,
-    validate_parameter_profile,
-)
-from .validation import validate_model_readiness
-from .tasks import (
-    TASK_PROFILE_SCHEMA_VERSION,
-    configure_model_for_task,
-    load_task_profile,
-    resolve_environment_options,
-    task_environment,
-    task_identity,
-    task_operation,
-    validate_task_profile,
-)
+from aiogym._internal.lazy import exported_dir, resolve_export
 
-__all__ = [
-    "CP",
-    "G",
-    "RHO",
-    "RHO_CP",
-    "ProcessModelContract",
-    "DeclarativeProcessModel",
-    "define_model",
-    "Integrator",
-    "CascadeModel",
-    "RecirculatingCascadeModel",
-    "QuadrupleModel",
-    "CSTRModel",
-    "HVACModel",
-    "ExtractionModel",
-    "FiredHeaterModel",
-    "CrystallizationModel",
-    "MODELS",
-    "BUILTIN_MODELS",
-    "MODEL_CARD_SCHEMA_VERSION",
-    "PARAMETER_PROFILE_SCHEMA_VERSION",
-    "TASK_PROFILE_SCHEMA_VERSION",
-    "apply_model_params",
-    "builtin_gym_ids",
-    "collect_model_cards",
-    "export_model_cards",
-    "gym_id_name",
-    "iter_model_cards",
-    "make_model",
-    "list_parameter_profiles",
-    "load_parameter_profile",
-    "load_task_profile",
-    "register_model",
-    "unregister_model",
-    "validate_model_card",
-    "validate_model_contract",
-    "validate_model_readiness",
-    "validate_parameter_profile",
-    "configure_model_for_task",
-    "resolve_environment_options",
-    "task_environment",
-    "task_identity",
-    "task_operation",
-    "validate_task_profile",
-]
+
+_EXPORTS = {
+    "CP": ".core",
+    "G": ".core",
+    "RHO": ".core",
+    "RHO_CP": ".core",
+    "ProcessModelContract": ".core",
+    "Integrator": ".integration",
+    "DeclarativeProcessModel": ".declarative",
+    "define_model": ".declarative",
+    "CascadeModel": ".scenarios",
+    "RecirculatingCascadeModel": ".scenarios",
+    "QuadrupleModel": ".scenarios",
+    "CSTRModel": ".scenarios",
+    "HVACModel": ".scenarios",
+    "ExtractionModel": ".scenarios",
+    "FiredHeaterModel": ".scenarios",
+    "CrystallizationModel": ".scenarios",
+    "MODELS": ".registry",
+    "BUILTIN_MODELS": ".registry",
+    "apply_model_params": ".registry",
+    "builtin_gym_ids": ".registry",
+    "gym_id_name": ".registry",
+    "make_model": ".registry",
+    "register_model": ".registry",
+    "unregister_model": ".registry",
+    "validate_model_contract": ".registry",
+    "MODEL_METADATA_SCHEMA_VERSION": ".metadata",
+    "collect_model_metadata": ".metadata",
+    "export_model_metadata": ".metadata",
+    "iter_model_metadata": ".metadata",
+    "validate_model_metadata": ".metadata",
+    "PARAMETER_PROFILE_SCHEMA_VERSION": ".parameter_profiles",
+    "list_parameter_profiles": ".parameter_profiles",
+    "load_parameter_profile": ".parameter_profiles",
+    "validate_parameter_profile": ".parameter_profiles",
+    "validate_model_readiness": ".validation",
+    "TASK_PROFILE_SCHEMA_VERSION": ".tasks",
+    "configure_model_for_task": ".tasks",
+    "load_task_profile": ".tasks",
+    "resolve_environment_options": ".tasks",
+    "task_environment": ".tasks",
+    "task_identity": ".tasks",
+    "task_operation": ".tasks",
+    "validate_task_profile": ".tasks",
+}
+__all__ = sorted(_EXPORTS)
+
+
+def __getattr__(name):
+    return resolve_export(globals(), __name__, _EXPORTS, name)
+
+
+def __dir__():
+    return exported_dir(globals(), _EXPORTS)

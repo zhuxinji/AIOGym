@@ -95,7 +95,7 @@ def validate_parameter_profile(
 
 
 def model_physical_metadata(scenario: str, *, dt_micro: float) -> dict[str, Any]:
-    """Return non-mutating physical and solver metadata for a model card."""
+    """Return non-mutating physical and solver metadata for a model."""
 
     try:
         profile = load_parameter_profile(scenario, scenario=scenario)

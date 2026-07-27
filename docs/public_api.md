@@ -17,8 +17,8 @@ material.
 | Inspect or simulate process equations | `aiogym.make_model(...)` | Scenario/model only |
 | Train or interact through Gymnasium | `aiogym.make_env(...)` | Scenario plus optional task and objective |
 | Inspect bundled experiments | `aiogym.list_tasks(...)`, `aiogym.load_task_profile(...)` | Task declarations |
-| Compare controllers on one experiment | `aiogym.run_benchmark(...)` or `aiogym benchmark` | One scenario/task/objective protocol |
-| Run a published matrix of experiments | `aiogym benchmark suite` | Multiple resolved benchmark cases |
+| Compare controllers on one experiment | `aiogym.run_benchmark(...)` or `aiogym benchmark suite <scenario> <task>` | One scenario/task/objective protocol |
+| Run all scenario tasks or a published matrix | `aiogym benchmark suite <target>` | Multiple resolved benchmark cases |
 
 The concepts are intentionally separate:
 
@@ -54,7 +54,7 @@ aiogym list scenarios
 aiogym list tasks --scenario cascade
 aiogym list suites
 aiogym list controllers
-aiogym benchmark --help
+aiogym benchmark suite --help
 aiogym train --help
 aiogym artifacts --help
 ```
@@ -138,12 +138,28 @@ env = aiogym.make_env(
 )
 ```
 
+Set `randomize_setpoints=True` to create one reproducible target per episode:
+
+```python
+env = aiogym.make_env(
+    "quadruple",
+    task="nonminimum-phase",
+    randomize_setpoints=True,
+)
+obs, info = env.reset(seed=9000)
+```
+
+If the task has a setpoint schedule, its initial equilibrium is preserved and
+the scheduled values are sampled. Otherwise the initial target is sampled.
+Sampling stays within the model's SP bounds; models with an analytic
+steady-state feasibility check reject unreachable candidates.
+
 ## Tasks
 
 ```python
-tasks = aiogym.list_tasks("cascade-recirculating")
+tasks = aiogym.list_tasks("cascade")
 task = aiogym.load_task_profile(
-    "cascade-recirculating/temperature-step"
+    "cascade/temperature-step"
 )
 ```
 
@@ -151,7 +167,7 @@ The short form is accepted when the scenario is supplied by the caller:
 
 ```python
 env = aiogym.make_env(
-    "cascade-recirculating",
+    "cascade",
     task="temperature-step",
 )
 ```
@@ -191,9 +207,10 @@ scenario/task/objective protocol is evaluated with every listed controller and
 seed.
 
 The canonical top-level fields are `scenario`, `task`, `objective`,
-`controllers`, `controller_configs`, `seeds`, `environment`, `output_dir`, and
-`strict`. Environment settings may also be written directly at the top level.
-Removed aliases are rejected instead of being interpreted silently.
+`controllers`, `controller_configs`, `seeds`, `environment`, `output_dir`,
+`overwrite`, and `strict`. Environment settings may also be written directly
+at the top level. Removed aliases are rejected instead of being interpreted
+silently.
 
 ```python
 import aiogym
@@ -210,24 +227,41 @@ payload = aiogym.run_benchmark({
 The equivalent command-line workflow is:
 
 ```bash
-aiogym benchmark \
-  --scenario cascade-recirculating \
-  --task temperature-step \
+aiogym benchmark suite cascade-recirculating temperature-step \
   --controllers pid,mpc \
-  --episodes 3 \
-  --artifact-dir runs/recirculating-temperature-step
+  --episodes 3
 ```
 
-Use `aiogym benchmark --help` for named-task defaults and runtime
+Use `aiogym benchmark suite <scenario> <task> --help` for named-task runtime
 overrides. `--setpoint-step STEP:VALUE1,VALUE2` is repeatable; providing it
 replaces the task's default schedule.
 
-The command writes the same standard artifact directory as `run_benchmark()` and
-the suite runner, including `benchmark.json`, structured config, metadata,
-summary, results, figures, and `report.md`. Generated outputs default to a
-timestamped directory under `runs/` relative to the current working directory.
-Set `AIOGYM_RUNS_DIR` to change that shared default root. Explicit API and CLI
-paths such as `output_dir` and `--artifact-dir` always take precedence.
+For a multi-seed generalization benchmark:
+
+```bash
+aiogym benchmark suite quadruple nonminimum-phase \
+  --controllers pid,mpc,oracle \
+  --episodes 10 \
+  --randomize-setpoints
+```
+
+Seeds `9000` through `9009` generate ten target schedules at reset time. The
+same seed reproduces the same schedule, and the realized schedules are stored
+with the evaluation and rollout metadata. Without `--randomize-setpoints`,
+multiple episodes retain the task's deterministic references.
+
+The command writes the same standard artifact directory as `run_benchmark()`,
+including `benchmark.json`, structured config, metadata,
+summary, results, figures, and `report.md`. Single-task CLI and API benchmarks
+default to `runs/<scenario>/<task>` relative to the current working directory.
+Suite benchmarks default to `runs/<suite>_suite`. Runs replace the standard
+managed artifacts in their base directory by default; unrelated user files are
+preserved. Use CLI `--no-overwrite` or API `"overwrite": false` to create a
+timestamped sibling instead. Single-task tracking benchmarks automatically save
+one rollout per controller and generate state/setpoint/control figures. Set
+`AIOGYM_RUNS_DIR` to change the shared default root. Explicit API and CLI base
+paths such as `output_dir` and `--artifact-dir` take precedence and obey the
+same overwrite setting.
 
 Automation should consume the standard artifact directory so it can use
 `aiogym artifacts check` and `aiogym artifacts report` directly.
@@ -239,9 +273,20 @@ benchmark cases. The loader currently accepts two source shapes: a Cartesian
 matrix and an explicit `cases` list. Both shapes resolve to the same
 `BenchmarkCase` contract before execution.
 
+The same command also accepts a scenario target. With no task it runs every
+registered task for that scenario; with a task positional argument it runs only
+that task:
+
 ```bash
-aiogym benchmark suite \
-  --suite cascade-recirculating \
+aiogym benchmark suite cascade
+aiogym benchmark suite cascade temperature-step
+```
+
+Scenarios without registered tasks run one default tracking case; use
+`--objective` to select another supported objective.
+
+```bash
+aiogym benchmark suite cascade-control \
   --episodes 3
 ```
 
@@ -274,8 +319,25 @@ When `cases` is absent, the top-level `scenarios`, `objectives`, and
 
 This declaration expands to `2 scenarios × 1 objective × 2 controllers = 4`
 resolved cases. `scenarios` may also be one built-in group string such as
-`ALL_SCENARIOS`. A top-level `task` applies to every expanded combination and
-must therefore be valid for every selected scenario.
+`ALL_SCENARIOS`. Scenario groups are resolved from the current model registry,
+so runtime registrations are included. A top-level `task` applies to every
+expanded combination and must therefore be valid for every selected scenario.
+
+A suite that tracks the model-owned task registry can use a task selector
+instead of repeating task names:
+
+```json
+{
+  "scenarios": ["cascade"],
+  "controllers": ["pid", "mpc"],
+  "tasks": {
+    "exclude": ["continuous-benchmark"]
+  }
+}
+```
+
+Use `"tasks": "ALL_TASKS"` to include every registered task for the selected
+scenarios. Task selectors and explicit `cases` are mutually exclusive.
 
 ### Explicit-cases source schema
 
@@ -372,9 +434,10 @@ rules:
   suite `environment`, then protocol/environment default;
 - timing: CLI `--episode-steps` or `--control-dt`, then case, then suite, then
   task/environment default;
-- controller configuration: runner/controller base, then suite
-  `controller_configs`, then case `controller_configs`, with later nested
-  `parameters` values taking precedence.
+- controller configuration: runner/controller base, then task `controllers`
+  defaults, suite `controller_configs`, and case `controller_configs`, with
+  later nested `parameters` values taking precedence. Single-task and suite
+  runs therefore use the same task-owned profile unless explicitly overridden.
 
 Objective resolution records its winning source as `explicit`, `case-config`,
 `suite-config`, or `task-default` in the resolved protocol and artifacts.
@@ -406,7 +469,7 @@ Training commands use the same five public objective names as benchmarks:
 
 ```bash
 aiogym train sb3 --scenario cstr --objective tracking
-aiogym train rlpd --scenario cstr --objective robustness
+aiogym train rlpd --scenario quadruple --task minimum-phase
 ```
 
 `economic` and `tracking` select their matching environment rewards. `kpi`,
@@ -415,9 +478,19 @@ selected objective and record the internal choice as `resolved_reward_mode`.
 SB3 evaluation defaults to the training objective unless `--eval-objective` is
 provided explicitly.
 
+Both training commands accept named task profiles. When a task is selected,
+both resolve its default objective, control interval, episode length, tracking
+weights, and observation contract identically; explicit command-line overrides
+still take precedence. The optimization parameters remain specific to the
+selected algorithm.
+
 Training commands accept `--objective`. The low-level
 `AIOGymNativeEnv(reward_mode=...)` constructor uses `reward_mode` to select its
 internal reward computation for framework integrations.
+
+Oracle controller configuration likewise uses `objective`. The former
+Oracle-only `mode` alias and duplicate `mode` metadata field have been removed;
+use `objective` in controller configuration and artifact readers.
 
 ## Advanced resolved specifications
 

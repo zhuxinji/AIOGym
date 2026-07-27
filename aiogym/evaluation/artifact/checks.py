@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import csv
-import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .paths import resolve_artifact_path
 from .report import _read_json, _tracking_benchmark_case_count
 
 
@@ -60,15 +60,21 @@ def check_benchmark_artifacts(artifact_dir: str | Path) -> dict[str, Any]:
         _add_exists(checks, "tracking_comparison", paths["tracking_comparison"], required=True)
         _add_exists(checks, "tracking_comparison_figure", paths["tracking_comparison_figure"], required=True)
     rollouts = list(benchmark.get("rollouts") or [])
+    rollout_artifact_present = bool(artifacts.get("rollouts")) or bool(rollouts)
+    if not rollouts and rollout_artifact_present and paths["rollouts"].exists():
+        try:
+            rollouts = list(_read_json(paths["rollouts"]) or [])
+        except Exception:
+            pass
     tracking_control_figures = (
         artifacts.get("tracking_control_figures")
         if isinstance(artifacts.get("tracking_control_figures"), Mapping)
         else {}
     )
-    if rollouts:
+    if rollout_artifact_present:
         _add_exists(checks, "rollouts", paths["rollouts"], required=True)
         for benchmark_case, raw in sorted(tracking_control_figures.items()):
-            path = _resolve_artifact_path(root, raw, "missing")
+            path = resolve_artifact_path(root, raw, "missing")
             _add_exists(checks, f"tracking_control_figure:{benchmark_case}", path, required=True)
         expected_control_cases = len({
             (
@@ -109,7 +115,11 @@ def check_benchmark_artifacts(artifact_dir: str | Path) -> dict[str, Any]:
     all_leaderboard = _safe_json_list(checks, "all_leaderboard_json", paths["all_leaderboard"]) if has_objective_outputs else None
     curve_rows = _safe_json_list(checks, "learning_curve_json", paths["learning_curve"]) if learning_curve else None
     curve_csv_rows = _safe_csv_rows(checks, "learning_curve_csv_rows", paths["learning_curve_csv"]) if learning_curve else None
-    rollout_rows = _safe_json_list(checks, "rollouts_json", paths["rollouts"]) if rollouts else None
+    rollout_rows = (
+        _safe_json_list(checks, "rollouts_json", paths["rollouts"])
+        if rollout_artifact_present
+        else None
+    )
     if row_data is not None:
         _add_count_check(checks, "rows_json_count", len(row_data), expected_rows, paths["rows"])
     if summary_rows is not None:
@@ -189,7 +199,7 @@ def _check_model_metadata(
     ))
     models = dict(manifest.get("models") or {})
     for scenario in expected_scenarios:
-        path = _resolve_artifact_path(
+        path = resolve_artifact_path(
             root, models.get(scenario), f"metadata/models/{scenario}.json"
         )
         _add_exists(checks, f"model_metadata:{scenario}", path, required=True)
@@ -280,10 +290,10 @@ def _check_objective_artifacts(root: Path, checks: list[dict[str, Any]], rows: S
         raw = paths_by_objective.get(objective)
         if isinstance(raw, Mapping):
             for scenario, scenario_raw in sorted(raw.items()):
-                path = _resolve_artifact_path(root, scenario_raw, "missing")
+                path = resolve_artifact_path(root, scenario_raw, "missing")
                 _add_exists(checks, f"{name}:{objective}:{scenario}", path, required=True)
             continue
-        path = _resolve_artifact_path(root, raw, "missing")
+        path = resolve_artifact_path(root, raw, "missing")
         check_name = f"{name}:{objective}"
         _add_exists(checks, check_name, path, required=True)
         if not count_rows or not path.exists():
@@ -325,16 +335,7 @@ def _artifact_scenario_names(benchmark: Mapping[str, Any]) -> list[str]:
 
 def _check_artifact_path(root: Path, artifacts: Mapping[str, str], key: str, default: str) -> Path:
     raw = artifacts.get(key)
-    return _resolve_artifact_path(root, raw, default)
-
-
-def _resolve_artifact_path(root: Path, raw, default: str) -> Path:
-    if raw:
-        path = Path(raw)
-        if path.is_absolute() or path.exists():
-            return path
-        return root / path
-    return root / default
+    return resolve_artifact_path(root, raw, default)
 
 
 def _stale_message(stale: list[str]) -> str:

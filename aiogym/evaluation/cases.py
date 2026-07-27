@@ -121,9 +121,23 @@ class BenchmarkCase:
         controller_config: Mapping[str, Any] | None = None,
         case_id: str | None = None,
     ) -> "BenchmarkCase":
-        from ..models.tasks import task_identity
+        from ..models.tasks import task_controller_config, task_identity
 
         task_name = task_identity(protocol.task)["name"]
+        default_controller_config = (
+            {"profile": "tracking"}
+            if controller == "oracle"
+            and protocol.resolved_objective().name == "tracking"
+            else {}
+        )
+        default_controller_config = _merge_controller_config(
+            default_controller_config,
+            task_controller_config(protocol.task, controller),
+        )
+        resolved_controller_config = _merge_controller_config(
+            default_controller_config,
+            controller_config,
+        )
         return cls(
             case_id=case_id
             or f"{protocol.objective}:{protocol.scenario}:{task_name}:{controller}",
@@ -131,7 +145,7 @@ class BenchmarkCase:
             objective=protocol.resolved_objective(),
             controller=controller,
             seeds=tuple(seeds),
-            controller_config=dict(controller_config or {}),
+            controller_config=resolved_controller_config,
             protocol=protocol,
         )
 
@@ -167,3 +181,21 @@ class BenchmarkCase:
                 if key in METRIC_DEFINITIONS
             },
         }
+
+
+def _merge_controller_config(
+    base: Mapping[str, Any] | None,
+    override: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Merge controller configs while preserving nested parameter defaults."""
+
+    resolved = dict(base or {})
+    for key, value in dict(override or {}).items():
+        if key == "parameters" and isinstance(value, Mapping):
+            resolved[key] = {
+                **dict(resolved.get(key) or {}),
+                **dict(value),
+            }
+        else:
+            resolved[key] = value
+    return resolved

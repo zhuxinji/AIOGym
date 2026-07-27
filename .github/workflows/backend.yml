@@ -28,10 +28,24 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: pyproject.toml
-      - name: Install AIO-Gym
-        run: python -m pip install -e ".[dev]"
+      - name: Install core AIO-Gym
+        run: python -m pip install -e .
+      - name: Check core-only import
+        run: >-
+          python -c "import aiogym;
+          env = aiogym.make_env('cstr');
+          env.reset(seed=0);
+          aiogym.make_controller('pid', scenario='cstr');
+          aiogym.make_controller('mpc', scenario='cstr')"
+      - name: Install complete development stack
+        run: python -m pip install -e ".[all,dev]"
       - name: Compile Python modules
         run: python -m compileall -q aiogym
+      - name: Run static checks
+        run: python -m ruff check aiogym
+      - name: Build source and wheel distributions
+        if: matrix.python-version == '3.12'
+        run: python -m build --no-isolation --outdir /tmp/aiogym_dist
       - name: Check CLI catalog
         run: aiogym list scenarios
       - name: Run test suite
@@ -39,7 +53,7 @@ jobs:
       - name: Run benchmark smoke test
         run: >-
           aiogym benchmark suite
-          --suite standard-baselines
+          standard-baselines
           --scenarios cstr
           --objectives tracking
           --controllers pid,mpc

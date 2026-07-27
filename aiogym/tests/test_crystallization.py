@@ -71,7 +71,8 @@ def test_tracking_controllers_build():
     assert mpc.metadata()["horizon"] == 2
     assert oracle.metadata()["scenario"] == "crystallization"
     assert oracle.metadata()["horizon"] == 4
-    assert oracle.metadata()["mode"] == "economic"
+    assert oracle.metadata()["objective"] == "economic"
+    assert "mode" not in oracle.metadata()
 
 
 def test_crystallization_mpc_uses_affine_output_linearization():

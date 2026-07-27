@@ -1,4 +1,4 @@
-"""Helpers for publishing RL training runs as standard benchmark artifacts."""
+"""RL training payload adapters for the standard benchmark artifact system."""
 from __future__ import annotations
 
 from datetime import datetime, timezone

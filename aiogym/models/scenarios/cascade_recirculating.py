@@ -20,6 +20,7 @@ class RecirculatingCascadeModel(ProcessModelContract):
         "loop with one 2 kW heater."
     )
     supported_objectives = ("tracking", "kpi", "robustness", "safety")
+    benchmark_objectives = supported_objectives
     n = 3
     dt_micro = 0.02
 

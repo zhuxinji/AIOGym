@@ -12,6 +12,7 @@ import copy
 import math
 
 from .._internal.identifiers import canonical_scenario_id
+from .._internal.vocabulary import OBJECTIVE_NAMES
 from .backends import _NUMERIC_OPS, _NumericOps, _casadi_ops, _maxv
 from .integration import Integrator
 
@@ -40,7 +41,8 @@ class ProcessModelContract:
 
     display_name = "Process model"
     summary = ""
-    supported_objectives = ("tracking", "economic", "kpi", "robustness", "safety")
+    supported_objectives = OBJECTIVE_NAMES
+    benchmark_objectives = OBJECTIVE_NAMES
     state_names = ()
     state_units = {}
     state_bounds = {}
@@ -67,7 +69,6 @@ class ProcessModelContract:
         "w_viol": 0.0,
     }
     supervisory_layout = ()
-    supports_generic_setpoint_randomization = True
     supports_integral_observation = True
     randomize_common_temperatures = True
     disturbance_attributes = {
@@ -243,9 +244,77 @@ class ProcessModelContract:
         return self.default_setpoint_vector()
 
     def sample_env_setpoints(self, y_sp, rng, options=None):
-        """Apply model-specific reset-time target sampling."""
+        """Sample one bounded, reproducible target for an environment episode.
 
-        return list(y_sp)
+        The generic sampler applies a conservative relative perturbation. Models
+        with an analytic feasibility test can override ``is_setpoint_reachable``
+        so rejected candidates are resampled from the same seeded RNG stream.
+        """
+
+        reference = [float(value) for value in y_sp]
+        options = dict(options or {})
+        if not options.get("randomize_setpoints", False):
+            return reference
+        schema = self.setpoint_schema()
+        for _ in range(64):
+            candidate = []
+            for index, value in enumerate(reference):
+                bounds = (
+                    schema[index].get("bounds")
+                    if index < len(schema) and isinstance(schema[index], dict)
+                    else None
+                )
+                if (
+                    isinstance(bounds, (tuple, list))
+                    and len(bounds) == 2
+                    and bounds[0] is not None
+                    and bounds[1] is not None
+                    and float(bounds[1]) > float(bounds[0])
+                ):
+                    lo, hi = float(bounds[0]), float(bounds[1])
+                    span = hi - lo
+                    radius = 0.10 * min(
+                        max(abs(value), 0.01 * span),
+                        span,
+                    )
+                    trial = float(rng.uniform(
+                        max(lo, value - radius),
+                        min(hi, value + radius),
+                    ))
+                else:
+                    trial = float(
+                        value * (1.0 + 0.10 * rng.uniform(-1.0, 1.0))
+                    )
+                candidate.append(trial)
+            if self.is_setpoint_reachable(candidate):
+                return candidate
+        return reference
+
+    def is_setpoint_reachable(self, y_sp):
+        """Return whether a sampled target satisfies the model's SP contract.
+
+        The base implementation validates dimensions, finiteness, and declared
+        setpoint bounds. Models with a steady-state inverse should strengthen
+        this check.
+        """
+
+        try:
+            values = [float(value) for value in y_sp]
+        except (TypeError, ValueError):
+            return False
+        schema = self.setpoint_schema()
+        if len(values) != len(schema) or any(not math.isfinite(value) for value in values):
+            return False
+        for value, row in zip(values, schema):
+            bounds = row.get("bounds") if isinstance(row, dict) else None
+            if not isinstance(bounds, (tuple, list)) or len(bounds) != 2:
+                continue
+            lo, hi = bounds
+            if lo is not None and value < float(lo):
+                return False
+            if hi is not None and value > float(hi):
+                return False
+        return True
 
     def setpoint_schema(self):
         output_rows = self.controlled_output_schema()
@@ -484,12 +553,14 @@ class ProcessModelContract:
     def constraint_schema(self):
         return [dict(row) for row in self.safety_constraints]
 
-    def model_card(self):
+    def metadata(self):
         physical_metadata = self.physical_metadata()
         return {
             "scenario": canonical_scenario_id(self.scenario),
             "name": self.display_name,
             "summary": self.summary,
+            "supported_objectives": list(self.supported_objectives),
+            "benchmark_objectives": list(self.benchmark_objectives),
             "states": self.state_schema(),
             "actions": self.action_schema(),
             "controlled_outputs": self.controlled_output_schema(),
@@ -511,9 +582,6 @@ class ProcessModelContract:
             "dt_micro": self.dt_micro,
             "energy_scored": bool(getattr(self, "energy_scored", True)),
         }
-
-    def metadata(self):
-        return self.model_card()
 
     @property
     def height_max(self):
