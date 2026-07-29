@@ -19,8 +19,8 @@ class RecirculatingCascadeModel(ProcessModelContract):
         "Three non-identical tanks in a closed P101-Tank 1-V12-Tank 2-V23-Tank 3 "
         "loop with one 2 kW heater."
     )
-    supported_objectives = ("tracking", "kpi", "robustness", "safety")
-    benchmark_objectives = supported_objectives
+    supported_goals = ("regulation",)
+    benchmark_goals = supported_goals
     n = 3
     dt_micro = 0.02
 

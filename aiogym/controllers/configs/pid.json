@@ -85,6 +85,27 @@
     }
   },
   "profiles": {
+    "cascade-regulation-generalist-v1": {
+      "track": "cascade-regulation-generalist-v1",
+      "policy_scope": "generalist",
+      "goal": "regulation",
+      "reward_spec": "regulation-v1",
+      "access_level": "measurement-and-setpoint"
+    },
+    "cascade-recirculating-regulation-generalist-v1": {
+      "track": "cascade-recirculating-regulation-generalist-v1",
+      "policy_scope": "generalist",
+      "goal": "regulation",
+      "reward_spec": "regulation-v1",
+      "access_level": "measurement-and-setpoint"
+    },
+    "quadruple-regulation-generalist-v1": {
+      "track": "quadruple-regulation-generalist-v1",
+      "policy_scope": "generalist",
+      "goal": "regulation",
+      "reward_spec": "regulation-v1",
+      "access_level": "measurement-and-setpoint"
+    },
     "cascade-control-benchmark": {
       "scenarios": {
         "cascade": {
@@ -178,14 +199,14 @@
               "y_index": 0,
               "pid": [0.4571, 0.05, 0.0],
               "bias": 0.3,
-              "source": "AIO-Gym fixed-protocol disturbance-rejection tuning, 120 random plus 60 refinement samples, seed 20260715"
+              "source": "AIO-Gym fixed-evaluation disturbance-rejection tuning, 120 random plus 60 refinement samples, seed 20260715"
             },
             {
               "u_index": 1,
               "y_index": 1,
               "pid": [0.5, 0.05, 0.0],
               "bias": 0.3,
-              "source": "AIO-Gym fixed-protocol disturbance-rejection tuning, 120 random plus 60 refinement samples, seed 20260715"
+              "source": "AIO-Gym fixed-evaluation disturbance-rejection tuning, 120 random plus 60 refinement samples, seed 20260715"
             }
           ]
         }

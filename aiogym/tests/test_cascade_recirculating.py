@@ -72,7 +72,7 @@ def test_foundational_model_metadata_and_environment_step_are_finite():
     assert metadata["action_vector"]["length"] == 4
     assert metadata["physical_metadata"]["parameter_status"] == "design-provisional"
 
-    env = aiogym.AIOGymNativeEnv(
+    env = aiogym.AIOGymEnv(
         "cascade-recirculating",
         auto_events=False,
         randomize=False,
@@ -366,7 +366,7 @@ def test_numeric_and_casadi_match_with_both_overflow_branches_active():
 
 
 def test_environment_reports_passive_protection_separately_from_hard_stop():
-    env = aiogym.AIOGymNativeEnv(
+    env = aiogym.AIOGymEnv(
         "cascade-recirculating",
         control_dt=0.01,
         episode_steps=3,
@@ -393,33 +393,28 @@ def test_environment_reports_passive_protection_separately_from_hard_stop():
     assert "tank_1_hard_overflow" in hard_info["safety_events"]
 
 
-def test_device_tasks_are_explicit_and_exclude_production_economics():
+def test_device_cases_are_explicit_and_goal_independent():
     expected = {
         "cascade-recirculating/commissioning",
         "cascade-recirculating/disturbance-rejection",
         "cascade-recirculating/safety-recovery",
         "cascade-recirculating/temperature-step",
     }
-    assert set(aiogym.list_tasks("cascade-recirculating")) == expected
+    assert set(aiogym.list_cases("cascade-recirculating")) == expected
     for name in expected:
-        profile = aiogym.load_task_profile(name)
-        assert "economic" not in profile["supported_objectives"]
-        assert profile["default_objective"] in profile["supported_objectives"]
+        profile = aiogym.load_case(name)
+        assert not {
+            "default_objective",
+            "supported_objectives",
+            "objectives",
+        }.intersection(profile)
 
-    with pytest.raises(ValueError, match="does not support objective 'economic'"):
-        aiogym.BenchmarkProtocol.economic("cascade-recirculating")
-    with pytest.raises(ValueError, match="does not support objective 'economic'"):
-        aiogym.BenchmarkProtocol.economic(
-            "cascade-recirculating", task="commissioning"
-        )
-
-
-def test_commissioning_task_starts_at_the_declared_equilibrium():
+def test_commissioning_case_starts_at_the_declared_equilibrium():
     model = aiogym.make_model("cascade-recirculating")
-    task = aiogym.load_task_profile("cascade-recirculating/commissioning")
+    case = aiogym.load_case("cascade-recirculating/commissioning")
     equilibrium = model.nominal_steady_state()
-    env = aiogym.AIOGymNativeEnv(
-        "cascade-recirculating", task=task, reward_mode="tracking"
+    env = aiogym.AIOGymEnv(
+        "cascade-recirculating", case=case, reward_spec="regulation-v1"
     )
     env.reset(seed=4)
 
@@ -432,24 +427,24 @@ def test_commissioning_task_starts_at_the_declared_equilibrium():
 
 
 def test_temperature_step_is_visible_before_its_control_step():
-    task = aiogym.load_task_profile("cascade-recirculating/temperature-step")
-    env = aiogym.AIOGymNativeEnv(
-        "cascade-recirculating", task=task, reward_mode="tracking"
+    case = aiogym.load_case("cascade-recirculating/temperature-step")
+    env = aiogym.AIOGymEnv(
+        "cascade-recirculating", case=case, reward_spec="regulation-v1"
     )
     env.reset(seed=5)
     action = env.model.default_action()
 
     for _ in range(120):
         env.step(action)
-    raised = task["setpoints"]["schedule"][0]["values"]
+    raised = case["setpoints"]["schedule"][0]["values"]
     assert env.y_sp == pytest.approx(raised)
     assert raised[3] >= raised[4] >= raised[5]
 
 
-def test_disturbance_task_applies_and_exposes_scheduled_p101_loss():
-    task = aiogym.load_task_profile("cascade-recirculating/disturbance-rejection")
-    env = aiogym.AIOGymNativeEnv(
-        "cascade-recirculating", task=task, reward_mode="kpi"
+def test_disturbance_case_applies_and_exposes_scheduled_p101_loss():
+    case = aiogym.load_case("cascade-recirculating/disturbance-rejection")
+    env = aiogym.AIOGymEnv(
+        "cascade-recirculating", case=case, reward_spec="regulation-v1"
     )
     env.reset(seed=6)
     action = env.model.default_action()
@@ -462,10 +457,10 @@ def test_disturbance_task_applies_and_exposes_scheduled_p101_loss():
     assert env._env()["pump_flow_factor"] == pytest.approx(0.75)
 
 
-def test_safety_recovery_task_starts_with_recoverable_protection_layers():
-    task = aiogym.load_task_profile("cascade-recirculating/safety-recovery")
-    env = aiogym.AIOGymNativeEnv(
-        "cascade-recirculating", task=task, reward_mode="kpi"
+def test_safety_recovery_case_starts_with_recoverable_protection_layers():
+    case = aiogym.load_case("cascade-recirculating/safety-recovery")
+    env = aiogym.AIOGymEnv(
+        "cascade-recirculating", case=case, reward_spec="regulation-v1"
     )
     env.reset(seed=7)
     _, _, terminated, _, info = env.step(env.model.default_action())
@@ -497,24 +492,22 @@ def test_safety_recovery_task_starts_with_recoverable_protection_layers():
 def test_four_action_controllers_complete_short_commissioning_run(
     controller, controller_config
 ):
-    from aiogym.evaluation.execution import run_evaluation_case
-
-    protocol = aiogym.BenchmarkProtocol.tracking(
-        "cascade-recirculating", task="commissioning", episode_steps=2
-    )
-    case = run_evaluation_case(
+    agent = aiogym.make_controller(
+        controller,
         scenario="cascade-recirculating",
-        controller=controller,
-        protocol=protocol,
-        seeds=[0],
-        controller_config=controller_config,
-        include_episodes=False,
+        config=controller_config,
     )
-
-    controller_model = getattr(case["controller"], "model", None)
+    env = aiogym.AIOGymEnv(
+        "cascade-recirculating",
+        case="commissioning",
+        reward_spec="regulation-v1",
+        episode_steps=2,
+    )
+    result = aiogym.evaluate_controller(agent, env, seed=0)
+    controller_model = getattr(agent, "model", None)
     if controller_model is None:
-        controller_model = case["controller"].m
+        controller_model = agent.m
     assert controller_model.action_dim() == 4
-    assert case["row"]["execution_status"] == "passed"
-    assert case["row"]["controller_status"] == "ok"
-    assert case["row"]["constraint_violation_count"] == 0
+    assert result["execution_status"] == "passed"
+    assert result["controller_status"] == "ok"
+    assert result["constraint_violation_count"] == 0

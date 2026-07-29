@@ -1,0 +1,88 @@
+{
+  "schema_version": "aiogym.case_profile.v2",
+  "name": "temperature-step",
+  "scenario": "cascade",
+  "status": "benchmark-designed",
+  "description": "Staged six-output level and temperature tracking benchmark at fixed continuous throughput.",
+  "specialist_metadata": {
+    "controllers": {
+      "pid": {"profile": "cascade-control-benchmark"},
+      "oracle": {"profile": "cascade-temperature-step"}
+    }
+  },
+  "environment": {
+    "control_dt": 0.5,
+    "episode_steps": 2640,
+    "action_mode": "actuator",
+    "auto_events": false,
+    "randomize": false,
+    "randomize_setpoints": false,
+    "randomize_plant": false,
+    "plant_drift": false,
+    "integral_obs": false,
+    "terminate_on_runaway": false,
+    "noise": false,
+    "noise_pct": 0.01
+  },
+  "operation": {
+    "product_flow_sp": 0.0004,
+    "min_product_flow": 0.0004
+  },
+  "initialization": {
+    "state": [0.45, 35.0, 0.45, 50.0, 0.45, 65.0],
+    "basis": "model-consistent equilibrium at the existing assumed continuous-benchmark throughput"
+  },
+  "setpoints": {
+    "initial": [0.45, 0.45, 0.45, 35.0, 50.0, 65.0],
+    "schedule": [
+      {
+        "at_step": 120,
+        "values": [0.50, 0.45, 0.45, 40.0, 50.0, 65.0],
+        "description": "raise the Tank 0 level and temperature targets"
+      },
+      {
+        "at_step": 720,
+        "values": [0.50, 0.50, 0.45, 40.0, 55.0, 65.0],
+        "description": "retain the Tank 0 step and raise the Tank 1 level and temperature targets"
+      },
+      {
+        "at_step": 1320,
+        "values": [0.50, 0.50, 0.50, 40.0, 55.0, 70.0],
+        "description": "retain the upstream steps and raise the Tank 2 level and temperature targets"
+      },
+      {
+        "at_step": 1920,
+        "values": [0.45, 0.45, 0.45, 35.0, 50.0, 65.0],
+        "description": "return all six controlled outputs to the nominal operating point"
+      }
+    ]
+  },
+  "disturbances": [],
+  "constraints": [
+    {"name": "tank_levels", "bounds": [0.0, 0.8], "unit": "m"},
+    {"name": "tank_temperatures", "bounds": [0.0, 120.0], "unit": "degC"}
+  ],
+  "acceptance": {
+    "required_checks": [
+      "setpoint_visible_before_control_step",
+      "steady_state_feasible_targets",
+      "all_level_and_temperature_outputs_excited",
+      "finite_tracking_rollout",
+      "constraint_accounting"
+    ],
+    "metrics": {
+      "tracking_iae": {"max": 50.0},
+      "tracking_settling_time": {"max": 1100.0},
+      "tracking_overshoot": {"max": 0.08},
+      "energy_kwh": {"max": 45.0},
+      "constraint_violation_count": {"max": 0.0},
+      "constraint_violation_severity": {"max": 0.0},
+      "action_violation_count": {"max": 0.0},
+      "runaway_count": {"max": 0.0},
+      "controller_solver_limited_count": {"max": 0.0},
+      "controller_solver_failure_count": {"max": 0.0},
+      "controller_fallback_count": {"max": 0.0}
+    }
+  },
+  "references": []
+}

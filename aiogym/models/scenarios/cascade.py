@@ -423,7 +423,7 @@ class CascadeModel(ProcessModelContract):
     def steady_state_requirements(self, y_sp, env=None, product_flow_sp=None):
         """Return actuator and power requirements for a requested steady state.
 
-        The requested product flow is a task-level throughput target, not a
+        The requested product flow is a Case-level throughput target, not a
         physical model parameter.  Returned commands are the unconstrained
         requirements; ``feasible`` reports whether every requirement lies
         within the available normalized actuator range and safety interlocks.

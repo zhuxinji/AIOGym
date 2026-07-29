@@ -1,0 +1,59 @@
+{
+  "schema_version": "aiogym.case_profile.v2",
+  "name": "temperature-step",
+  "scenario": "cascade-recirculating",
+  "status": "benchmark-designed",
+  "description": "Model-consistent Tank 1 temperature step from 30 to 35 degC and back, with passive downstream targets derived at fixed circulation flow.",
+  "environment": {
+    "control_dt": 0.5,
+    "episode_steps": 1600,
+    "action_mode": "actuator",
+    "auto_events": false,
+    "randomize": false,
+    "randomize_setpoints": false,
+    "randomize_plant": false,
+    "plant_drift": false,
+    "integral_obs": false,
+    "terminate_on_runaway": false,
+    "noise": false,
+    "noise_pct": 0.01
+  },
+  "initialization": {
+    "state": [0.4, 30.0, 0.4, 28.932991890738368, 0.4, 27.57566937897707],
+    "basis": "model-consistent 30 degC Tank 1 equilibrium"
+  },
+  "setpoints": {
+    "initial": [0.4, 0.4, 0.4, 30.0, 28.932991890738368, 27.57566937897707],
+    "schedule": [
+      {
+        "at_step": 120,
+        "values": [0.4, 0.4, 0.4, 35.0, 33.399487836107554, 31.363504068465605],
+        "description": "raise the single heated-stage target while preserving the passive T1 >= T2 >= T3 profile"
+      },
+      {
+        "at_step": 1200,
+        "values": [0.4, 0.4, 0.4, 30.0, 28.932991890738368, 27.57566937897707],
+        "description": "return to the nominal thermal profile"
+      }
+    ]
+  },
+  "disturbances": [],
+  "constraints": [
+    {"name": "tank_levels", "bounds": [0.0, 0.5], "unit": "m"},
+    {"name": "tank_temperatures", "bounds": [0.0, 92.0], "unit": "degC"}
+  ],
+  "acceptance": {
+    "required_checks": [
+      "setpoint_visible_before_control_step",
+      "physically_ordered_temperature_targets",
+      "finite_tracking_rollout",
+      "constraint_accounting"
+    ]
+  },
+  "references": [
+    {
+      "id": "cascade-retrofit-layout-2024",
+      "locator": "PDF control philosophy: Tank 1 heat injection with Tank 2/Tank 3 passive stages; step magnitudes are benchmark-designed"
+    }
+  ]
+}

@@ -1,0 +1,76 @@
+{
+  "schema_version": "aiogym.case_profile.v2",
+  "name": "disturbance-rejection",
+  "scenario": "quadruple",
+  "status": "benchmark-designed",
+  "description": "Deterministic recovery from common pump-capacity loss and outlet restriction at the P- operating point.",
+  "specialist_metadata": {
+    "controllers": {
+      "pid": {"profile": "quadruple-disturbance-rejection"},
+      "mpc": {"profile": "quadruple-disturbance-rejection"},
+      "oracle": {"profile": "quadruple-disturbance-rejection"}
+    }
+  },
+  "environment": {
+    "control_dt": 1.0,
+    "episode_steps": 900,
+    "action_mode": "actuator",
+    "auto_events": false,
+    "randomize": false,
+    "randomize_setpoints": false,
+    "randomize_plant": false,
+    "plant_drift": false,
+    "integral_obs": false,
+    "disturbance_obs": false,
+    "previous_action_obs": true,
+    "normalize_observations": true,
+    "tracking_error_obs": true,
+    "terminate_on_runaway": false,
+    "noise": false,
+    "noise_pct": 0.01
+  },
+  "model_params": {
+    "tank_area": [28.0, 32.0, 28.0, 32.0],
+    "outlet_area": [0.071, 0.057, 0.071, 0.057],
+    "pump_gain": [3.33, 3.35],
+    "gamma": [0.70, 0.60],
+    "gravity": 981.0,
+    "max_voltage": 10.0,
+    "max_level": 20.0,
+    "nominal_voltage": [3.0, 3.0]
+  },
+  "initialization": {
+    "state": [12.2629675195507, 12.783158403008972, 1.6339411322567796, 1.409044702533737],
+    "basis": "exact nonlinear P- equilibrium"
+  },
+  "setpoints": {
+    "initial": [12.2629675195507, 12.783158403008972],
+    "schedule": []
+  },
+  "disturbances": [
+    {"at_step": 120, "name": "pump_flow_factor", "value": 0.8, "description": "20% common pump-capacity loss"},
+    {"at_step": 300, "name": "pump_flow_factor", "value": 1.0, "description": "pump capacity restored"},
+    {"at_step": 420, "name": "outlet_area_factor", "value": 0.8, "description": "20% common outlet restriction"},
+    {"at_step": 600, "name": "outlet_area_factor", "value": 1.0, "description": "outlet area restored"}
+  ],
+  "constraints": [
+    {"name": "all_tank_levels", "bounds": [0.0, 20.0], "unit": "cm"},
+    {"name": "pump_voltage", "bounds": [0.0, 10.0], "unit": "V"}
+  ],
+  "acceptance": {
+    "required_checks": [
+      "deterministic_disturbance_schedule",
+      "disturbance_values_exposed_to_controller",
+      "finite_recovery_rollout",
+      "constraint_accounting"
+    ]
+  },
+  "references": [
+    {
+      "id": "johansson-2000-model",
+      "doi": "10.1109/87.845876",
+      "url": "https://doi.org/10.1109/87.845876",
+      "locator": "nonlinear hydraulic model; disturbance sequence is an AIO-Gym benchmark extension"
+    }
+  ]
+}

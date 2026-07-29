@@ -10,13 +10,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from aiogym.controllers import load_controller_config
-from aiogym.evaluation import resolve_protocol
-from aiogym.evaluation.execution import run_evaluation_case
+from aiogym.controllers.tuning.evaluation import evaluate_specialist
 
 
 FAMILIES = {
     "minimum-phase": {
-        "tasks": [("minimum-phase", "tracking")],
+        "cases": ["minimum-phase"],
         "baseline_profile": "quadruple-minimum-phase-benchmark",
         "bias": 0.3,
         "kp_bounds": (0.03, 2.0),
@@ -24,7 +23,7 @@ FAMILIES = {
         "topologies": ["direct"],
     },
     "nonminimum-phase": {
-        "tasks": [("nonminimum-phase", "tracking")],
+        "cases": ["nonminimum-phase"],
         "baseline_profile": "quadruple-nonminimum-phase-benchmark",
         "bias": 0.315,
         "kp_bounds": (0.001, 0.3),
@@ -32,7 +31,7 @@ FAMILIES = {
         "topologies": ["paper", "cross"],
     },
     "zero-boundary": {
-        "tasks": [("zero-boundary-stress", "tracking")],
+        "cases": ["zero-boundary-stress"],
         "baseline_profile": "quadruple-zero-boundary",
         "bias": 0.3,
         "kp_bounds": (0.01, 1.0),
@@ -40,7 +39,7 @@ FAMILIES = {
         "topologies": ["direct"],
     },
     "disturbance-rejection": {
-        "tasks": [("disturbance-rejection", "robustness")],
+        "cases": ["disturbance-rejection"],
         "baseline_profile": "quadruple-disturbance-rejection",
         "bias": 0.3,
         "kp_bounds": (0.01, 0.5),
@@ -77,43 +76,41 @@ def _loops(topology: str, gains: list[float], bias: float) -> list[dict]:
     ]
 
 
-def _evaluate(task: str, objective: str, loops: list[dict]) -> dict:
-    protocol = resolve_protocol(
-        "quadruple", objective, {"action_mode": "actuator", "task": task}
-    )
-    case = run_evaluation_case(
+def _evaluate(case: str, loops: list[dict]) -> dict:
+    result = evaluate_specialist(
         scenario="quadruple",
+        case=case,
         controller="pid",
-        protocol=protocol,
         seeds=[9000],
-        controller_config={"parameters": {"loops": loops}},
-        include_episodes=False,
+        controller_config={
+            "case": case,
+            "policy_scope": "specialist",
+            "goal": "regulation",
+            "reward_spec": "regulation-v1",
+            "parameters": {"loops": loops},
+        },
     )
-    row = case["row"]
     return {
-        "task": task,
-        "objective": objective,
-        "metric": row["metric"],
-        "metric_value": row[row["metric"]],
-        "tracking_cost": row.get("tracking_cost"),
-        "tracking_error_cost": row.get("tracking_error_cost"),
-        "tracking_mse": row.get("tracking_mse"),
-        "tracking_iae": row.get("tracking_iae"),
-        "normalized_score": row.get("normalized_score"),
-        "constraint_violation_count": row.get("constraint_violation_count", 0.0),
-        "constraint_violation_severity": row.get("constraint_violation_severity", 0.0),
+        "case": case,
+        "goal": "regulation",
+        "metric": result["metric"],
+        "metric_value": result[result["metric"]],
+        "tracking_cost": result.get("tracking_cost"),
+        "tracking_error_cost": result.get("tracking_error_cost"),
+        "tracking_mse": result.get("tracking_mse"),
+        "tracking_iae": result.get("tracking_iae"),
+        "constraint_violation_count": result.get("constraint_violation_count", 0.0),
+        "constraint_violation_severity": result.get("constraint_violation_severity", 0.0),
     }
 
 
 def _loss(result: dict) -> float:
-    if result["metric"] == "normalized_score":
-        return max(1e-12, 100.0 - float(result["metric_value"]))
     return float(result["metric_value"])
 
 
 def _candidate(topology: str, gains: list[float], bias: float, baseline: list[dict]) -> dict:
     loops = _loops(topology, gains, bias)
-    results = [_evaluate(task, objective, loops) for task, objective in baseline["tasks"]]
+    results = [_evaluate(case, loops) for case in baseline["cases"]]
     relative_losses = [
         _loss(result) / max(1e-12, _loss(reference))
         for result, reference in zip(results, baseline["results"])
@@ -147,8 +144,8 @@ def _baseline(family: dict) -> dict:
         "pid", "quadruple", profile=family["baseline_profile"]
     )["parameters"]
     loops = parameters["loops"]
-    results = [_evaluate(task, objective, loops) for task, objective in family["tasks"]]
-    return {"tasks": family["tasks"], "loops": loops, "results": results}
+    results = [_evaluate(case, loops) for case in family["cases"]]
+    return {"cases": family["cases"], "loops": loops, "results": results}
 
 
 def main() -> None:

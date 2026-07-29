@@ -10,7 +10,7 @@ if __package__ is None or __package__ == "":
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
-from aiogym.env import AIOGymNativeEnv
+from aiogym.env import AIOGymEnv
 from aiogym.models import ProcessModelContract, register_model, unregister_model
 
 
@@ -108,7 +108,7 @@ class MiniHeatedTank(ProcessModelContract):
 def main():
     register_model("mini_heated_tank", MiniHeatedTank, replace=True)
     try:
-        env = AIOGymNativeEnv("mini_heated_tank", auto_events=True, randomize=False,
+        env = AIOGymEnv("mini_heated_tank", auto_events=True, randomize=False,
                               randomize_setpoints=False, episode_steps=5)
         obs, _ = env.reset(seed=0)
         total_reward = 0.0

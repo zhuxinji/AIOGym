@@ -6,17 +6,17 @@ import argparse
 import sys
 
 from aiogym.catalog import (
+    list_cases,
     list_controllers,
     list_scenarios,
-    list_suites,
-    list_tasks,
 )
+from aiogym.benchmarks import list_tracks
 
 
 def _benchmark(argv):
     from aiogym.cli.benchmark import main
 
-    return main(argv, prog="aiogym benchmark suite")
+    return main(argv, prog="aiogym benchmark")
 
 
 def _train_sb3(argv):
@@ -43,6 +43,12 @@ def _artifact_check(argv):
     return artifact_check_main(argv, prog="aiogym artifacts check")
 
 
+def _artifact_compact(argv):
+    from aiogym.cli.artifact_commands import compact_main
+
+    return compact_main(argv, prog="aiogym artifacts compact")
+
+
 def _print_items(items):
     for item in items:
         print(item)
@@ -52,12 +58,12 @@ def _list_scenarios(_args):
     _print_items(list_scenarios())
 
 
-def _list_tasks(args):
-    _print_items(list_tasks(args.scenario))
+def _list_cases(args):
+    _print_items(list_cases(args.scenario))
 
 
-def _list_suites(_args):
-    _print_items(list_suites())
+def _list_tracks(_args):
+    _print_items(list_tracks())
 
 
 def _list_controllers(_args):
@@ -91,25 +97,18 @@ def build_parser():
     scenarios = list_commands.add_parser("scenarios", help="registered process scenarios")
     scenarios.set_defaults(handler=_list_scenarios, selected_parser=scenarios)
 
-    tasks = list_commands.add_parser("tasks", help="bundled task profiles")
-    tasks.add_argument("--scenario", default=None, help="only list tasks for one scenario")
-    tasks.set_defaults(handler=_list_tasks, selected_parser=tasks)
+    cases = list_commands.add_parser("cases", help="bundled Case v2 profiles")
+    cases.add_argument("--scenario", default=None, help="only list cases for one scenario")
+    cases.set_defaults(handler=_list_cases, selected_parser=cases)
 
-    suites = list_commands.add_parser("suites", help="bundled benchmark suites")
-    suites.set_defaults(handler=_list_suites, selected_parser=suites)
+    tracks = list_commands.add_parser("tracks", help="official benchmark tracks")
+    tracks.set_defaults(handler=_list_tracks, selected_parser=tracks)
 
     controllers = list_commands.add_parser("controllers", help="registered controllers")
     controllers.set_defaults(handler=_list_controllers, selected_parser=controllers)
 
     benchmark = commands.add_parser("benchmark", help="run benchmarks")
     benchmark.set_defaults(selected_parser=benchmark)
-    benchmark_commands = benchmark.add_subparsers(dest="benchmark_command", metavar="COMMAND")
-    _add_delegate(
-        benchmark_commands,
-        "suite",
-        "single-task or multi-task benchmark",
-        _benchmark,
-    )
 
     train = commands.add_parser("train", help="train reinforcement-learning agents")
     train.set_defaults(selected_parser=train)
@@ -122,6 +121,12 @@ def build_parser():
     artifact_commands = artifacts.add_subparsers(dest="artifact_command", metavar="COMMAND")
     _add_delegate(artifact_commands, "report", "artifact report", _artifact_report)
     _add_delegate(artifact_commands, "check", "artifact validator", _artifact_check)
+    _add_delegate(
+        artifact_commands,
+        "compact",
+        "artifact compactor",
+        _artifact_compact,
+    )
 
     return parser
 
@@ -129,11 +134,12 @@ def build_parser():
 def main(argv=None):
     raw_args = list(sys.argv[1:] if argv is None else argv)
     delegated_commands = {
-        ("benchmark", "suite"): _benchmark,
+        ("benchmark",): _benchmark,
         ("train", "sb3"): _train_sb3,
         ("train", "rlpd"): _train_rlpd,
         ("artifacts", "report"): _artifact_report,
         ("artifacts", "check"): _artifact_check,
+        ("artifacts", "compact"): _artifact_compact,
     }
     for route, handler in delegated_commands.items():
         if tuple(raw_args[:len(route)]) == route:

@@ -10,8 +10,7 @@ from datetime import datetime, timezone
 
 from aiogym._internal.config import parse_seed_list, resolve_auto_events
 from aiogym._internal.paths import run_path
-from aiogym.controllers import make_controller
-from aiogym.evaluation import BenchmarkProtocol, evaluate_controller
+from aiogym.controllers.tuning.evaluation import evaluate_specialist
 
 
 def parse_float_list(raw: str):
@@ -29,15 +28,20 @@ def extraction_pid_config(kp: float, ki: float, kd: float, gas_hold: float):
     }
 
 
-def evaluate_config(protocol: BenchmarkProtocol, seeds: list[int], config: dict):
-    controller = make_controller("pid", scenario="extraction", config=config)
-    return evaluate_controller(
-        controller,
-        protocol.make_env(),
-        episodes=len(seeds),
-        seed=seeds[0],
-        seed_list=seeds,
-        protocol=protocol,
+def evaluate_config(environment: dict, seeds: list[int], config: dict):
+    return evaluate_specialist(
+        scenario="extraction",
+        case="tracking-specialist",
+        controller="pid",
+        seeds=seeds,
+        environment=environment,
+        controller_config={
+            "case": "tracking-specialist",
+            "policy_scope": "specialist",
+            "goal": "regulation",
+            "reward_spec": "regulation-v1",
+            "parameters": config,
+        },
     )
 
 
@@ -49,7 +53,6 @@ def compact_result(params: dict, result: dict):
         "tracking_itae": result["tracking_itae"],
         "tracking_overshoot": result["tracking_overshoot"],
         "track": result["track"],
-        "normalized_score": result["normalized_score"],
         "profit": result["profit"],
         "energy_kwh": result["energy_kwh"],
         "constraint_violation_count": result["constraint_violation_count"],
@@ -84,7 +87,7 @@ def recommended_row(rows: list[dict], relative_iae_tolerance: float):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--episode-steps", type=int, default=80)
-    ap.add_argument("--episodes", type=int, default=3)
+    ap.add_argument("--episodes", type=int, default=1)
     ap.add_argument("--seed", type=int, default=9700)
     ap.add_argument("--seed-list", default=None)
     ap.add_argument("--control-dt", type=float, default=0.5)
@@ -107,17 +110,15 @@ def main():
     )
 
     seeds = parse_seed_list(args.seed_list, args.seed, args.episodes)
-    protocol = BenchmarkProtocol.tracking(
-        "extraction",
-        action_mode="actuator",
-        episode_steps=args.episode_steps,
-        control_dt=args.control_dt,
-        auto_events=args.auto_events,
-        randomize=args.randomize,
-        randomize_plant=args.randomize_plant,
-        plant_drift=args.plant_drift,
-        noise=args.noise,
-    )
+    environment = {
+        "episode_steps": args.episode_steps,
+        "control_dt": args.control_dt,
+        "auto_events": args.auto_events,
+        "randomize": args.randomize,
+        "randomize_plant": args.randomize_plant,
+        "plant_drift": args.plant_drift,
+        "noise": args.noise,
+    }
     grids = {
         "kp": parse_float_list(args.kp),
         "ki": parse_float_list(args.ki),
@@ -135,14 +136,14 @@ def main():
             params["kd"],
             params["gas_hold"],
         )
-        result = evaluate_config(protocol, seeds, config)
+        result = evaluate_config(environment, seeds, config)
         row = compact_result(params, result)
         row["config"] = config
         rows.append(row)
         print(
             f"kp={params['kp']:7.1f} ki={params['ki']:6.1f} kd={params['kd']:4.1f} "
             f"gas={params['gas_hold']:4.2f} iae={row['tracking_iae']:.6f} "
-            f"itae={row['tracking_itae']:.6f} score={row['normalized_score']:.2f} "
+            f"itae={row['tracking_itae']:.6f} "
             f"energy={row['energy_kwh']:.6f} safety={row['constraint_violation_count']:.1f}"
         )
 
@@ -152,7 +153,9 @@ def main():
     payload = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "scenario": "extraction",
-        "objective": "tracking",
+        "goal": "regulation",
+        "reward_spec": "regulation-v1",
+        "policy_scope": "specialist",
         "metric_order": [
             "constraint_violation_count",
             "constraint_violation_severity",
@@ -160,7 +163,7 @@ def main():
             "tracking_itae",
             "energy_kwh",
         ],
-        "protocol": protocol.metadata(),
+        "environment": environment,
         "seeds": seeds,
         "grid": grids,
         "best": best,
@@ -180,13 +183,13 @@ def main():
     for row in rows[:args.top]:
         print(
             f"iae={row['tracking_iae']:.6f} itae={row['tracking_itae']:.6f} "
-            f"score={row['normalized_score']:.2f} energy={row['energy_kwh']:.6f} "
+            f"energy={row['energy_kwh']:.6f} "
             f"kp={row['kp']:.1f} ki={row['ki']:.1f} kd={row['kd']:.1f} gas={row['gas_hold']:.2f}"
         )
     print(
         "\nRECOMMENDED "
         f"iae={recommended['tracking_iae']:.6f} itae={recommended['tracking_itae']:.6f} "
-        f"score={recommended['normalized_score']:.2f} energy={recommended['energy_kwh']:.6f} "
+        f"energy={recommended['energy_kwh']:.6f} "
         f"kp={recommended['kp']:.1f} ki={recommended['ki']:.2f} "
         f"kd={recommended['kd']:.1f} gas={recommended['gas_hold']:.2f}"
     )

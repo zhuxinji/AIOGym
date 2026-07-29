@@ -11,7 +11,7 @@ class CrystallizationModel(ProcessModelContract):
     """
 
     scenario = "crystallization"
-    benchmark_objectives = ("tracking", "kpi", "robustness", "safety")
+    benchmark_goals = ("regulation",)
     display_name = "Batch Crystallization"
     summary = "Single-actuator crystallization benchmark with moment dynamics and Ln/CV quality targets."
     n = 1

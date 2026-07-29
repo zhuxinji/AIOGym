@@ -1,8 +1,0 @@
-{
-  "description": "Tracking benchmark for fixed actuator controllers.",
-  "scenarios": ["cascade", "quadruple", "cstr", "hvac"],
-  "objectives": ["tracking"],
-  "controllers": ["pid", "mpc"],
-  "action_mode": "actuator",
-  "preset": "environment/deterministic"
-}

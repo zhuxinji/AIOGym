@@ -49,17 +49,13 @@ def scenario_catalog_text(values: Sequence[str]) -> str:
     return ", ".join(rows)
 
 
-def canonical_task_id(value: str) -> str:
-    """Canonicalize the scenario prefix of a ``scenario/task`` ID."""
+def canonical_case_id(value: str) -> str:
+    """Canonicalize the scenario prefix of a ``scenario/case`` ID."""
 
     parts = value.split("/", 1)
     if len(parts) != 2:
         return value
     return f"{canonical_scenario_id(internal_scenario_id(parts[0]))}/{parts[1]}"
-
-
-def suite_catalog_text(canonical_ids: Sequence[str]) -> str:
-    return ", ".join(sorted(canonical_ids))
 
 
 def canonicalize_artifact_ids(value: Any, *, field: str | None = None) -> Any:
@@ -79,18 +75,17 @@ def canonicalize_artifact_ids(value: Any, *, field: str | None = None) -> Any:
             return canonical_scenario_id(internal_scenario_id(value))
         if field == "scenarios":
             return canonical_scenario_id(internal_scenario_id(value))
-        if field == "task" and "/" in value:
-            return canonical_task_id(value)
+        if field == "case" and "/" in value:
+            return canonical_case_id(value)
     return value
 
 
 __all__ = [
     "canonical_scenario_id",
     "canonical_scenario_ids",
-    "canonical_task_id",
+    "canonical_case_id",
     "canonicalize_artifact_ids",
     "internal_scenario_id",
     "require_canonical_scenario_id",
     "scenario_catalog_text",
-    "suite_catalog_text",
 ]

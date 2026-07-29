@@ -15,6 +15,7 @@ _EXPORTS = {
     "plot_learning_curve": ".svg",
     "plot_rollouts": ".svg",
     "plot_summary": ".svg",
+    "compact_benchmark_artifacts": ".writers",
     "finalize_benchmark_artifacts": ".writers",
     "write_benchmark_artifacts": ".writers",
 }

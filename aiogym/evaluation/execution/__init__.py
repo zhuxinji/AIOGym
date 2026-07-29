@@ -1,15 +1,12 @@
-"""Benchmark execution pipeline."""
+"""Goal-based evaluation and rollout execution."""
 from __future__ import annotations
 
 from aiogym._internal.lazy import exported_dir, resolve_export
 
 
 _EXPORTS = {
-    "run_benchmark": ".benchmark",
     "evaluate_controller": ".evaluator",
     "rollout_controller": ".rollouts",
-    "execute_benchmark_case": ".runner",
-    "run_evaluation_case": ".runner",
 }
 __all__ = sorted(_EXPORTS)
 

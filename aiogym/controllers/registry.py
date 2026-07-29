@@ -87,7 +87,15 @@ def _oracle_factory(model=None, scenario=None, config=None, policy=None):
     from .oracle import OracleAgent
 
     cfg = dict(config or {})
-    agent = OracleAgent(scenario or model.scenario, model=model, **_controller_params(cfg))
+    params = _controller_params(cfg)
+    for name in ("goal", "reward_spec"):
+        if cfg.get(name) is not None:
+            params[name] = cfg[name]
+    agent = OracleAgent(
+        scenario or model.scenario,
+        model=model,
+        **params,
+    )
     agent.control_structure = cfg.get("control_structure", "nmpc_oracle")
     return agent
 

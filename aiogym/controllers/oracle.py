@@ -5,15 +5,16 @@ controller RL/PID/APC-MPC are measured against.
 Selectable multiple- or single-shooting transcription: RK4 over each control
 interval, IPOPT NLP.
 Plant dynamics are supplied by the model contract through
-``model.dynamics(..., backend="casadi")``. The resolved task objective is
+``model.dynamics(..., backend="casadi")``. The resolved optimization goal is
 supplied by the benchmark execution path:
-  - "tracking": Σ normalized(y-y_sp)ᵀQ normalized(y-y_sp) + ΔuᵀRΔu
+  - "regulation": Σ normalized(y-y_sp)ᵀQ normalized(y-y_sp) + ΔuᵀRΔu
   - "economic": maximize economic stage profit (value − energy − violation)
-  - "kpi"/"robustness": minimize the benchmark KPI stage penalty
-  - "safety": minimize a continuous process-safety violation surrogate
+
+Constraints are always enforced. Safety and robustness are measured by the
+evaluation gate and case shifts; they are not Oracle optimization modes.
 
 Usage:
-    orc = NMPCOracle("cstr", horizon=20, objective="economic")
+    orc = NMPCOracle("cstr", horizon=20, goal="economic")
     u = orc.solve(x, t_cold, t_amb, disturbances=meas, y_sp=y_sp)
 """
 from __future__ import annotations
@@ -22,7 +23,7 @@ import math
 import numpy as np
 
 from .._internal.validation import nonnegative_float, positive_float, positive_int
-from .._internal.vocabulary import OBJECTIVE_NAMES
+from ..rewards import get_reward_spec
 
 try:
     import casadi as ca
@@ -38,13 +39,14 @@ def copy_economic_config(model):
 
 
 class NMPCOracle:
-    _OBJECTIVES = frozenset(OBJECTIVE_NAMES)
+    _GOALS = frozenset({"regulation", "economic"})
 
     def __init__(self, scenario="cstr", horizon=20, control_dt=0.5,
-                 objective=None,
+                 goal=None, reward_spec=None,
                  q_y=1.0, r_move=0.05, terminal_weight=1.0,
                  steady_input_weight=0.0,
-                 ipopt_max_iter=80, ipopt_tol=1e-4, warm_start=False,
+                 ipopt_max_iter=80, ipopt_tol=1e-4,
+                 ipopt_hessian_approximation="exact", warm_start=False,
                  transcription="multiple_shooting", enforce_state_bounds=True,
                  enforce_temperature_cap=True, model=None):
         if not _HAVE_CASADI:
@@ -57,12 +59,10 @@ class NMPCOracle:
         self.p = self.model.p
         self.N = positive_int("horizon", horizon)
         self.dt = positive_float("control_dt", control_dt)
-        resolved_objective = objective or "economic"
-        if resolved_objective not in self._OBJECTIVES:
-            raise ValueError(
-                f"objective must be one of: {', '.join(sorted(self._OBJECTIVES))}"
-            )
-        self.objective = str(resolved_objective)
+        self.goal, self.reward_spec_id = self._resolve_goal_reward(
+            goal=goal,
+            reward_spec=reward_spec,
+        )
         self.integration_max_step = positive_float(
             "model solver max_step", self.model.solver_settings()["max_step"]
         )
@@ -71,6 +71,12 @@ class NMPCOracle:
         )
         self.ipopt_max_iter = positive_int("ipopt_max_iter", ipopt_max_iter)
         self.ipopt_tol = positive_float("ipopt_tol", ipopt_tol)
+        if ipopt_hessian_approximation not in {"exact", "limited-memory"}:
+            raise ValueError(
+                "ipopt_hessian_approximation must be one of: "
+                "exact, limited-memory"
+            )
+        self.ipopt_hessian_approximation = ipopt_hessian_approximation
         self.warm_start = bool(warm_start)
         if transcription not in {"multiple_shooting", "single_shooting"}:
             raise ValueError("transcription must be one of: multiple_shooting, single_shooting")
@@ -99,6 +105,8 @@ class NMPCOracle:
         self._warm_target = None
         self.last_plan = None
         self.last_error = None
+        self.last_solve_status = None
+        self.last_solve_success = False
         self._build()
 
     def _resolve_q_y(self, q_y):
@@ -111,6 +119,29 @@ class NMPCOracle:
         if any(not math.isfinite(value) or value < 0 for value in values):
             raise ValueError("q_y values must be finite and non-negative")
         return values
+
+    @classmethod
+    def _resolve_goal_reward(cls, *, goal, reward_spec):
+        resolved_spec = (
+            get_reward_spec(str(reward_spec))
+            if reward_spec is not None
+            else None
+        )
+        if goal is None:
+            goal = resolved_spec.goal if resolved_spec is not None else "economic"
+        if goal not in cls._GOALS:
+            raise ValueError(
+                "Oracle goal must be one of: economic, regulation"
+            )
+        if resolved_spec is not None and resolved_spec.goal != goal:
+            raise ValueError(
+                f"reward spec {resolved_spec.id!r} conflicts with goal {goal!r}"
+            )
+        return str(goal), (
+            resolved_spec.id
+            if resolved_spec is not None
+            else f"{goal}-v1"
+        )
 
     def _initial_action(self):
         initializer = getattr(self.model, "mpc_init", None)
@@ -177,13 +208,9 @@ class NMPCOracle:
         return x
 
     def _stage_cost(self, x, u, sp, d, ideal_energy):
-        if self.objective == "economic":
+        if self.goal == "economic":
             return -self._econ_profit(x, u, d)            # minimize -profit
-        if self.objective == "tracking":
-            return self._tracking_state_cost(x, sp)
-        if self.objective == "safety":
-            return self._safety_state_cost(x)
-        return self._kpi_stage_cost(x, u, sp, ideal_energy)
+        return self._tracking_state_cost(x, sp)
 
     def _tracking_state_cost(self, x, sp):
         y = self.model.controlled_output(x, backend="casadi", ca=ca)
@@ -285,7 +312,8 @@ class NMPCOracle:
         return {"ipopt.print_level": 0, "ipopt.sb": "yes", "print_time": 0,
                 "ipopt.max_iter": self.ipopt_max_iter,
                 "ipopt.acceptable_tol": self.ipopt_tol,
-                "ipopt.tol": self.ipopt_tol}
+                "ipopt.tol": self.ipopt_tol,
+                "ipopt.hessian_approximation": self.ipopt_hessian_approximation}
 
     def _constrain_state(self, opti, x, slack=None):
         slack_value = 0 if slack is None else slack
@@ -345,7 +373,7 @@ class NMPCOracle:
                 + self.r_move * ca.sumsqr(U[:, k] - up)
                 + self.steady_input_weight * ca.sumsqr(U[:, k] - u_target)
             )
-        if self.objective == "tracking":
+        if self.goal == "regulation":
             terminal_sp = {"y_sp": [ysp[i, N - 1] for i in range(self.ny)]}
             J += self.terminal_weight * self._tracking_state_cost(X[:, N], terminal_sp)
         J += 1e4 * ca.sumsqr(slack)                                    # heavily discourage cap violation
@@ -387,7 +415,7 @@ class NMPCOracle:
             if self.t_safe is not None:
                 for temp in temps:
                     opti.subject_to(temp <= self.t_safe + slack[0, k])
-        if self.objective == "tracking":
+        if self.goal == "regulation":
             terminal_sp = {"y_sp": [ysp[i, N - 1] for i in range(self.ny)]}
             J += self.terminal_weight * self._tracking_state_cost(x, terminal_sp)
         J += 1e4 * ca.sumsqr(slack)
@@ -429,6 +457,8 @@ class NMPCOracle:
         self._warm_target = None
         self.last_plan = None
         self.last_error = None
+        self.last_solve_status = None
+        self.last_solve_success = False
 
     def _fallback_action(self):
         """Move safely toward the model's nominal equilibrium action."""
@@ -437,7 +467,7 @@ class NMPCOracle:
 
     def _steady_action_target(self, target):
         resolver = getattr(self.model, "tracking_steady_state_action", None)
-        uses_setpoint = self.objective in {"tracking", "kpi", "robustness"}
+        uses_setpoint = self.goal == "regulation"
         values = resolver(target) if uses_setpoint and callable(resolver) else None
         if values is None:
             return self.u_init.copy()
@@ -521,7 +551,10 @@ class NMPCOracle:
                 ])
                 o.set_initial(self.U, Uw)
                 o.set_initial(self.slack, Sw)
-            sol = o.solve()
+            sol = o.solve_limited()
+            stats = sol.stats()
+            self.last_solve_status = str(stats.get("return_status", "unknown"))
+            self.last_solve_success = bool(stats.get("success", False))
             Xv = None if self.X is None else np.asarray(sol.value(self.X), float).reshape(self.nx, self.N + 1)
             Uv = np.asarray(sol.value(self.U), float).reshape(self.nu, self.N)
             Sv = np.asarray(sol.value(self.slack), float).reshape(1, self.N)
@@ -533,6 +566,8 @@ class NMPCOracle:
             self.last_error = None
         except Exception as e:
             self.last_error = e
+            self.last_solve_status = None
+            self.last_solve_success = False
             self.last_plan = None
             u = self._fallback_action()
         self.u_prev = np.asarray(u, float).reshape(-1)
@@ -558,6 +593,7 @@ class OracleAgent:
         self._last_plan_signature = None
         self.solve_count = 0
         self.solver_success_count = 0
+        self.solver_limited_count = 0
         self.solver_failure_count = 0
         self.fallback_count = 0
         self.last_solver_error = None
@@ -570,7 +606,8 @@ class OracleAgent:
                 "solve_every": self.solve_every,
                 "preview_setpoints": self.preview_setpoints,
                 "horizon": self.orc.N, "control_dt": self.orc.dt,
-                "objective": self.orc.objective,
+                "goal": self.orc.goal,
+                "reward_spec_id": self.orc.reward_spec_id,
                 "q_y": list(self.orc.q_y),
                 "r_move": self.orc.r_move,
                 "terminal_weight": self.orc.terminal_weight,
@@ -580,6 +617,10 @@ class OracleAgent:
                 "integration_substeps": self.orc.integration_substeps,
                 "ipopt_max_iter": self.orc.ipopt_max_iter,
                 "ipopt_tol": self.orc.ipopt_tol,
+                "ipopt_hessian_approximation": (
+                    self.orc.ipopt_hessian_approximation
+                ),
+                "last_solve_status": self.orc.last_solve_status,
                 "warm_start": self.orc.warm_start,
                 "transcription": self.orc.transcription,
                 "enforce_state_bounds": self.orc.enforce_state_bounds,
@@ -590,9 +631,15 @@ class OracleAgent:
         return {
             "solve_count": int(self.solve_count),
             "solver_success_count": int(self.solver_success_count),
+            "solver_limited_count": int(self.solver_limited_count),
             "solver_failure_count": int(self.solver_failure_count),
             "fallback_count": int(self.fallback_count),
-            "degraded": bool(self.solver_failure_count or self.fallback_count),
+            "degraded": bool(
+                self.solver_limited_count
+                or self.solver_failure_count
+                or self.fallback_count
+            ),
+            "last_solve_status": self.orc.last_solve_status,
             "last_solver_error": self.last_solver_error,
         }
 
@@ -604,6 +651,7 @@ class OracleAgent:
         self._last_plan_signature = None
         self.solve_count = 0
         self.solver_success_count = 0
+        self.solver_limited_count = 0
         self.solver_failure_count = 0
         self.fallback_count = 0
         self.last_solver_error = None
@@ -676,7 +724,10 @@ class OracleAgent:
             self._last_plan_signature = plan_signature
             self.solve_count += 1
             if self.orc.last_error is None:
-                self.solver_success_count += 1
+                if self.orc.last_solve_success:
+                    self.solver_success_count += 1
+                else:
+                    self.solver_limited_count += 1
             else:
                 self.solver_failure_count += 1
                 self.fallback_count += 1

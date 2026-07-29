@@ -16,18 +16,17 @@ import time
 
 from aiogym._internal.config import parse_seed_list
 from aiogym._internal.paths import run_path
-from aiogym._internal.vocabulary import OBJECTIVE_NAMES
+from aiogym.benchmarks import CaseMixtureEnv, evaluate_policy_on_track
 from aiogym.controllers import make_controller
-from aiogym.env import AIOGymNativeEnv
+from aiogym.env import AIOGymEnv
 from aiogym.evaluation import (
     evaluate_controller,
-    resolve_protocol,
     rollout_controller,
 )
 from aiogym.rl.training_config import (
     configure_training_auto_events,
-    configure_training_objective,
-    configure_training_task,
+    configure_training_case,
+    configure_training_track,
     training_identity,
 )
 from aiogym.rl.training_artifacts import (
@@ -41,10 +40,20 @@ from aiogym.rl.training_artifacts import (
 
 def make_training_env(args, rank: int = 0):
     def _init():
-        env = AIOGymNativeEnv(
+        track = getattr(args, "track_spec", None)
+        if track is not None:
+            env = CaseMixtureEnv(
+                track,
+                split="training",
+                worker_index=rank,
+                training=True,
+            )
+            env.reset(seed=args.seed)
+            return env
+        env = AIOGymEnv(
             args.scenario,
-            task=args.task,
-            reward_mode=args.resolved_reward_mode,
+            case=getattr(args, "case", None),
+            reward_spec=args.resolved_reward_spec_id,
             action_mode=args.action_mode,
             control_dt=args.control_dt,
             episode_steps=args.train_episode_steps,
@@ -61,8 +70,6 @@ def make_training_env(args, rank: int = 0):
             terminate_on_runaway=args.terminate_on_runaway,
             noise=args.noise,
             noise_pct=args.noise_pct,
-            tracking_q_y=args.tracking_q_y,
-            tracking_r_move=args.tracking_r_move,
         )
         env.reset(seed=args.seed + rank)
         return env
@@ -129,22 +136,57 @@ def build_algo(args, env):
 
 
 def evaluate_checkpoint(args, checkpoint_path: str):
-    protocol = resolve_protocol(
-        args.scenario,
-        args.eval_objective,
-        {
-            "action_mode": args.action_mode,
-            **({"task": args.task} if args.task else {}),
-            "episode_steps": args.eval_episode_steps,
-            "control_dt": args.control_dt,
-            "tracking_q_y": args.tracking_q_y,
-            "tracking_r_move": args.tracking_r_move,
-            "disturbance_obs": args.disturbance_obs,
-            "previous_action_obs": args.previous_action_obs,
-            "normalize_observations": args.normalize_observations,
-            "tracking_error_obs": args.tracking_error_obs,
-        },
-    )
+    if getattr(args, "track_spec", None) is not None:
+        controller = make_controller(
+            "sb3",
+            scenario=args.scenario,
+            config={
+                "path": checkpoint_path,
+                "algo": args.algo,
+                "action_mode": args.action_mode,
+            },
+        )
+        seeds = parse_seed_list(
+            args.eval_seed_list,
+            args.eval_seed,
+            args.eval_episodes,
+            option="--eval-seed-list",
+        )
+        evaluation = evaluate_policy_on_track(
+            controller,
+            args.track_spec,
+            split="test",
+            base_seeds=seeds,
+            include_episodes=True,
+        )
+        rollouts = []
+        if args.save_rollout:
+            for case in args.track_spec.resolved_cases("test"):
+                env = AIOGymEnv(
+                    args.scenario,
+                    case=case.profile,
+                    reward_spec=args.reward_spec,
+                )
+                try:
+                    rollout = rollout_controller(
+                        controller,
+                        env,
+                        seed=seeds[0],
+                        max_steps=args.rollout_steps,
+                    )
+                finally:
+                    env.close()
+                rollout.update(
+                    {
+                        "track_id": args.track,
+                        "track_split": "test",
+                        "case_id": case.case_id,
+                        "resolved_case_hash": case.resolved_case_hash,
+                    }
+                )
+                rollouts.append(rollout)
+        return args.track_spec, evaluation, rollouts
+
     controller = make_controller(
         "sb3",
         scenario=args.scenario,
@@ -160,44 +202,91 @@ def evaluate_checkpoint(args, checkpoint_path: str):
         args.eval_episodes,
         option="--eval-seed-list",
     )
+    evaluation_env = AIOGymEnv(
+        args.scenario,
+        case=getattr(args, "case", None),
+        reward_spec=args.resolved_reward_spec_id,
+        action_mode=args.action_mode,
+        episode_steps=args.eval_episode_steps,
+        control_dt=args.control_dt,
+    )
     result = evaluate_controller(
         controller,
-        protocol.make_env(),
+        evaluation_env,
         episodes=len(seeds),
         seed=seeds[0],
         seed_list=seeds,
-        protocol=protocol,
+        goal_specification=args.goal,
         include_episodes=True,
     )
     rollout = None
     if args.save_rollout:
+        rollout_env = AIOGymEnv(
+            args.scenario,
+            case=getattr(args, "case", None),
+            reward_spec=args.resolved_reward_spec_id,
+            action_mode=args.action_mode,
+            episode_steps=args.eval_episode_steps,
+            control_dt=args.control_dt,
+        )
         rollout = rollout_controller(
             controller,
-            protocol.make_env(),
+            rollout_env,
             seed=seeds[0],
             max_steps=args.rollout_steps,
-            protocol=protocol,
         )
-    return protocol, result, rollout
+        rollout_env.close()
+    evaluation = {
+        "split": "test",
+        "case_count": 1,
+        "results": [result],
+        "aggregate": {
+            "metric": result["metric"],
+            "metric_direction": result["metric_direction"],
+            "metric_value": result[result["metric"]],
+            "case_count": 1,
+            "ranking_eligible": result.get("ranking_eligible", True),
+        },
+    }
+    return None, evaluation, [rollout] if rollout is not None else []
 
 
 def evaluate_training_policy(args, model, step: int, phase: str = "eval"):
-    protocol = resolve_protocol(
-        args.scenario,
-        args.eval_objective,
-        {
-            "action_mode": args.action_mode,
-            **({"task": args.task} if args.task else {}),
-            "episode_steps": args.eval_episode_steps,
-            "control_dt": args.control_dt,
-            "tracking_q_y": args.tracking_q_y,
-            "tracking_r_move": args.tracking_r_move,
-            "disturbance_obs": args.disturbance_obs,
-            "previous_action_obs": args.previous_action_obs,
-            "normalize_observations": args.normalize_observations,
-            "tracking_error_obs": args.tracking_error_obs,
-        },
-    )
+    if getattr(args, "track_spec", None) is not None:
+        controller = make_controller(
+            "sb3",
+            scenario=args.scenario,
+            policy=model,
+            config={
+                "algo": args.algo,
+                "action_mode": args.action_mode,
+                "name": f"SB3-{args.algo.upper()}",
+            },
+        )
+        seeds = parse_seed_list(
+            args.eval_seed_list,
+            args.eval_seed,
+            args.learning_curve_episodes,
+            option="--eval-seed-list",
+        )
+        evaluation = evaluate_policy_on_track(
+            controller,
+            args.track_spec,
+            split="validation",
+            base_seeds=seeds,
+            include_episodes=False,
+        )
+        aggregate = evaluation["aggregate"]
+        row = {
+            "step": int(step),
+            "phase": phase,
+            **aggregate,
+            "track_id": args.track,
+            "track_split": "validation",
+            "seed_namespace": evaluation["seed_namespace"],
+        }
+        return row
+
     controller = make_controller(
         "sb3",
         scenario=args.scenario,
@@ -214,7 +303,14 @@ def evaluate_training_policy(args, model, step: int, phase: str = "eval"):
         args.learning_curve_episodes,
         option="--eval-seed-list",
     )
-    env = protocol.make_env()
+    env = AIOGymEnv(
+        args.scenario,
+        case=getattr(args, "case", None),
+        reward_spec=args.resolved_reward_spec_id,
+        action_mode=args.action_mode,
+        episode_steps=args.eval_episode_steps,
+        control_dt=args.control_dt,
+    )
     try:
         result = evaluate_controller(
             controller,
@@ -222,7 +318,7 @@ def evaluate_training_policy(args, model, step: int, phase: str = "eval"):
             episodes=len(seeds),
             seed=seeds[0],
             seed_list=seeds,
-            protocol=protocol,
+            goal_specification=args.goal,
             include_episodes=False,
         )
     finally:
@@ -244,10 +340,10 @@ def training_metadata(
     metadata = {
         "algo": args.algo,
         "scenario": args.scenario,
-        "task": args.task,
+        "case": args.case,
         "action_mode": args.action_mode,
-        "objective": args.objective,
-        "resolved_reward_mode": args.resolved_reward_mode,
+        "goal": args.goal,
+        "reward_spec_id": args.resolved_reward_spec_id,
         "total_timesteps": args.steps,
         "seed": args.seed,
         "n_envs": args.n_envs,
@@ -266,8 +362,6 @@ def training_metadata(
         "learning_curve_every": args.learning_curve_every,
         "learning_curve_episodes": args.learning_curve_episodes,
         "save_rollout": args.save_rollout,
-        "tracking_q_y": args.tracking_q_y,
-        "tracking_r_move": args.tracking_r_move,
         "disturbance_obs": args.disturbance_obs,
         "previous_action_obs": args.previous_action_obs,
         "normalize_observations": args.normalize_observations,
@@ -287,13 +381,59 @@ def training_metadata(
             "noise": args.noise,
             "noise_pct": args.noise_pct,
             "control_dt": args.control_dt,
-            "task": args.task,
-            "tracking_q_y": args.tracking_q_y,
-            "tracking_r_move": args.tracking_r_move,
+            "case": args.case,
         },
         "checkpoint_path": checkpoint_path,
         "checkpoint_selection": checkpoint_selection,
     }
+    track = getattr(args, "track_spec", None)
+    metadata.update(
+        {
+            "track_id": track.id if track is not None else None,
+            "track_hash": track.track_hash if track is not None else None,
+            "goal": getattr(args, "goal", None),
+            "reward_spec_id": getattr(
+                args,
+                "resolved_reward_spec_id",
+                None,
+            ),
+            "policy_scope": getattr(
+                args,
+                "policy_scope",
+                "specialist",
+            ),
+            "training_seed_namespace": getattr(
+                args,
+                "training_seed_namespace",
+                None,
+            ),
+            "validation_seed_namespace": getattr(
+                args,
+                "validation_seed_namespace",
+                None,
+            ),
+            "test_seed_namespace": getattr(
+                args,
+                "test_seed_namespace",
+                None,
+            ),
+            "training_seed_namespace_hash": getattr(
+                args,
+                "training_seed_namespace_hash",
+                None,
+            ),
+            "validation_seed_namespace_hash": getattr(
+                args,
+                "validation_seed_namespace_hash",
+                None,
+            ),
+            "test_seed_namespace_hash": getattr(
+                args,
+                "test_seed_namespace_hash",
+                None,
+            ),
+        }
+    )
     if final_checkpoint_path is not None:
         metadata["final_checkpoint_path"] = final_checkpoint_path
     if best_checkpoint_path is not None:
@@ -312,10 +452,9 @@ def artifact_dir_for(args, run_name: str) -> str:
 def run_name_for(args, run_id: str | None = None) -> str:
     if args.name:
         return args.name
-    objective = getattr(args, "objective", None) or "kpi"
     stem = (
-        f"{args.algo}_{training_identity(args)}_{args.action_mode}_"
-        f"{objective}_seed{args.seed}"
+        f"{args.algo}_{training_identity(args)}_"
+        f"training-seed{args.seed}"
     )
     return f"{stem}_{run_id or utc_run_id()}"
 
@@ -404,69 +543,102 @@ def require_onnx_export_dependencies():
 
 def main(argv=None, prog=None):
     ap = argparse.ArgumentParser(prog=prog)
-    ap.add_argument("--scenario", default="cstr")
-    ap.add_argument("--task", default=None, help="named scenario task profile")
-    ap.add_argument("--algo", default="sac", choices=["sac", "ppo", "td3"])
-    ap.add_argument("--action-mode", default="actuator", choices=["actuator", "setpoint"])
     ap.add_argument(
-        "--objective",
+        "--track",
         default=None,
-        choices=OBJECTIVE_NAMES,
-        help="training objective; task-owned when available, otherwise kpi",
+        help=(
+            "official benchmark track ID; when no custom selectors are "
+            "provided, the default official track is used"
+        ),
     )
-    ap.add_argument("--steps", type=int, default=10000)
+    ap.add_argument("--scenario", default=None)
+    ap.add_argument("--case", default=None, help="custom specialist Case v2 ID")
+    ap.add_argument("--goal", choices=["regulation", "economic"], default=None)
+    ap.add_argument("--reward-spec", default=None)
+    ap.add_argument(
+        "--policy-scope",
+        choices=["generalist", "specialist"],
+        default=None,
+    )
+    ap.add_argument("--algo", default="sac", choices=["sac", "ppo", "td3"])
+    ap.add_argument("--action-mode", default=None, choices=["actuator", "setpoint"])
+    ap.add_argument("--steps", type=int, default=None)
     ap.add_argument("--n-envs", type=int, default=default_n_envs())
     ap.add_argument("--vec-env", default="subproc", choices=["subproc", "dummy"],
                     help="parallel rollout backend; subproc gives one process per env")
     ap.add_argument("--subproc-start-method", default="fork", choices=["fork", "forkserver", "spawn"],
                     help="multiprocessing start method for SubprocVecEnv")
     ap.add_argument("--train-episode-steps", type=int, default=None,
-                    help="override task episode length; task/default owns it when omitted")
+                    help="override case episode length; case/default owns it when omitted")
     ap.add_argument("--seed", type=int, default=1000)
     ap.add_argument("--control-dt", type=float, default=None,
-                    help="override task control interval; task/default owns it when omitted")
-    ap.add_argument("--tracking-q-y", type=float, default=None,
-                    help="override scalar tracking weight Q; task-owned when omitted")
-    ap.add_argument("--tracking-r-move", type=float, default=None,
-                    help="override move weight R; task-owned when omitted")
+                    help="override case control interval; case/default owns it when omitted")
     ap.add_argument(
         "--auto-events",
         action="store_true",
         default=None,
         help="enable generic automatically generated within-episode events",
     )
-    ap.add_argument("--randomize", action="store_true")
-    ap.add_argument("--randomize-setpoints", action="store_true")
-    ap.add_argument("--randomize-plant", action="store_true")
-    ap.add_argument("--plant-drift", action="store_true")
-    ap.add_argument("--integral-obs", action="store_true")
+    ap.add_argument(
+        "--randomize",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    ap.add_argument(
+        "--randomize-setpoints",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    ap.add_argument(
+        "--randomize-plant",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    ap.add_argument(
+        "--plant-drift",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    ap.add_argument(
+        "--integral-obs",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
     ap.add_argument(
         "--disturbance-obs",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="include current disturbances in the policy observation; task-owned when omitted",
+        help="include current disturbances in the policy observation; case-owned when omitted",
     )
     ap.add_argument(
         "--previous-action-obs",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="include the previous applied action; task-owned when omitted",
+        help="include the previous applied action; case-owned when omitted",
     )
     ap.add_argument(
         "--normalize-observations",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="scale observations with fixed physical bounds; task-owned when omitted",
+        help="scale observations with fixed physical bounds; case-owned when omitted",
     )
     ap.add_argument(
         "--tracking-error-obs",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="replace setpoints with normalized tracking errors; task-owned when omitted",
+        help="replace setpoints with normalized tracking errors; case-owned when omitted",
     )
-    ap.add_argument("--terminate-on-runaway", action="store_true")
-    ap.add_argument("--noise", action="store_true")
-    ap.add_argument("--noise-pct", type=float, default=0.01)
+    ap.add_argument(
+        "--terminate-on-runaway",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    ap.add_argument(
+        "--noise",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    ap.add_argument("--noise-pct", type=float, default=None)
     ap.add_argument("--learning-rate", type=float, default=3e-4)
     ap.add_argument(
         "--gamma",
@@ -500,15 +672,9 @@ def main(argv=None, prog=None):
     ap.add_argument("--name", default=None, help="stable run name; defaults to a timestamped name")
     ap.add_argument("--artifact-dir", default=None,
                     help="standard benchmark artifact directory; defaults to <out-dir>/<name>_artifacts")
-    ap.add_argument(
-        "--eval-objective",
-        default=None,
-        choices=OBJECTIVE_NAMES,
-        help="evaluation objective; defaults to the training objective",
-    )
-    ap.add_argument("--eval-episodes", type=int, default=3)
+    ap.add_argument("--eval-episodes", type=int, default=1)
     ap.add_argument("--eval-episode-steps", type=int, default=None,
-                    help="override evaluation episode length; task owns it when omitted")
+                    help="override evaluation episode length; case owns it when omitted")
     ap.add_argument("--eval-seed", type=int, default=9000)
     ap.add_argument("--eval-seed-list", default=None)
     ap.add_argument("--learning-curve-every", type=int, default=10000,
@@ -526,9 +692,10 @@ def main(argv=None, prog=None):
     args = ap.parse_args(argv)
     if not 0.0 < args.gamma <= 1.0:
         ap.error("--gamma must be in (0, 1]")
-    configure_training_objective(args)
+    configure_training_track(args)
     configure_training_auto_events(args)
-    configure_training_task(args)
+    if args.track_spec is None:
+        configure_training_case(args)
     if args.onnx:
         require_onnx_export_dependencies()
 
@@ -561,7 +728,8 @@ def main(argv=None, prog=None):
     print(
         f"training {args.algo.upper()} | {args.n_envs} {args.vec_env} envs | "
         f"device={args.device} | action={args.action_mode} | "
-        f"objective={args.objective} | reward={args.resolved_reward_mode}"
+        f"track={args.track or 'custom'} | goal={args.goal} | "
+        f"reward={args.reward_spec}"
     )
     curve_callback = make_learning_curve_callback(args, checkpoint_path)
     initial_curve_point = evaluate_training_policy(args, model, 0, phase="initial")
@@ -589,13 +757,13 @@ def main(argv=None, prog=None):
         model.save(checkpoint_path)
         checkpoint_selection = "final"
     else:
-        checkpoint_selection = "best-evaluation"
+        checkpoint_selection = "best-validation"
     checkpoint_zip = f"{checkpoint_path}.zip"
     onnx_path = None
     if args.onnx:
         onnx_path = args.onnx_path or f"{checkpoint_path}.onnx"
         export_model = model
-        if checkpoint_selection == "best-evaluation":
+        if checkpoint_selection == "best-validation":
             algorithm_class = type(model)
             export_model = algorithm_class.load(
                 checkpoint_zip,
@@ -604,7 +772,10 @@ def main(argv=None, prog=None):
         export_onnx(export_model, env.observation_space.shape[0], onnx_path)
     env.close()
 
-    protocol, result, rollout = evaluate_checkpoint(args, checkpoint_zip)
+    evaluation_spec, evaluation, rollouts = evaluate_checkpoint(
+        args,
+        checkpoint_zip,
+    )
     training = training_metadata(
         args,
         checkpoint_zip,
@@ -623,24 +794,51 @@ def main(argv=None, prog=None):
         learning_curve[-1] = final_curve_point
     else:
         learning_curve.append(final_curve_point)
+    results = evaluation["results"]
+    aggregate = evaluation["aggregate"]
+    evaluation_metadata = (
+        evaluation_spec.metadata()
+        if evaluation_spec is not None
+        else {
+            "scenario": args.scenario,
+            "case": args.case,
+            "goal": args.goal,
+            "reward_spec_id": args.resolved_reward_spec_id,
+        }
+    )
     artifact_payload = rl_payload(
         kind="sb3_train_eval",
         scenario=args.scenario,
-        objective=protocol.objective,
+        goal=args.goal,
         action_mode=args.action_mode,
         training=training,
-        protocol=protocol.metadata(),
-        results=[result],
-        rows=[result_row(
-            result,
-            scenario=args.scenario,
-            action_mode=args.action_mode,
-            controller=f"SB3-{args.algo.upper()}",
-            suite_case=f"{protocol.objective}:{args.scenario}:sb3_{args.algo}",
-        )],
+        evaluation=evaluation_metadata,
+        results=results,
+        rows=[
+            result_row(
+                result,
+                scenario=args.scenario,
+                action_mode=args.action_mode,
+                controller=f"SB3-{args.algo.upper()}",
+                run_case_id=(
+                    f"{args.track}:{result.get('case_id')}:sb3_{args.algo}"
+                    if args.track_spec is not None
+                    else (
+                        f"{args.goal}:{args.scenario}:"
+                        f"sb3_{args.algo}"
+                    )
+                ),
+            )
+            for result in results
+        ],
         learning_curve=learning_curve,
-        rollouts=[rollout] if rollout is not None else [],
+        rollouts=rollouts,
         extra={
+            "track_evaluation": (
+                evaluation
+                if args.track_spec is not None
+                else None
+            ),
             "training_runtime": {
                 "seconds": train_seconds,
                 "steps_per_second": args.steps / train_seconds if train_seconds > 0 else None,
@@ -650,7 +848,7 @@ def main(argv=None, prog=None):
     )
     write_rl_artifacts(artifact_dir_for(args, run_name), artifact_payload)
 
-    metric = result["metric"]
+    metric = aggregate["metric"]
     print(f"saved selected checkpoint {checkpoint_zip} ({checkpoint_selection})")
     print(f"saved final checkpoint {final_checkpoint_zip}")
     if onnx_path is not None:
@@ -662,9 +860,9 @@ def main(argv=None, prog=None):
             f"({args.n_envs} envs x {args.steps / train_seconds / args.n_envs:.1f}/env/s)"
         )
     print(
-        f"eval {metric}={result[metric]:.3f} score={result['normalized_score']:.3f} "
-        f"profit={result['profit']:.3f} track={result['track']:.3f} "
-        f"safety={result['constraint_violation_count']:.1f}"
+        f"eval {metric}={aggregate['metric_value']:.3f} "
+        f"cases={aggregate['case_count']} "
+        f"eligible={aggregate['ranking_eligible']}"
     )
 
 

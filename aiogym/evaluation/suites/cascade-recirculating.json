@@ -1,7 +1,0 @@
-{
-  "description": "Formal recirculating heated-tank tasks evaluated under each task's declared default objective.",
-  "scenarios": ["cascade-recirculating"],
-  "controllers": ["pid", "mpc"],
-  "action_mode": "actuator",
-  "tasks": "ALL_TASKS"
-}

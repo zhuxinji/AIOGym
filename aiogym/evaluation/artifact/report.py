@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import csv
+import gzip
 import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .paths import resolve_artifact_path
+from .tables import _leaderboard, _tracking_comparison_rows
 
 
 REPORT_SCHEMA_VERSION = "aiogym.offline_report.v1"
@@ -18,16 +20,44 @@ def render_benchmark_report(artifact_dir: str | Path, out_path: str | Path | Non
     root = Path(artifact_dir)
     benchmark = _read_json(root / "benchmark.json")
     artifacts = dict(benchmark.get("artifacts") or {})
-    leaderboard = _read_json(_artifact_path(root, artifacts, "leaderboard", "summary/leaderboard.json"), default=[])
-    objective_report = _read_json(_artifact_path(root, artifacts, "report", "results/report.json"), default={})
-    summary_path = _artifact_path(root, artifacts, "all_summary_csv", "summary/all_summary.csv")
+    benchmark_rows = list(benchmark.get("rows") or [])
+    leaderboard = _leaderboard(benchmark_rows)
+    if not leaderboard:
+        leaderboard = _read_json(
+            _artifact_path(
+                root,
+                artifacts,
+                "leaderboard",
+                "summary/leaderboard.json",
+            ),
+            default=[],
+        )
+    goal_report = benchmark.get("report") or _read_json(
+        _artifact_path(root, artifacts, "report", "results/report.json"),
+        default={},
+    )
+    summary_path = _artifact_path(
+        root,
+        artifacts,
+        "summary_csv",
+        "data/summary.csv",
+    )
     if not summary_path.exists():
-        summary_path = _artifact_path(root, artifacts, "summary_csv", "summary/summary.csv")
+        summary_path = root / "summary" / "summary.csv"
     summary_rows = _read_csv(summary_path)
-    tracking_comparison = _read_csv(_artifact_path(root, artifacts, "tracking_comparison", "summary/tracking_comparison.csv"))
+    tracking_comparison = _tracking_comparison_rows(benchmark_rows)
+    if not tracking_comparison:
+        tracking_comparison = _read_csv(
+            _artifact_path(
+                root,
+                artifacts,
+                "tracking_comparison",
+                "summary/tracking_comparison.csv",
+            )
+        )
     model_manifest = _read_model_metadata_manifest(root, artifacts)
 
-    title = benchmark.get("suite") or benchmark.get("scenario") or benchmark.get("benchmark", "benchmark")
+    title = benchmark.get("track") or benchmark.get("scenario") or benchmark.get("benchmark", "benchmark")
     lines = [
         f"# AIO-Gym Benchmark Report: {title}",
         "",
@@ -39,14 +69,14 @@ def render_benchmark_report(artifact_dir: str | Path, out_path: str | Path | Non
     ]
     lines.extend(_markdown_table(["Field", "Value"], _summary_rows(benchmark, summary_rows, model_manifest)))
     lines.extend(["", "## Scenario Coverage", ""])
-    lines.extend(_scenario_section(benchmark, model_manifest))
+    lines.extend(_scenario_section(benchmark, model_manifest, artifacts))
     if tracking_comparison:
         lines.extend(["", "## Tracking Comparison", ""])
         lines.extend(_tracking_comparison_section(tracking_comparison))
     lines.extend(["", "## Leaderboard", ""])
     lines.extend(_leaderboard_sections(leaderboard))
-    lines.extend(["", "## Objective Report", ""])
-    lines.extend(_objective_section(objective_report))
+    lines.extend(["", "## Scorecard Report", ""])
+    lines.extend(_goal_section(goal_report))
     lines.extend(["", "## Stable Inputs", ""])
     lines.extend(_artifact_section(root, benchmark, artifacts))
     lines.append("")
@@ -60,17 +90,17 @@ def render_benchmark_report(artifact_dir: str | Path, out_path: str | Path | Non
 
 def _summary_rows(benchmark: Mapping[str, Any], summary_rows: Sequence[Mapping[str, str]],
                   model_manifest: Mapping[str, Any] | None) -> list[list[str]]:
-    suite_config = benchmark.get("suite_config") or {}
+    track_config = benchmark.get("track_config") or {}
     counts = benchmark.get("counts") or {}
     scenarios = _scenario_names(benchmark, model_manifest)
-    objectives = suite_config.get("objectives") or sorted({row.get("objective", "") for row in summary_rows if row.get("objective")})
-    controllers = suite_config.get("controllers") or sorted({row.get("controller", "") for row in summary_rows if row.get("controller")})
+    goals = track_config.get("goals") or sorted({row.get("goal", "") for row in summary_rows if row.get("goal")})
+    controllers = track_config.get("controllers") or sorted({row.get("controller", "") for row in summary_rows if row.get("controller")})
     rows = [
         ["Benchmark", benchmark.get("benchmark", "")],
         ["Created At", benchmark.get("created_at", "")],
-        ["Suite", benchmark.get("suite", benchmark.get("scenario", ""))],
+        ["Track", benchmark.get("track_id", benchmark.get("scenario", ""))],
         ["Scenarios", ", ".join(str(item) for item in scenarios)],
-        ["Objectives", ", ".join(str(item) for item in objectives)],
+        ["Goals", ", ".join(str(item) for item in goals)],
         ["Controllers", ", ".join(str(item) for item in controllers)],
         ["Rows", str(len(benchmark.get("rows") or []) or len(summary_rows))],
     ]
@@ -85,18 +115,23 @@ def _summary_rows(benchmark: Mapping[str, Any], summary_rows: Sequence[Mapping[s
     return rows
 
 
-def _scenario_section(benchmark: Mapping[str, Any], model_manifest: Mapping[str, Any] | None) -> list[str]:
+def _scenario_section(
+    benchmark: Mapping[str, Any],
+    model_manifest: Mapping[str, Any] | None,
+    artifacts: Mapping[str, Any],
+) -> list[str]:
     scenarios = _scenario_names(benchmark, model_manifest)
     if not scenarios:
         return ["No scenario metadata was found."]
     rows = []
     models = dict((model_manifest or {}).get("models") or {})
+    single_model = artifacts.get("model_metadata") or "data/model_metadata.json"
     for scenario in scenarios:
         rows.append([
             scenario,
             _rel(models.get(scenario, ""))
             if scenario in models
-            else "metadata/model_metadata.json",
+            else _rel(single_model),
         ])
     return _markdown_table(["Scenario", "Model Metadata"], rows)
 
@@ -104,8 +139,8 @@ def _scenario_section(benchmark: Mapping[str, Any], model_manifest: Mapping[str,
 def _leaderboard_sections(leaderboard) -> list[str]:
     if isinstance(leaderboard, Mapping):
         lines = []
-        for objective, rows in leaderboard.items():
-            lines.extend([f"### {objective}", ""])
+        for goal, rows in leaderboard.items():
+            lines.extend([f"### {goal}", ""])
             lines.extend(_leaderboard_section(rows if isinstance(rows, list) else []))
             lines.append("")
         return lines[:-1] if lines else ["No leaderboard rows were found."]
@@ -113,31 +148,67 @@ def _leaderboard_sections(leaderboard) -> list[str]:
 
 
 def _tracking_comparison_section(rows: Sequence[Mapping[str, Any]]) -> list[str]:
-    preferred = ["scenario", "task", "best_controller", "best_tracking_cost", "best_runtime_total_seconds", "oracle_gap_vs_best"]
+    preferred = [
+        "scenario",
+        "case",
+        "best_controller",
+        "best_tracking_cost",
+        "best_runtime_seconds",
+        "oracle_gap_vs_best",
+    ]
     controller_columns = [
         key for key in rows[0].keys()
-        if key.endswith("_tracking_cost") or key.endswith("_runtime_total_seconds")
+        if key.endswith("_tracking_cost") or key.endswith("_runtime_seconds")
     ] if rows else []
     columns = preferred + [key for key in controller_columns if key not in preferred]
     table_rows = []
     for row in rows:
         table_rows.append([
-            _fmt(row.get(column)) if not column.endswith(("_tracking_cost", "_runtime_total_seconds")) and column != "oracle_gap_vs_best"
+            _fmt(row.get(column))
+            if not column.endswith(("_tracking_cost", "_runtime_seconds"))
+            and column != "oracle_gap_vs_best"
             else _fmt_number(row.get(column))
             for column in columns
         ])
-    return _markdown_table(columns, table_rows)
+    return _markdown_table(
+        [_tracking_comparison_header(column) for column in columns],
+        table_rows,
+    )
+
+
+def _tracking_comparison_header(column: str) -> str:
+    labels = {
+        "scenario": "Scenario",
+        "case": "Case",
+        "best_controller": "Best controller",
+        "best_tracking_cost": "Best tracking goal",
+        "best_runtime_seconds": "Best runtime (s)",
+        "oracle_gap_vs_best": "Oracle gap vs best",
+    }
+    if column in labels:
+        return labels[column]
+    if column.endswith("_tracking_cost"):
+        return (
+            column[: -len("_tracking_cost")]
+            + " tracking goal"
+        )
+    if column.endswith("_runtime_seconds"):
+        return (
+            column[: -len("_runtime_seconds")]
+            + " runtime (s)"
+        )
+    return column
 
 
 def _tracking_benchmark_case_count(rows: Sequence[Mapping[str, Any]]) -> int:
-    """Count distinct scenario/task cases represented by successful tracking rows."""
+    """Count distinct scenario/case cases represented by successful tracking rows."""
     return len({
         (
             str(row.get("scenario") or "benchmark"),
-            str(row.get("task") or "default"),
+            str(row.get("case") or "default"),
         )
         for row in rows
-        if row.get("objective") == "tracking" and row.get("execution_status") != "failed"
+        if row.get("goal") == "regulation" and row.get("execution_status") != "failed"
     })
 
 
@@ -149,43 +220,63 @@ def _leaderboard_section(leaderboard: Sequence[Mapping[str, Any]]) -> list[str]:
         rows.append([
             _fmt(row.get("rank")),
             _fmt(row.get("scenario")),
-            _fmt(row.get("task", "default")),
-            _fmt(row.get("objective")),
+            _fmt(row.get("case", "default")),
+            _fmt(row.get("goal")),
             _fmt(row.get("controller")),
             _fmt(row.get("execution_status")),
-            _fmt(row.get("objective_status", "not-defined")),
-            _fmt(row.get("metric")),
+            _fmt(row.get("acceptance_status", "not-defined")),
+            _display_metric(row.get("metric")),
             _fmt_number(row.get("metric_value")),
-            _fmt_number(row.get("normalized_score")),
+            _fmt_number(row.get("official_score")),
             _fmt_number(row.get("profit")),
             _fmt_number(row.get("constraint_violation_count")),
         ])
     return _markdown_table(
-        ["Rank", "Scenario", "Task", "Objective", "Controller", "Execution", "Objective Status", "Metric", "Value", "KPI", "Profit", "Violations"],
+        [
+            "Rank",
+            "Scenario",
+            "Case",
+            "Objective",
+            "Controller",
+            "Execution",
+            "Acceptance",
+            "Metric",
+            "Value",
+            "Legacy KPI",
+            "Profit",
+            "Violations",
+        ],
         rows,
     )
 
 
-def _objective_section(report: Mapping[str, Any]) -> list[str]:
+def _goal_section(report: Mapping[str, Any]) -> list[str]:
     if not report:
-        return ["No objective-grouped report was found."]
+        return ["No grouped scorecard report was found."]
+    groups = report.get("scorecard")
+    if isinstance(groups, Mapping):
+        report = groups
     rows = []
-    for objective, entries in report.items():
+    for goal, entries in report.items():
         if not isinstance(entries, list):
             continue
-        metrics = _objective_metrics(entries)
-        rows.append([str(objective), str(len(entries)), ", ".join(metrics)])
-    return _markdown_table(["Objective", "Entries", "Primary Metrics"], rows) if rows else ["No objective entries were found."]
+        metrics = _goal_metrics(entries)
+        rows.append([str(goal), str(len(entries)), ", ".join(metrics)])
+    return (
+        _markdown_table(["Group", "Entries", "Metrics"], rows)
+        if rows
+        else ["No scorecard entries were found."]
+    )
 
 
-def _objective_metrics(entries: Sequence[Mapping[str, Any]]) -> list[str]:
+def _goal_metrics(entries: Sequence[Mapping[str, Any]]) -> list[str]:
     preferred = [
         "tracking_cost",
         "tracking_iae",
         "profit",
         "constraint_violation_count",
         "return",
-        "normalized_score",
+        "official_score",
         "energy_kwh",
     ]
     keys = set()
@@ -195,27 +286,33 @@ def _objective_metrics(entries: Sequence[Mapping[str, Any]]) -> list[str]:
         for key in preferred:
             if key in entry:
                 keys.add(key)
-    return [key for key in preferred if key in keys] + sorted(keys.difference(preferred))
+    ordered = (
+        [key for key in preferred if key in keys]
+        + sorted(keys.difference(preferred))
+    )
+    return [_display_metric(key) for key in ordered]
+
+
+def _display_metric(metric: Any) -> str:
+    return (
+        "tracking goal"
+        if metric == "tracking_cost"
+        else _fmt(metric)
+    )
 
 
 def _artifact_section(root: Path, benchmark: Mapping[str, Any], artifacts: Mapping[str, str]) -> list[str]:
     keys = [
         ("benchmark", "benchmark.json"),
-        ("summary_csv", "summary/summary.csv"),
-        ("tracking_comparison", "summary/tracking_comparison.csv"),
-        ("tracking_comparison_figure", "figures/tracking_comparison.svg"),
-        ("rollouts", "rollouts/rollouts.json"),
-        ("leaderboard", "summary/leaderboard.json"),
-        ("all_summary_csv", "summary/all_summary.csv"),
-        ("all_leaderboard", "summary/all_leaderboard.json"),
-        ("report", "results/report.json"),
-        ("model_metadata_manifest", "metadata/models/manifest.json"),
-        ("model_metadata", "metadata/model_metadata.json"),
-        ("training", "training/training.json"),
-        ("learning_curve", "training/learning_curve.json"),
-        ("learning_curve_csv", "training/learning_curve.csv"),
-        ("summary_figure", "figures/summary.svg"),
-        ("leaderboard_figure", "figures/leaderboard.svg"),
+        ("summary_csv", "data/summary.csv"),
+        ("rollouts", "data/rollouts.json.gz"),
+        ("model_metadata_manifest", "data/models/manifest.json"),
+        ("model_metadata", "data/model_metadata.json"),
+        ("training", "data/training.json"),
+        ("learning_curve", "data/learning_curve.json"),
+        ("learning_curve_csv", "data/learning_curve.csv"),
+        ("comparison_figure", "figures/comparison.svg"),
+        ("tracking_figure", "figures/tracking.svg"),
         ("learning_curve_figure", "figures/learning_curve.svg"),
     ]
     rows = []
@@ -223,11 +320,15 @@ def _artifact_section(root: Path, benchmark: Mapping[str, Any], artifacts: Mappi
         path = _artifact_path(root, artifacts, key, default)
         if path.exists():
             rows.append([key, _rel(path)])
-    rows.extend(_artifact_mapping_rows(root, artifacts, "summary_csvs"))
-    rows.extend(_artifact_mapping_rows(root, artifacts, "leaderboards"))
     rows.extend(_artifact_mapping_rows(root, artifacts, "summary_figures"))
-    rows.extend(_artifact_mapping_rows(root, artifacts, "tracking_control_figures"))
-    rows.extend(_artifact_mapping_rows(root, artifacts, "leaderboard_figures"))
+    if not artifacts.get("tracking_figure"):
+        rows.extend(
+            _artifact_mapping_rows(
+                root,
+                artifacts,
+                "tracking_control_figures",
+            )
+        )
     if not rows and benchmark.get("artifacts"):
         rows = [[key, _rel(value)] for key, value in sorted(artifacts.items())]
     return _markdown_table(["Input", "Path"], rows)
@@ -261,9 +362,9 @@ def _scenario_names(benchmark: Mapping[str, Any], model_manifest: Mapping[str, A
         return [str(item) for item in model_manifest["scenarios"]]
     if benchmark.get("scenario"):
         return [str(benchmark["scenario"])]
-    suite_config = benchmark.get("suite_config") or {}
-    if suite_config.get("scenarios"):
-        return [str(item) for item in suite_config["scenarios"]]
+    track_config = benchmark.get("track_config") or {}
+    if track_config.get("scenarios"):
+        return [str(item) for item in track_config["scenarios"]]
     return list(dict.fromkeys(str(row["scenario"]) for row in benchmark.get("rows", []) if row.get("scenario")))
 
 
@@ -274,7 +375,7 @@ def _read_model_metadata_manifest(
         root,
         artifacts,
         "model_metadata_manifest",
-        "metadata/models/manifest.json",
+        "data/models/manifest.json",
     )
     if path.exists():
         return _read_json(path)
@@ -293,7 +394,8 @@ def _read_json(path: Path, default=None):
         if default is not None:
             return default
         raise FileNotFoundError(path)
-    with path.open() as f:
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt", encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -344,6 +446,9 @@ def _rel(path) -> str:
     if not path:
         return ""
     raw = str(path)
+    marker = "/data/"
+    if marker in raw:
+        return "data/" + raw.split(marker, 1)[1]
     marker = "/metadata/"
     if marker in raw:
         return "metadata/" + raw.split(marker, 1)[1]

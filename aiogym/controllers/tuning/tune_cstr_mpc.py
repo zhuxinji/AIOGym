@@ -4,14 +4,14 @@ from __future__ import annotations
 import itertools
 
 from aiogym.controllers import make_controller
-from aiogym.env import AIOGymNativeEnv
+from aiogym.env import AIOGymEnv
 from aiogym.evaluation import evaluate_controller
 
 
 def make_env(episode_steps: int = 400):
-    return AIOGymNativeEnv(
+    return AIOGymEnv(
         "cstr",
-        reward_mode="tracking",
+        reward_spec="regulation-v1",
         control_dt=0.5,
         episode_steps=episode_steps,
         auto_events=True,
@@ -25,7 +25,7 @@ def make_env(episode_steps: int = 400):
     )
 
 
-def eval_agent(agent, episodes: int = 16):
+def eval_agent(agent, episodes: int = 1):
     return evaluate_controller(agent, make_env(), episodes=episodes)
 
 
@@ -44,7 +44,14 @@ def main():
     results = []
     for values in itertools.product(*(grid[k] for k in keys)):
         params = dict(zip(keys, values))
-        rep = eval_agent(make_controller("mpc", scenario="cstr", config=params), episodes=coarse_episodes)
+        config = {
+            "case": "cstr-tuning",
+            "policy_scope": "specialist",
+            "goal": "regulation",
+            "reward_spec": "regulation-v1",
+            "parameters": params,
+        }
+        rep = eval_agent(make_controller("mpc", scenario="cstr", config=config), episodes=coarse_episodes)
         row = {**params, **rep}
         results.append(row)
         print(
@@ -65,7 +72,14 @@ def main():
     print("\nFINAL VERIFY")
     for r in results[:12]:
         params = {k: r[k] for k in keys}
-        rep = eval_agent(make_controller("mpc", scenario="cstr", config=params), episodes=final_episodes)
+        config = {
+            "case": "cstr-tuning",
+            "policy_scope": "specialist",
+            "goal": "regulation",
+            "reward_spec": "regulation-v1",
+            "parameters": params,
+        }
+        rep = eval_agent(make_controller("mpc", scenario="cstr", config=config), episodes=final_episodes)
         final.append({**params, **rep})
         print(
             f"track={rep['track']:.3f} return={rep['return']:.3f} constraint={rep['constraint']:.3f} "

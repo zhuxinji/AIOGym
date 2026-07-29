@@ -6,38 +6,42 @@ import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-
 def _artifact_scenarios(payload: Mapping[str, Any]) -> list[str]:
     if payload.get("scenario"):
         return [str(payload["scenario"])]
-    suite_config = payload.get("suite_config") or {}
-    if suite_config.get("scenarios"):
-        return list(dict.fromkeys(str(scenario) for scenario in suite_config["scenarios"]))
+    track_config = payload.get("track_config") or {}
+    if track_config.get("scenarios"):
+        return list(dict.fromkeys(str(scenario) for scenario in track_config["scenarios"]))
     rows = payload.get("rows") or []
     return list(dict.fromkeys(str(row["scenario"]) for row in rows if row.get("scenario")))
 
 
 def _leaderboard(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
-    for row in rows:
+    for raw_row in rows:
+        row = dict(raw_row)
         if row.get("execution_status") == "failed":
             continue
         metric = row.get("metric")
         value = row.get(metric) if metric else None
         item = {
-            "rank": 0,
+            "rank": None,
             "controller": row.get("controller"),
             "scenario": row.get("scenario"),
-            "task": row.get("task", "default"),
-            "task_status": row.get("task_status", "implicit-default"),
-            "task_profile_hash": row.get("task_profile_hash"),
-            "objective": row.get("objective"),
-            "objective_source": row.get("objective_source"),
-            "objective_status": row.get("objective_status", "not-defined"),
+            "case": row.get("case", "default"),
+            "case_status": row.get("case_status", "implicit-default"),
+            "case_profile_hash": row.get("case_profile_hash"),
+            "goal": row.get("goal"),
+            "goal_source": row.get("goal_source"),
+            "acceptance_status": row.get("acceptance_status", "not-defined"),
             "execution_status": row.get("execution_status"),
             "metric": metric,
             "metric_value": value,
-            "normalized_score": row.get("normalized_score"),
+            "official_score": row.get("official_score", value),
+            "ranking_eligible": bool(
+                row.get("ranking_eligible", True)
+            ),
+            "safety_gate": row.get("safety_gate"),
             "profit": row.get("profit"),
             "tracking_cost": row.get("tracking_cost"),
             "tracking_return": row.get("tracking_return"),
@@ -50,18 +54,22 @@ def _leaderboard(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
         }
         key = (
             str(item.get("scenario") or "benchmark"),
-            str(item.get("task") or "default"),
-            str(item.get("objective") or "benchmark"),
+            str(item.get("case") or "default"),
+            str(item.get("goal") or "benchmark"),
         )
         groups.setdefault(key, []).append(item)
     out = []
     for group in groups.values():
         group.sort(key=lambda item: (
             item["execution_status"] not in {"passed", "degraded"},
+            not item["ranking_eligible"],
             _sort_value(item["metric"], item["metric_value"]),
         ))
-        for i, item in enumerate(group, 1):
-            item["rank"] = i
+        rank = 0
+        for item in group:
+            if item["ranking_eligible"]:
+                rank += 1
+                item["rank"] = rank
             out.append(item)
     return out
 
@@ -79,24 +87,24 @@ def _sort_value(metric: str | None, value):
     return -float(value)
 
 
-def _rows_by_objective(rows: Sequence[Mapping[str, Any]]) -> dict[str, list[Mapping[str, Any]]]:
+def _rows_by_goal(rows: Sequence[Mapping[str, Any]]) -> dict[str, list[Mapping[str, Any]]]:
     groups: dict[str, list[Mapping[str, Any]]] = {}
     for row in rows:
-        objective = str(row.get("objective") or "benchmark")
-        groups.setdefault(objective, []).append(row)
+        goal = str(row.get("goal") or "benchmark")
+        groups.setdefault(goal, []).append(row)
     return groups
 
 
 def _benchmark_case_key(row: Mapping[str, Any]) -> tuple[str, str]:
     return (
         str(row.get("scenario") or "benchmark"),
-        str(row.get("task") or "default"),
+        str(row.get("case") or "default"),
     )
 
 
 def _benchmark_case_label(row: Mapping[str, Any]) -> str:
-    scenario, task = _benchmark_case_key(row)
-    return scenario if task == "default" else f"{scenario} / {task}"
+    scenario, case = _benchmark_case_key(row)
+    return scenario if case == "default" else f"{scenario} / {case}"
 
 
 def _rows_by_benchmark_case(rows: Sequence[Mapping[str, Any]]) -> dict[str, list[Mapping[str, Any]]]:
@@ -110,35 +118,53 @@ def _rows_by_benchmark_case(rows: Sequence[Mapping[str, Any]]) -> dict[str, list
 def _tracking_rollout_groups(rollouts: Sequence[Mapping[str, Any]]):
     groups: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
     for rollout in rollouts:
-        if rollout.get("objective") != "tracking" or not rollout.get("scenario"):
+        if rollout.get("goal") != "regulation" or not rollout.get("scenario"):
             continue
         key = (
             str(rollout["scenario"]),
-            str(rollout.get("task") or "default"),
+            str(rollout.get("case") or "default"),
         )
         groups.setdefault(key, []).append(rollout)
     return groups
 
 
+TRACKING_COMPARISON_METRICS = (
+    ("tracking_cost", "Tracking goal"),
+    ("tracking_error_cost", "Error cost"),
+    ("tracking_move_cost", "Move cost"),
+    ("tracking_iae", "IAE"),
+    ("tracking_ise", "ISE"),
+    ("tracking_itae", "ITAE"),
+    ("tracking_overshoot", "Overshoot"),
+    ("energy_kwh", "Energy (kWh)"),
+    ("constraint_violation_count", "Constraint violations"),
+    ("runtime_seconds", "Runtime (s)"),
+)
+
+
 def _tracking_comparison_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     tracking_rows = [
         row for row in rows
-        if row.get("objective") == "tracking" and row.get("execution_status") in {"passed", "degraded"}
+        if row.get("goal") == "regulation" and row.get("execution_status") in {"passed", "degraded"}
     ]
     if not tracking_rows:
         return []
     benchmark_cases = list(dict.fromkeys(_benchmark_case_key(row) for row in tracking_rows))
     controllers = list(dict.fromkeys(str(row.get("controller") or "controller") for row in tracking_rows))
     out = []
-    for scenario, task in benchmark_cases:
-        scenario_rows = [row for row in tracking_rows if _benchmark_case_key(row) == (scenario, task)]
-        values = {
-            str(row.get("controller") or "controller"): _float_or_none(row.get("tracking_cost"))
+    for scenario, case in benchmark_cases:
+        scenario_rows = [row for row in tracking_rows if _benchmark_case_key(row) == (scenario, case)]
+        rows_by_controller = {
+            str(row.get("controller") or "controller"): row
             for row in scenario_rows
         }
+        values = {
+            controller: _float_or_none(source.get("tracking_cost"))
+            for controller, source in rows_by_controller.items()
+        }
         runtime_seconds = {
-            str(row.get("controller") or "controller"): _runtime_total_seconds(row)
-            for row in scenario_rows
+            controller: _float_or_none(source.get("runtime_seconds"))
+            for controller, source in rows_by_controller.items()
         }
         ranked = [(controller, value) for controller, value in values.items() if value is not None]
         if not ranked:
@@ -146,34 +172,43 @@ def _tracking_comparison_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[st
         best_controller, best_value = min(ranked, key=lambda item: item[1])
         row = {
             "scenario": scenario,
-            "task": task,
+            "case": case,
             "best_controller": best_controller,
             "best_tracking_cost": best_value,
-            "best_runtime_total_seconds": runtime_seconds.get(best_controller),
+            "best_runtime_seconds": runtime_seconds.get(best_controller),
         }
         oracle_value = values.get("NMPC-oracle")
         row["oracle_gap_vs_best"] = None if oracle_value is None else oracle_value - best_value
         for controller in controllers:
-            row[f"{controller}_tracking_cost"] = values.get(controller)
-            row[f"{controller}_runtime_total_seconds"] = runtime_seconds.get(controller)
+            source = rows_by_controller.get(controller, {})
+            for metric, _ in TRACKING_COMPARISON_METRICS:
+                value = runtime_seconds.get(controller) if metric == "runtime_seconds" else source.get(metric)
+                row[f"{controller}_{metric}"] = _float_or_none(value)
         out.append(row)
     return out
 
 
 def _write_tracking_comparison_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
-    base = ["scenario", "task", "best_controller", "best_tracking_cost", "best_runtime_total_seconds", "oracle_gap_vs_best"]
+    base = [
+        "scenario",
+        "case",
+        "best_controller",
+        "best_tracking_cost",
+        "best_runtime_seconds",
+        "oracle_gap_vs_best",
+    ]
     controllers = []
     for row in rows:
         for key in row:
             if key.endswith("_tracking_cost") and key not in {"best_tracking_cost"}:
                 controllers.append(key[: -len("_tracking_cost")])
     controllers = list(dict.fromkeys(controllers))
-    columns = base + [column for controller in controllers for column in (f"{controller}_tracking_cost", f"{controller}_runtime_total_seconds")]
+    columns = base + [
+        f"{controller}_{metric}"
+        for controller in controllers
+        for metric, _ in TRACKING_COMPARISON_METRICS
+    ]
     _write_summary_csv(path, rows, columns)
-
-
-def _runtime_total_seconds(row: Mapping[str, Any]):
-    return _float_or_none(row.get("runtime_total_seconds"))
 
 
 def _float_or_none(value):
@@ -184,70 +219,93 @@ def _float_or_none(value):
 
 
 def _slug(value: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-") or "objective"
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-") or "goal"
 
 
 def _write_summary_index_csv(path: Path, groups: Mapping[str, Sequence[Mapping[str, Any]]],
                              summary_csvs: Mapping[str, str], leaderboards: Mapping[str, str]) -> None:
-    columns = ["objective", "rows", "metrics", "summary_csv", "leaderboard"]
+    columns = ["goal", "rows", "metrics", "summary_csv", "leaderboard"]
     with path.open("w") as f:
         f.write(",".join(columns) + "\n")
-        for objective, rows in groups.items():
+        for goal, rows in groups.items():
             metrics = list(dict.fromkeys(str(row.get("metric", "")) for row in rows if row.get("metric")))
             row = {
-                "objective": objective,
+                "goal": goal,
                 "rows": len(rows),
                 "metrics": metrics,
-                "summary_csv": summary_csvs[objective],
-                "leaderboard": leaderboards[objective],
+                "summary_csv": summary_csvs[goal],
+                "leaderboard": leaderboards[goal],
             }
             f.write(",".join(_csv_cell(row.get(column)) for column in columns) + "\n")
 
 
 FULL_SUMMARY_COLUMNS = [
-    "suite_case", "scenario", "task", "task_status", "task_profile_hash",
-    "objective", "objective_source", "objective_status", "action_mode", "controller",
-    "control_structure", "execution_status", "metric", "normalized_score", "profit", "production",
+    "run_case_id", "scenario", "case", "case_status", "case_profile_hash",
+    "goal", "goal_source",
+    "acceptance_status", "reward_spec_id", "action_mode", "controller",
+    "control_structure", "execution_status", "ranking_eligible",
+    "official_score", "safety_mode", "case_id", "pair_id", "pair_role",
+    "base_case_id", "metric", "profit",
+    "production",
     "return", "track", "tracking_cost", "tracking_return", "tracking_error_cost",
-    "tracking_move_cost", "tracking_mse", "tracking_iae", "energy_kwh", "constraint",
+    "tracking_move_cost", "tracking_mse", "tracking_iae", "tracking_ise",
+    "tracking_itae", "tracking_overshoot", "tracking_settling_time",
+    "energy_kwh", "service_shortfall_count", "service_shortfall_duration",
+    "service_availability", "constraint", "state_violation_count",
+    "state_violation_duration", "state_violation_severity",
+    "command_violation_count", "command_violation_duration",
+    "command_violation_severity", "protection_intervention_count",
+    "protection_intervention_duration", "hard_termination_count",
+    "initial_safety_debt_count", "initial_safety_debt_duration",
+    "controller_created_state_violation_count",
+    "controller_created_state_violation_duration",
     "constraint_violation_count", "constraint_violation_severity",
     "safety_margin_min",
-    "runtime_seconds_per_step", "episodes", "seed_list",
+    "runtime_seconds_per_step", "runtime_total_seconds", "episodes", "seed_list",
 ]
 
 
-OBJECTIVE_SUMMARY_COLUMNS = {
-    "tracking": [
-        "suite_case", "scenario", "task", "task_status", "task_profile_hash",
-        "objective_source", "objective_status", "controller", "control_structure",
-        "execution_status",
+GOAL_SUMMARY_COLUMNS = {
+    "regulation": [
+        "run_case_id", "scenario", "case", "case_status", "case_profile_hash",
+        "goal_source", "acceptance_status", "controller", "control_structure",
+        "execution_status", "ranking_eligible", "official_score",
         "metric", "tracking_cost", "tracking_return", "tracking_error_cost",
-        "tracking_move_cost", "tracking_mse", "tracking_iae", "track", "normalized_score", "energy_kwh",
+        "tracking_move_cost", "tracking_mse", "tracking_iae", "tracking_ise",
+        "tracking_itae", "tracking_overshoot", "tracking_settling_time",
+        "track", "energy_kwh",
         "constraint_violation_count", "constraint_violation_severity",
-        "runtime_seconds_per_step", "episodes", "seed_list",
+        "runtime_seconds_per_step", "runtime_total_seconds", "episodes", "seed_list",
     ],
     "economic": [
-        "suite_case", "scenario", "task", "task_status", "task_profile_hash",
-        "objective_source", "objective_status", "controller", "control_structure",
-        "execution_status",
-        "metric", "profit", "production", "energy_kwh", "normalized_score",
+        "run_case_id", "scenario", "case", "case_status", "case_profile_hash",
+        "goal_source", "acceptance_status", "controller", "control_structure",
+        "execution_status", "ranking_eligible", "official_score",
+        "metric", "profit", "production", "energy_kwh",
+        "service_shortfall_count", "service_shortfall_duration",
+        "service_availability",
         "constraint", "constraint_violation_count", "constraint_violation_severity",
         "safety_margin_min", "runtime_seconds_per_step", "episodes", "seed_list",
     ],
     "safety": [
-        "suite_case", "scenario", "task", "task_status", "task_profile_hash",
-        "objective_source", "objective_status", "controller", "control_structure",
-        "execution_status",
-        "metric", "constraint_violation_count", "constraint_violation_duration",
-        "constraint_violation_severity", "action_violation_count",
-        "action_violation_severity", "runaway_count", "safety_margin_min",
+        "run_case_id", "scenario", "case", "case_status", "case_profile_hash",
+        "goal_source", "acceptance_status", "controller", "control_structure",
+        "execution_status", "ranking_eligible", "official_score", "safety_mode",
+        "metric", "state_violation_count", "state_violation_duration",
+        "state_violation_severity", "command_violation_count",
+        "command_violation_duration", "command_violation_severity",
+        "protection_intervention_count", "protection_intervention_duration",
+        "hard_termination_count", "initial_safety_debt_count",
+        "controller_created_state_violation_count",
+        "constraint_violation_count", "constraint_violation_duration",
+        "constraint_violation_severity", "runaway_count", "safety_margin_min",
         "runtime_seconds_per_step", "episodes", "seed_list",
     ],
 }
 
 
-def _summary_columns_for_objective(objective: str) -> list[str]:
-    return list(OBJECTIVE_SUMMARY_COLUMNS.get(objective, FULL_SUMMARY_COLUMNS))
+def _summary_columns_for_goal(goal: str) -> list[str]:
+    return list(GOAL_SUMMARY_COLUMNS.get(goal, FULL_SUMMARY_COLUMNS))
 
 
 def _write_summary_csv(path: Path, rows: Sequence[Mapping[str, Any]],
@@ -260,7 +318,7 @@ def _write_summary_csv(path: Path, rows: Sequence[Mapping[str, Any]],
 
 def _write_learning_curve_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
     preferred = [
-        "step", "timesteps", "phase", "metric", "metric_value", "normalized_score", "profit",
+        "step", "timesteps", "phase", "metric", "metric_value", "official_score", "profit",
         "return", "track", "tracking_cost", "tracking_return", "tracking_error_cost",
         "tracking_move_cost", "tracking_mse", "tracking_iae", "constraint_violation_count",
         "constraint_violation_severity", "runtime_total_seconds",
@@ -286,6 +344,6 @@ def _csv_cell(value) -> str:
 
 def _plot_row(row: Mapping[str, Any]) -> dict[str, Any]:
     out = dict(row)
-    for key in ("profit", "normalized_score", "track", "constraint"):
+    for key in ("profit", "track", "constraint"):
         out.setdefault(key, 0.0)
     return out

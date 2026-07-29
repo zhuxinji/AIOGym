@@ -42,15 +42,12 @@ def test_controller_public_api_exposes_current_implementations():
 
 def test_evaluation_public_api_exposes_current_implementations():
     import aiogym.evaluation as public
-    import aiogym.evaluation.protocols as protocols
-    from aiogym.evaluation import cases, execution
-    from aiogym.evaluation import objective_specs
+    from aiogym.evaluation import execution, goal_specs, scorecard
 
-    assert protocols.BenchmarkCase is cases.BenchmarkCase
-    assert protocols.EnvironmentSpec is cases.EnvironmentSpec
-    assert protocols.ObjectiveSpec is objective_specs.ObjectiveSpec
     assert public.evaluate_controller is execution.evaluate_controller
     assert public.rollout_controller is execution.rollout_controller
+    assert public.GoalSpec is goal_specs.GoalSpec
+    assert public.ScorecardAccumulator is scorecard.ScorecardAccumulator
     assert importlib.util.find_spec("aiogym.evaluation.core") is None
 
 
@@ -77,23 +74,20 @@ def test_environment_class_composes_focused_runtime_mixins():
     from aiogym._environment.disturbances import DisturbanceRuntimeMixin
     from aiogym._environment.observations import ObservationRuntimeMixin
     from aiogym._environment.transitions import TransitionRuntimeMixin
-    from aiogym.env import AIOGymNativeEnv
+    from aiogym.env import AIOGymEnv
 
-    assert AIOGymNativeEnv._env is DisturbanceRuntimeMixin._env
-    assert AIOGymNativeEnv._obs is ObservationRuntimeMixin._obs
-    assert AIOGymNativeEnv.evaluate_transition is TransitionRuntimeMixin.evaluate_transition
+    assert AIOGymEnv._env is DisturbanceRuntimeMixin._env
+    assert AIOGymEnv._obs is ObservationRuntimeMixin._obs
+    assert AIOGymEnv.evaluate_transition is TransitionRuntimeMixin.evaluate_transition
 
 
-def test_unified_benchmark_cli_uses_suite_modules():
+def test_unified_benchmark_cli_uses_track_modules():
     from aiogym.cli import benchmark as facade
-    from aiogym.evaluation import suite
+    from aiogym.benchmarks import load_track
 
     assert importlib.util.find_spec("aiogym.cli.single_benchmark") is None
     assert importlib.util.find_spec("aiogym.cli.suite_benchmark") is None
-    assert not hasattr(facade, "expand_scenarios")
-    assert not hasattr(facade, "controller_config_for")
-    assert not hasattr(facade, "SUMMARY_COLUMNS")
-    assert facade.load_suite("standard-baselines") == suite.load_suite("standard-baselines")
+    assert facade.load_track is load_track
 
 
 def test_artifact_adapters_have_role_specific_module_names():
@@ -132,5 +126,8 @@ def test_removed_evaluation_modules_are_absent():
         "aiogym.evaluation.suite_results",
         "aiogym.evaluation.task_profiles",
         "aiogym.evaluation.task_acceptance",
+        "aiogym.evaluation.protocols",
+        "aiogym.evaluation.objective_specs",
+        "aiogym.evaluation.suite",
     ):
         assert importlib.util.find_spec(module) is None

@@ -1,8 +1,0 @@
-{
-  "description": "Robustness benchmark with dynamic disturbances and measurement noise.",
-  "scenarios": "ALL_SCENARIOS",
-  "objectives": ["robustness"],
-  "controllers": ["pid", "mpc"],
-  "action_mode": "actuator",
-  "preset": "environment/robustness-randomized"
-}

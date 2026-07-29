@@ -12,7 +12,7 @@ import copy
 import math
 
 from .._internal.identifiers import canonical_scenario_id
-from .._internal.vocabulary import OBJECTIVE_NAMES
+from .._internal.vocabulary import GOAL_NAMES
 from .backends import _NUMERIC_OPS, _NumericOps, _casadi_ops, _maxv
 from .integration import Integrator
 
@@ -41,8 +41,8 @@ class ProcessModelContract:
 
     display_name = "Process model"
     summary = ""
-    supported_objectives = OBJECTIVE_NAMES
-    benchmark_objectives = OBJECTIVE_NAMES
+    supported_goals = GOAL_NAMES
+    benchmark_goals = GOAL_NAMES
     state_names = ()
     state_units = {}
     state_bounds = {}
@@ -559,8 +559,8 @@ class ProcessModelContract:
             "scenario": canonical_scenario_id(self.scenario),
             "name": self.display_name,
             "summary": self.summary,
-            "supported_objectives": list(self.supported_objectives),
-            "benchmark_objectives": list(self.benchmark_objectives),
+            "supported_goals": list(self.supported_goals),
+            "benchmark_goals": list(self.benchmark_goals),
             "states": self.state_schema(),
             "actions": self.action_schema(),
             "controlled_outputs": self.controlled_output_schema(),

@@ -6,32 +6,6 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
-PROTOCOL_KEYS = frozenset({
-    "objective",
-    "env_reward_mode",
-    "action_mode",
-    "control_dt",
-    "episode_steps",
-    "task",
-    "auto_events",
-    "randomize",
-    "randomize_setpoints",
-    "randomize_plant",
-    "plant_drift",
-    "integral_obs",
-    "disturbance_obs",
-    "previous_action_obs",
-    "normalize_observations",
-    "tracking_error_obs",
-    "terminate_on_runaway",
-    "tracking_q_y",
-    "tracking_r_move",
-    "noise",
-    "noise_pct",
-    "model_params",
-})
-
-
 def resolve_auto_events(
     auto_events: bool | None = None,
     *,
@@ -80,15 +54,3 @@ def parse_seed_list(
     if episodes <= 0:
         raise ValueError("episodes must be positive")
     return [seed + i for i in range(episodes)]
-
-
-def protocol_data(data: Mapping[str, Any]) -> dict[str, Any]:
-    return {key: data[key] for key in PROTOCOL_KEYS if key in data}
-
-
-def protocol_env_overrides(data: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        key: value
-        for key, value in data.items()
-        if key not in {"objective", "env_reward_mode"}
-    }

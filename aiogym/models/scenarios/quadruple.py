@@ -15,7 +15,7 @@ class QuadrupleModel(ProcessModelContract):
     """
 
     scenario = "quadruple"
-    benchmark_objectives = ("tracking", "kpi", "robustness", "safety")
+    benchmark_goals = ("regulation",)
     display_name = "Johansson quadruple-tank process"
     summary = "Four-state, two-input nonlinear level process with adjustable minimum/nonminimum-phase behavior."
     n = 4

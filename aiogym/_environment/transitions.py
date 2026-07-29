@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..evaluation.objectives import stage_reward
+from ..rewards import stage_reward
 
 
 class TransitionRuntimeMixin:
@@ -29,10 +29,15 @@ class TransitionRuntimeMixin:
             setpoint=setpoint,
             disturbance=disturbance,
             previous_action=previous_action,
+            remaining_physical_time=max(
+                0.0,
+                (self.episode_steps - (self._k + 1)) * self.control_dt,
+            ),
         )
 
     def _evaluate_model_transition(self, state, action, next_state, *, setpoint=None,
-                                   disturbance=None, previous_action=None):
+                                   disturbance=None, previous_action=None,
+                                   remaining_physical_time=0.0):
         return stage_reward(
             self.model,
             state,
@@ -41,24 +46,28 @@ class TransitionRuntimeMixin:
             setpoint=self.y_sp if setpoint is None else setpoint,
             disturbance=self._env() if disturbance is None else disturbance,
             previous_action=self.previous_act if previous_action is None else previous_action,
-            reward_mode=self.reward_mode,
-            reward_scale=self.reward_scale,
-            tracking_q_y=self.tracking_q_y,
-            tracking_r_move=self.tracking_r_move,
+            reward_spec=self.reward_spec,
             terminate_on_runaway=self.terminate_on_runaway,
             dt=self.control_dt,
             economic_config=self._econ,
             reward_override=self.custom_stage_reward,
+            remaining_physical_time=remaining_physical_time,
         )
 
     def _reward_done(self, state, act):
-        result = self._evaluate_model_transition(state, act, self.integ.x)
-        self.scorer.accumulate(result.kpi, self.control_dt)
-
+        result = self._evaluate_model_transition(
+            state,
+            act,
+            self.integ.x,
+            remaining_physical_time=max(
+                0.0,
+                (self.episode_steps - self._k) * self.control_dt,
+            ),
+        )
         info = dict(result.info)
         if self.randomize_plant or self.plant_drift:
             info["plant_mult"] = dict(getattr(self, "_regime_mult", {}))
-        return float(result.reward), result.terminated, info
+        return float(result.scalar_reward), result.terminated, info
     def _validated_action(self, action):
         try:
             values = np.asarray(action, dtype=np.float64).reshape(-1)

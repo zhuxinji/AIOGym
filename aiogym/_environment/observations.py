@@ -22,7 +22,11 @@ class ObservationRuntimeMixin:
                     lo, hi = bounds
                     if lo is not None and hi is not None and float(hi) > float(lo):
                         scale = float(hi) - float(lo)
-                noisy.append(float(value) + float(self.np_random.normal(0, self.noise_pct * scale)))
+                rng = getattr(self, "_noise_rng", self.np_random)
+                noisy.append(
+                    float(value)
+                    + float(rng.normal(0, self.noise_pct * scale))
+                )
             state = noisy
         setpoint = list(self.y_sp)
         observed_output = list(self.model.controlled_output(state))

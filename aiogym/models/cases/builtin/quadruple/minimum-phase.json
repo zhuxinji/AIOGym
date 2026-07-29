@@ -1,0 +1,96 @@
+{
+  "schema_version": "aiogym.case_profile.v2",
+  "name": "minimum-phase",
+  "scenario": "quadruple",
+  "status": "reference-derived",
+  "description": "Default deterministic lower-tank benchmark at Johansson's minimum-phase P- operating point.",
+  "specialist_metadata": {
+    "controllers": {
+      "pid": {"profile": "quadruple-minimum-phase-benchmark"},
+      "mpc": {"profile": "quadruple-minimum-phase"},
+      "oracle": {"profile": "quadruple-minimum-phase"}
+    }
+  },
+  "environment": {
+    "control_dt": 1.0,
+    "episode_steps": 600,
+    "action_mode": "actuator",
+    "auto_events": false,
+    "randomize": false,
+    "randomize_setpoints": false,
+    "randomize_plant": false,
+    "plant_drift": false,
+    "integral_obs": false,
+    "disturbance_obs": false,
+    "previous_action_obs": true,
+    "normalize_observations": true,
+    "tracking_error_obs": true,
+    "terminate_on_runaway": false,
+    "noise": false,
+    "noise_pct": 0.01
+  },
+  "model_params": {
+    "tank_area": [28.0, 32.0, 28.0, 32.0],
+    "outlet_area": [0.071, 0.057, 0.071, 0.057],
+    "pump_gain": [3.33, 3.35],
+    "gamma": [0.70, 0.60],
+    "gravity": 981.0,
+    "max_voltage": 10.0,
+    "max_level": 20.0,
+    "nominal_voltage": [3.0, 3.0]
+  },
+  "initialization": {
+    "state": [12.2629675195507, 12.783158403008972, 1.6339411322567796, 1.409044702533737],
+    "basis": "exact nonlinear equilibrium corresponding to 3 V on each pump"
+  },
+  "setpoints": {
+    "initial": [12.2629675195507, 12.783158403008972],
+    "schedule": [
+      {
+        "at_step": 120,
+        "values": [13.2629675195507, 11.783158403008972],
+        "description": "opposed 1 cm MIMO setpoint move"
+      },
+      {
+        "at_step": 360,
+        "values": [11.7629675195507, 13.283158403008972],
+        "description": "reversed asymmetric MIMO setpoint move"
+      }
+    ]
+  },
+  "disturbances": [],
+  "constraints": [
+    {"name": "all_tank_levels", "bounds": [0.0, 20.0], "unit": "cm"},
+    {"name": "pump_voltage", "bounds": [0.0, 10.0], "unit": "V"}
+  ],
+  "acceptance": {
+    "required_checks": [
+      "reference_parameters",
+      "nonlinear_equilibrium",
+      "mass_balance",
+      "phase_configuration",
+      "rk4_step_convergence",
+      "deterministic_setpoint_schedule"
+    ],
+    "metrics": {
+      "tracking_cost": {"max": 0.6},
+      "tracking_iae": {"max": 1.6},
+      "tracking_overshoot": {"max": 0.08},
+      "tracking_settling_time": {"max": 400.0},
+      "constraint_violation_count": {"max": 0.0},
+      "action_violation_count": {"max": 0.0},
+      "runaway_count": {"max": 0.0},
+      "controller_solver_limited_count": {"max": 0.0},
+      "controller_solver_failure_count": {"max": 0.0},
+      "controller_fallback_count": {"max": 0.0}
+    }
+  },
+  "references": [
+    {
+      "id": "johansson-2000",
+      "doi": "10.1109/87.845876",
+      "url": "https://doi.org/10.1109/87.845876",
+      "locator": "nonlinear model and minimum-phase operating point P-"
+    }
+  ]
+}

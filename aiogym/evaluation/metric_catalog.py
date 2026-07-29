@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 
-EVALUATION_SCHEMA_VERSION = "aiogym.evaluation.v4"
-PUBLIC_BENCHMARK_SCHEMA_VERSION = "aiogym.public_benchmark.v3"
+EVALUATION_SCHEMA_VERSION = "aiogym.evaluation.v6"
+PUBLIC_BENCHMARK_SCHEMA_VERSION = "aiogym.public_benchmark.v5"
 
 ROLLOUT_SCHEMA = {
     "step": "integer control-step index",
@@ -14,25 +14,40 @@ ROLLOUT_SCHEMA = {
     "setpoint": "active setpoint context exposed to the controller",
     "disturbance": "disturbance values applied by the process model",
     "reward": "training reward returned by the environment",
+    "reward_spec_id": "versioned RewardSpec identity for the training reward",
     "profit": "time-integrated economic contribution for the transition",
     "constraint": "normalized process constraint penalty for the step",
     "info": "environment-specific diagnostic fields",
 }
 
 METRIC_DEFINITIONS = {
-    "return": "sum of environment reward over the rollout; reward is the training signal",
+    "return": "sum of environment reward over the rollout; compare only when reward_spec_id matches",
     "track": "cumulative absolute tracking error normalized by each controlled-output range",
     "profit": "time-integrated economic profit over the rollout",
-    "normalized_score": "0-100 KPI score from KPIScorer; score is for reporting, not raw economics",
+    "regulation_cost": "reward-independent integral of mean squared normalized output error",
+    "regulation_error_cost": "reward-independent integral of mean squared normalized output error",
+    "regulation_slew_cost": "integral of mean squared normalized action slew rate",
+    "regulation_effort_cost": "integral of mean squared normalized action effort",
+    "product_value": "time-integrated product value under the model economic declaration",
+    "energy_cost": "time-integrated energy cost under the model economic declaration",
+    "material_cost": "time-integrated declared material cost",
+    "waste_cost": "time-integrated declared waste cost",
+    "service_shortfall_cost": "time-integrated raw service shortfall quantity",
+    "service_shortfall_count": "number of control steps with service shortfall",
+    "service_shortfall_duration": "seconds with service shortfall",
+    "service_availability": "fraction of evaluated physical time without service shortfall",
+    "soft_safety_cost": "time-integrated raw soft-safety violation quantity",
+    "hard_safety_cost": "count of raw hard-safety transition events",
+    "protection_intervention_cost": "seconds of active protection intervention",
     "production": "time-integrated process production over the rollout",
     "energy_kwh": "total action energy over the rollout",
     "runtime_seconds": "wall-clock seconds spent evaluating one episode",
     "runtime_total_seconds": "total wall-clock seconds spent evaluating all episodes",
     "runtime_seconds_per_step": "wall-clock seconds per environment control step",
-    "tracking_cost": "cumulative dimensionless tracking cost: weighted normalized squared output error plus weighted normalized squared input move, using the protocol Q and R",
+    "tracking_cost": "cumulative dimensionless tracking cost: weighted normalized squared output error plus weighted normalized squared input move",
     "tracking_return": "negative cumulative tracking_cost, matching the tracking reward returned by the environment",
-    "tracking_error_cost": "cumulative squared setpoint-tracking error normalized by each controlled-output range and weighted by the protocol Q",
-    "tracking_move_cost": "cumulative squared control move normalized by each actuator range and weighted by the protocol R",
+    "tracking_error_cost": "cumulative unweighted squared setpoint-tracking error normalized by each controlled-output range",
+    "tracking_move_cost": "cumulative unweighted squared control move normalized by each actuator range",
     "tracking_mse": "time-mean squared tracking error normalized by each controlled-output range and averaged over tracked outputs",
     "tracking_iae": "integral absolute tracking error normalized by each controlled-output range",
     "tracking_ise": "integral squared tracking error normalized by each controlled-output range",
@@ -47,56 +62,106 @@ METRIC_DEFINITIONS = {
     "action_violation_count": "number of controller outputs outside action bounds before env clipping",
     "action_violation_duration": "seconds with any action-bound violation",
     "action_violation_severity": "sum of action-bound excess before env clipping",
+    "state_violation_count": "number of steps with a physical-state constraint violation",
+    "state_violation_duration": "seconds with a physical-state constraint violation",
+    "state_violation_severity": "sum of physical-state constraint violation magnitudes",
+    "command_violation_count": "number of controller commands outside action bounds",
+    "command_violation_duration": "seconds with an out-of-bounds controller command",
+    "command_violation_severity": "sum of controller command bound excess",
+    "protection_intervention_count": "number of steps with active protection intervention",
+    "protection_intervention_duration": "seconds with active protection intervention",
+    "hard_termination_count": "number of hard process terminations",
+    "initial_safety_debt_count": "recovery-case state violations inherited at reset",
+    "initial_safety_debt_duration": "seconds spent clearing inherited recovery debt",
+    "initial_safety_debt_severity": "severity accumulated while clearing inherited recovery debt",
+    "controller_created_state_violation_count": "state violations created after initial safety debt cleared",
+    "controller_created_state_violation_duration": "seconds of controller-created state violation",
+    "controller_created_state_violation_severity": "severity of controller-created state violation",
     "runaway_count": "number of runaway steps reported by the environment",
     "runaway_duration": "seconds spent in runaway state",
     "safety_margin_min": "minimum negative violation margin; 0 means no violation was observed",
     "controller_solve_count": "number of optimization or policy solve calls reported by the controller",
     "controller_solver_success_count": "number of successful controller solve calls",
+    "controller_solver_limited_count": "number of controller solves that returned a usable plan at an iteration or time limit",
     "controller_solver_failure_count": "number of failed controller solve calls",
     "controller_fallback_count": "number of times the controller fell back to a previous or safe action",
     "controller_degraded_count": "number of episodes with any controller-side degradation",
 }
 
-PROTOCOL_METRICS = {
-    "tracking": (
-        "tracking_cost", "tracking_error_cost", "tracking_return", "tracking_move_cost",
-        "tracking_mse", "tracking_iae", "tracking_ise",
-        "tracking_itae", "tracking_overshoot", "tracking_settling_time",
+# Every evaluator emits every group. Goal and later Track specifications select
+# ranking metrics; they never remove measurements from the scorecard.
+SCORECARD_GROUPS = {
+    "regulation": (
+        "regulation_cost",
+        "regulation_error_cost",
+        "regulation_slew_cost",
+        "regulation_effort_cost",
+        "tracking_mse",
+        "tracking_iae",
+        "tracking_ise",
+        "tracking_itae",
+        "tracking_overshoot",
+        "tracking_settling_time",
+        "tracking_raw_by_output",
     ),
-    "economic": (
-        "profit", "normalized_score", "production", "energy_kwh",
-        "constraint_violation_count", "constraint_violation_severity", "safety_margin_min",
-        "controller_solver_failure_count", "controller_fallback_count",
-        "runtime_seconds", "runtime_seconds_per_step",
-    ),
-    "robustness": (
-        "return", "profit", "normalized_score", "tracking_cost", "tracking_mse",
-        "tracking_iae", "energy_kwh", "constraint_violation_count",
-        "constraint_violation_severity", "controller_solver_failure_count",
-        "controller_fallback_count", "runtime_seconds", "runtime_seconds_per_step",
+    "economics": (
+        "profit",
+        "product_value",
+        "production",
+        "energy_cost",
+        "material_cost",
+        "waste_cost",
+        "energy_kwh",
+        "service_shortfall_cost",
+        "service_shortfall_count",
+        "service_shortfall_duration",
+        "service_availability",
     ),
     "safety": (
-        "constraint_violation_count", "constraint_violation_duration",
-        "constraint_violation_severity", "action_violation_count",
-        "action_violation_duration", "action_violation_severity", "runaway_count",
-        "runaway_duration", "safety_margin_min", "controller_solver_failure_count",
-        "controller_fallback_count", "runtime_seconds", "runtime_seconds_per_step",
+        "state_violation_count",
+        "state_violation_duration",
+        "state_violation_severity",
+        "command_violation_count",
+        "command_violation_duration",
+        "command_violation_severity",
+        "protection_intervention_count",
+        "protection_intervention_duration",
+        "hard_termination_count",
+        "initial_safety_debt_count",
+        "initial_safety_debt_duration",
+        "initial_safety_debt_severity",
+        "controller_created_state_violation_count",
+        "controller_created_state_violation_duration",
+        "controller_created_state_violation_severity",
+        "constraint_violation_count",
+        "constraint_violation_duration",
+        "constraint_violation_severity",
+        "action_violation_count",
+        "action_violation_duration",
+        "action_violation_severity",
+        "runaway_count",
+        "runaway_duration",
+        "safety_margin_min",
+        "soft_safety_cost",
+        "hard_safety_cost",
+        "protection_intervention_cost",
     ),
-    "kpi": (
-        "normalized_score", "tracking_cost", "tracking_mse", "tracking_iae", "energy_kwh",
-        "constraint_violation_count", "constraint_violation_severity",
-        "controller_solver_failure_count", "controller_fallback_count",
-        "runtime_seconds", "runtime_seconds_per_step",
+    "controller": (
+        "controller_solve_count",
+        "controller_solver_success_count",
+        "controller_solver_limited_count",
+        "controller_solver_failure_count",
+        "controller_fallback_count",
+        "controller_degraded_count",
     ),
 }
-
-PRIMARY_METRICS = {
-    "tracking": "tracking_cost",
-    "economic": "profit",
-    "kpi": "normalized_score",
-    "robustness": "normalized_score",
-    "safety": "constraint_violation_count",
-}
+SCORECARD_METRICS = tuple(
+    dict.fromkeys(
+        metric
+        for metrics in SCORECARD_GROUPS.values()
+        for metric in metrics
+    )
+)
 
 METRIC_DIRECTIONS = {
     "tracking_cost": "minimize", "tracking_error_cost": "minimize",
@@ -110,28 +175,48 @@ METRIC_DIRECTIONS = {
     "action_violation_severity": "minimize", "runaway_count": "minimize",
     "runaway_duration": "minimize", "energy_kwh": "minimize",
     "runtime_seconds": "minimize", "runtime_total_seconds": "minimize",
-    "runtime_seconds_per_step": "minimize", "controller_solver_failure_count": "minimize",
+    "runtime_seconds_per_step": "minimize", "controller_solver_limited_count": "minimize",
+    "controller_solver_failure_count": "minimize",
     "controller_fallback_count": "minimize", "controller_degraded_count": "minimize",
     "safety_margin_min": "maximize", "profit": "maximize",
-    "normalized_score": "maximize", "return": "maximize", "production": "maximize",
+    "return": "maximize",
+    "production": "maximize", "regulation_cost": "minimize",
+    "regulation_error_cost": "minimize", "regulation_slew_cost": "minimize",
+    "regulation_effort_cost": "minimize", "product_value": "maximize",
+    "energy_cost": "minimize", "material_cost": "minimize",
+    "waste_cost": "minimize", "service_shortfall_cost": "minimize",
+    "soft_safety_cost": "minimize", "hard_safety_cost": "minimize",
+    "protection_intervention_cost": "minimize",
+    "service_shortfall_count": "minimize",
+    "service_shortfall_duration": "minimize",
+    "service_availability": "maximize",
+    "state_violation_count": "minimize",
+    "state_violation_duration": "minimize",
+    "state_violation_severity": "minimize",
+    "command_violation_count": "minimize",
+    "command_violation_duration": "minimize",
+    "command_violation_severity": "minimize",
+    "protection_intervention_count": "minimize",
+    "protection_intervention_duration": "minimize",
+    "hard_termination_count": "minimize",
+    "initial_safety_debt_count": "minimize",
+    "initial_safety_debt_duration": "minimize",
+    "initial_safety_debt_severity": "minimize",
+    "controller_created_state_violation_count": "minimize",
+    "controller_created_state_violation_duration": "minimize",
+    "controller_created_state_violation_severity": "minimize",
 }
-
-
-def primary_metric_for_objective(objective: str) -> str:
-    return PRIMARY_METRICS.get(objective, "return")
 
 
 def metric_direction(metric: str) -> str:
     return METRIC_DIRECTIONS.get(metric, "maximize")
 
 
-def metric_definitions(objective: str | None = None):
-    if objective is None:
-        return dict(METRIC_DEFINITIONS)
-    keys = list(PROTOCOL_METRICS.get(objective, ()))
-    keys.extend(["track", "tracking_raw_by_output"])
-    return {
-        key: METRIC_DEFINITIONS[key]
-        for key in keys
-        if key in METRIC_DEFINITIONS
-    }
+def metric_definitions():
+    """Return the complete catalog; goals never filter measured quantities."""
+
+    return dict(METRIC_DEFINITIONS)
+
+
+def scorecard_schema() -> dict[str, list[str]]:
+    return {group: list(metrics) for group, metrics in SCORECARD_GROUPS.items()}

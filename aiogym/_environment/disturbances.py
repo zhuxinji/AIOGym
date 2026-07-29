@@ -25,10 +25,10 @@ class DisturbanceRuntimeMixin:
         if attr:
             setattr(self, attr, self._copy_disturbance_value(value))
 
-    def _validate_task_disturbance(self, name, value):
+    def _validate_case_disturbance(self, name, value):
         if name not in self._disturbance_defaults:
             available = ", ".join(sorted(self._disturbance_defaults)) or "none"
-            raise ValueError(f"unknown task disturbance {name!r}; available: {available}")
+            raise ValueError(f"unknown case disturbance {name!r}; available: {available}")
         row = self._disturbance_schema_by_name.get(name, {})
         bounds = row.get("bounds")
         values = value if isinstance(value, list) else [value]
@@ -37,9 +37,9 @@ class DisturbanceRuntimeMixin:
             for item in values:
                 number = float(item)
                 if lo is not None and number < float(lo):
-                    raise ValueError(f"task disturbance {name!r} is below its lower bound {lo}")
+                    raise ValueError(f"case disturbance {name!r} is below its lower bound {lo}")
                 if hi is not None and number > float(hi):
-                    raise ValueError(f"task disturbance {name!r} is above its upper bound {hi}")
+                    raise ValueError(f"case disturbance {name!r} is above its upper bound {hi}")
 
     def _sync_known_disturbances(self):
         for name in self._disturbance_defaults:
@@ -61,7 +61,7 @@ class DisturbanceRuntimeMixin:
         self._apply_mult(self._regime_mult)
 
     def _sample_regime_mult(self):
-        rng = self.np_random
+        rng = getattr(self, "_plant_rng", self.np_random)
         return {
             k: float(rng.uniform(lo, hi))
             for k, (lo, hi) in self._regime.items()
@@ -109,7 +109,7 @@ class DisturbanceRuntimeMixin:
         self._dist_events = []
         if not self.auto_events:
             return
-        rng = self.np_random
+        rng = getattr(self, "_disturbance_rng", self.np_random)
         names = self._disturbance_names()
         if not names:
             return
@@ -118,9 +118,11 @@ class DisturbanceRuntimeMixin:
             self._dist_events.append((t, names[int(rng.integers(0, len(names)))]))
 
     def _apply_disturbance(self, event):
-        rng = self.np_random
+        rng = getattr(self, "_disturbance_rng", self.np_random)
         if event == "setpoint_move":
-            self._randomize_setpoints(rng)
+            self._randomize_setpoints(
+                getattr(self, "_reference_rng", self.np_random)
+            )
         else:
             row = self._disturbance_by_event.get(event)
             if row and row.get("kind") != "setpoint":

@@ -7,16 +7,16 @@ import unittest
 
 import numpy as np
 
-from aiogym.env import AIOGymNativeEnv
+from aiogym.env import AIOGymEnv
 from aiogym.controllers import make_controller
 from aiogym.evaluation import rollout_controller
 from aiogym.rl import Transition, TransitionDataset, collect_transitions
 
 
 def _environment(*, action_mode="actuator"):
-    return AIOGymNativeEnv(
+    return AIOGymEnv(
         "cstr",
-        reward_mode="tracking",
+        reward_spec="regulation-v1",
         action_mode=action_mode,
         auto_events=False,
         randomize=False,

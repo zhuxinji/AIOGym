@@ -8,5 +8,14 @@
     "output_name": null,
     "providers": null
   },
-  "scenarios": {}
+  "scenarios": {},
+  "profiles": {
+    "quadruple-regulation-generalist-v1": {
+      "track": "quadruple-regulation-generalist-v1",
+      "policy_scope": "generalist",
+      "goal": "regulation",
+      "reward_spec": "regulation-v1",
+      "access_level": "policy-observation"
+    }
+  }
 }

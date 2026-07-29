@@ -1,0 +1,84 @@
+{
+  "schema_version": "aiogym.benchmark_track.v1",
+  "id": "cascade-regulation-generalist-v1",
+  "description": "Generalist regulation policy across open-cascade commissioning, setpoint changes, and held-out disturbances.",
+  "scenario": "cascade",
+  "goal": "regulation",
+  "reward_spec": "regulation-v1",
+  "scorecard_spec": "process-control-v1",
+  "policy_scope": "generalist",
+  "policy_contract": {
+    "action_mode": "actuator",
+    "control_dt": 0.5,
+    "disturbance_obs": true,
+    "previous_action_obs": false,
+    "normalize_observations": false,
+    "tracking_error_obs": false,
+    "case_id_obs": false
+  },
+  "training": {
+    "cases": [
+      {
+        "case": "commissioning",
+        "weight": 1.0
+      },
+      {
+        "case": "temperature-step",
+        "weight": 1.0
+      }
+    ],
+    "seed_spec": {
+      "namespace": "cascade-regulation-training-v1"
+    },
+    "step_budget": 20000
+  },
+  "validation": {
+    "cases": [
+      "commissioning",
+      "temperature-step"
+    ],
+    "seed_spec": {
+      "namespace": "cascade-regulation-validation-v1"
+    }
+  },
+  "test": {
+    "cases": [
+      {
+        "case": "commissioning",
+        "group": "startup"
+      },
+      {
+        "case": "temperature-step",
+        "group": "reference"
+      },
+      {
+        "base_case": "disturbance-rejection",
+        "variant_id": "nominal",
+        "overrides": {
+          "disturbances": []
+        },
+        "group": "disturbance",
+        "pair_id": "cascade-disturbance-v1",
+        "base_case_id": "disturbance-rejection",
+        "condition": "nominal"
+      },
+      {
+        "case": "disturbance-rejection",
+        "group": "disturbance",
+        "pair_id": "cascade-disturbance-v1",
+        "base_case_id": "disturbance-rejection",
+        "condition": "shifted"
+      }
+    ],
+    "seed_spec": {
+      "namespace": "cascade-regulation-test-v1"
+    }
+  },
+  "ranking": {
+    "id": "cascade-regulation-ranking-v1",
+    "primary_utility": "negative_regulation_cost_rate",
+    "safety_gate": "zero-hard-failure-v1",
+    "case_score": "fixed-anchor-v1",
+    "track_aggregation": "weighted-geometric-mean-v1"
+  }
+}

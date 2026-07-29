@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Grid-search task-specific quadruple-tank linear MPC parameters."""
+"""Grid-search Case-specific quadruple-tank linear MPC parameters."""
 from __future__ import annotations
 
 import argparse
@@ -7,11 +7,10 @@ import itertools
 import json
 from time import perf_counter
 
-from aiogym.evaluation import resolve_protocol
-from aiogym.evaluation.execution import run_evaluation_case
+from aiogym.controllers.tuning.evaluation import evaluate_specialist
 
 
-TASK_PROFILES = {
+CASE_PROFILES = {
     "minimum-phase": "quadruple-minimum-phase",
     "nonminimum-phase": "quadruple-nonminimum-phase",
     "zero-boundary-stress": "quadruple-zero-boundary",
@@ -24,7 +23,7 @@ def _csv(raw: str, cast):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--task", required=True, choices=sorted(TASK_PROFILES))
+    parser.add_argument("--case", required=True, choices=sorted(CASE_PROFILES))
     parser.add_argument("--profile", default=None)
     parser.add_argument("--horizons", default="10", help="comma-separated integers")
     parser.add_argument("--move-weights", default="0", help="comma-separated floats")
@@ -44,7 +43,7 @@ def main() -> None:
     parser.add_argument("--episode-steps", type=int, default=None)
     args = parser.parse_args()
 
-    profile = args.profile or TASK_PROFILES[args.task]
+    profile = args.profile or CASE_PROFILES[args.case]
     grid = itertools.product(
         _csv(args.horizons, int),
         _csv(args.move_weights, float),
@@ -53,17 +52,6 @@ def main() -> None:
     )
     rows = []
     for horizon, move, steady_input_weight, cv_scale in grid:
-        protocol = resolve_protocol(
-            "quadruple",
-            "tracking",
-            {
-                "task": args.task,
-                "action_mode": "actuator",
-                "tracking_q_y": args.error_weight,
-                "tracking_r_move": move,
-                **({"episode_steps": args.episode_steps} if args.episode_steps else {}),
-            },
-        )
         parameters = {
             "P": horizon,
             "move_supp": move,
@@ -71,18 +59,28 @@ def main() -> None:
             "cv_scale": [cv_scale, cv_scale],
         }
         started = perf_counter()
-        case = run_evaluation_case(
+        row = evaluate_specialist(
             scenario="quadruple",
+            case=args.case,
             controller="mpc",
-            protocol=protocol,
             seeds=[args.seed],
-            controller_config={"profile": profile, "parameters": parameters},
-            include_episodes=False,
+            controller_config={
+                "profile": profile,
+                "case": args.case,
+                "policy_scope": "specialist",
+                "goal": "regulation",
+                "reward_spec": "regulation-v1",
+                "parameters": parameters,
+            },
+            environment=(
+                {"episode_steps": args.episode_steps}
+                if args.episode_steps
+                else {}
+            ),
         )
-        row = case["row"]
         result = {
             **parameters,
-            "task": args.task,
+            "case": args.case,
             "tracking_error_cost": row.get("tracking_error_cost"),
             "tracking_cost": row.get("tracking_cost"),
             "constraint_violation_count": row.get("constraint_violation_count"),

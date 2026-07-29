@@ -4,14 +4,14 @@ from __future__ import annotations
 import numpy as np
 
 from aiogym.controllers import make_controller
-from aiogym.env import AIOGymNativeEnv
-from aiogym.evaluation import BenchmarkProtocol, evaluate_controller, rollout_controller
+from aiogym.env import AIOGymEnv
+from aiogym.evaluation import evaluate_controller, rollout_controller
 from aiogym import list_scenarios
 from aiogym.models import make_model
 
 
 def _make_env(**kwargs):
-    return AIOGymNativeEnv(
+    return AIOGymEnv(
         "crystallization",
         action_mode="actuator",
         auto_events=False,
@@ -48,8 +48,8 @@ def test_action_to_temperature_mapping():
 def test_unified_reward_modes_are_finite():
     model = make_model("crystallization")
     assert not callable(getattr(model, "reward_terms", None))
-    for reward_mode in ("tracking", "kpi", "economic"):
-        env = _make_env(reward_mode=reward_mode, crystal_ln_sp=10.5, crystal_cv_sp=0.85, episode_steps=3)
+    for reward_spec in ("regulation-v1", "economic-v1"):
+        env = _make_env(reward_spec=reward_spec, crystal_ln_sp=10.5, crystal_cv_sp=0.85, episode_steps=3)
         obs, _ = env.reset(seed=0)
         obs, reward, terminated, truncated, info = env.step(np.array([0.5], dtype=np.float32))
         assert not terminated
@@ -57,7 +57,7 @@ def test_unified_reward_modes_are_finite():
         assert np.all(np.isfinite(obs))
         assert np.isfinite(reward)
         assert np.isfinite(info["track"])
-        assert "profit" in info
+        assert "goal_reward" in info
 
 
 def test_tracking_controllers_build():
@@ -71,49 +71,49 @@ def test_tracking_controllers_build():
     assert mpc.metadata()["horizon"] == 2
     assert oracle.metadata()["scenario"] == "crystallization"
     assert oracle.metadata()["horizon"] == 4
-    assert oracle.metadata()["objective"] == "economic"
+    assert oracle.metadata()["goal"] == "economic"
+    assert oracle.metadata()["reward_spec_id"] == "economic-v1"
     assert "mode" not in oracle.metadata()
 
 
 def test_crystallization_mpc_uses_affine_output_linearization():
-    protocol = BenchmarkProtocol.tracking(
-        "crystallization",
-        action_mode="actuator",
+    env = _make_env(
+        reward_spec="regulation-v1",
         episode_steps=3,
         control_dt=0.5,
     )
-    rollout = rollout_controller(
-        make_controller("mpc", scenario="crystallization"),
-        protocol.make_env(),
-        seed=0,
-        protocol=protocol,
-    )
+    try:
+        rollout = rollout_controller(
+            make_controller("mpc", scenario="crystallization"),
+            env,
+            seed=0,
+        )
+    finally:
+        env.close()
     actions = [row["action"][0] for row in rollout["rollout"]]
     assert actions[0] != 0.0
     assert actions != [0.0] * len(actions)
 
 
 def test_pid_tracking_rollout():
-    protocol = BenchmarkProtocol.tracking(
-        "crystallization",
-        action_mode="actuator",
+    env = _make_env(
+        reward_spec="regulation-v1",
         episode_steps=3,
         control_dt=1.0,
-        auto_events=False,
-        randomize=False,
-        randomize_setpoints=False,
         randomize_plant=False,
         plant_drift=False,
     )
-    result = evaluate_controller(
-        make_controller("pid", scenario="crystallization"),
-        protocol.make_env(),
-        episodes=1,
-        seed=0,
-        protocol=protocol,
-    )
+    try:
+        result = evaluate_controller(
+            make_controller("pid", scenario="crystallization"),
+            env,
+            episodes=1,
+            seed=0,
+        )
+    finally:
+        env.close()
     assert result["controller_name"] == "PID"
-    assert result["metric"] == "tracking_cost"
+    assert result["metric"] == "regulation_cost"
     assert np.isfinite(result["tracking_cost"])
     assert np.isfinite(result["tracking_mse"])
     assert np.isfinite(result["tracking_iae"])

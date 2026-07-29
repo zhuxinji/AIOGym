@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aiogym"
 version = "0.1.0"
-description = "Native Gymnasium backend and benchmark suite for AIO-Gym process-control environments."
+description = "Native Gymnasium process-control environments and Track benchmarks for AIO-Gym."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -72,6 +72,8 @@ packages = [
   "aiogym._environment",
   "aiogym._internal",
   "aiogym.cli",
+  "aiogym.benchmarks",
+  "aiogym.benchmarks.tracks",
   "aiogym.controllers",
   "aiogym.controllers.tuning",
   "aiogym.evaluation",
@@ -80,7 +82,8 @@ packages = [
   "aiogym.evaluation.metrics",
   "aiogym.models",
   "aiogym.models.scenarios",
-  "aiogym.models.tasks",
+  "aiogym.models.cases",
+  "aiogym.rewards",
   "aiogym.rl",
 ]
 
@@ -90,7 +93,6 @@ aiogym = [
   "models/examples/*.py",
   "models/examples/*.md",
   "models/parameters/*.json",
-  "evaluation/suites/*.json",
-  "evaluation/suites/presets/*.json",
-  "models/tasks/builtin/*/*.json",
+  "models/cases/builtin/*/*.json",
+  "benchmarks/tracks/builtin/*.json",
 ]

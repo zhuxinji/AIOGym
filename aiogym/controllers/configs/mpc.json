@@ -30,6 +30,27 @@
     }
   },
   "profiles": {
+    "cascade-regulation-generalist-v1": {
+      "track": "cascade-regulation-generalist-v1",
+      "policy_scope": "generalist",
+      "goal": "regulation",
+      "reward_spec": "regulation-v1",
+      "access_level": "model-based"
+    },
+    "cascade-recirculating-regulation-generalist-v1": {
+      "track": "cascade-recirculating-regulation-generalist-v1",
+      "policy_scope": "generalist",
+      "goal": "regulation",
+      "reward_spec": "regulation-v1",
+      "access_level": "model-based"
+    },
+    "quadruple-regulation-generalist-v1": {
+      "track": "quadruple-regulation-generalist-v1",
+      "policy_scope": "generalist",
+      "goal": "regulation",
+      "reward_spec": "regulation-v1",
+      "access_level": "model-based"
+    },
     "quadruple-minimum-phase": {
       "scenarios": {
         "quadruple": {

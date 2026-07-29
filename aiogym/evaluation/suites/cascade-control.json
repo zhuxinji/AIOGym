@@ -1,9 +1,0 @@
-{
-  "description": "The four formal open-cascade control tasks evaluated under each task's declared default objective.",
-  "scenarios": ["cascade"],
-  "controllers": ["pid", "mpc"],
-  "action_mode": "actuator",
-  "tasks": {
-    "exclude": ["continuous-benchmark"]
-  }
-}

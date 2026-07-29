@@ -1,6 +1,7 @@
 """Episode evaluation execution."""
 from __future__ import annotations
 
+import copy
 from time import perf_counter
 from typing import Sequence
 
@@ -8,37 +9,50 @@ import numpy as np
 
 from ..._internal.serialization import jsonable as _jsonable
 from ...controllers import as_controller, build_context, validate_action
-from ..results import _aggregate_metric_keys, evaluate_task_acceptance, result_schema
+from ..results import _aggregate_metric_keys, evaluate_case_acceptance, result_schema
 from .metadata import (
     _aggregate_controller_diagnostics,
     _controller_diagnostics,
     _controller_diagnostic_totals,
     _env_metadata,
-    _env_objective,
     _model_metadata,
     _reproducibility_metadata,
 )
 from ..metrics.economic import economic_step_metrics
+from ..metrics.safety import SafetyDebtTracker
 from ..metrics.safety import action_bound_metrics as _action_bound_metrics
 from ..metrics.safety import safety_step_metrics as _safety_step_metrics
+from ..metrics.service import service_step_metrics
 from ..metrics.tracking import tracking_step_metrics as _tracking_step_metrics
 from ..metric_catalog import (
     EVALUATION_SCHEMA_VERSION,
     metric_definitions,
     metric_direction,
-    primary_metric_for_objective,
 )
-from ..objective_specs import ObjectiveSpec, objective_spec
-from ..protocols import BenchmarkProtocol, _empty_episode_totals
+from ..goal_specs import GoalSpec, goal_spec, resolve_goal
+from ..scorecard import (
+    ScorecardAccumulator,
+    flatten_scorecard,
+    group_scorecard,
+)
+from ..safety_gate import SafetyGateSpec, apply_safety_gate
+from .rollouts import _rollout_payload, _rollout_step
+from .totals import empty_episode_totals
 
 
-def evaluate_controller(agent, env, episodes: int = 20, seed: int = 0,
-                        include_episodes: bool = False, protocol: BenchmarkProtocol | None = None,
+def evaluate_controller(agent, env, episodes: int = 1, seed: int = 0,
+                        include_episodes: bool = False,
                         seed_list: Sequence[int] | None = None,
-                        objective_specification: ObjectiveSpec | str | None = None):
-    """Evaluate any supported controller/policy on an AIOGymNativeEnv.
+                        *, goal_specification: GoalSpec | str | None = None,
+                        safety_mode: str | None = None,
+                        initial_safety_debt: bool | None = None,
+                        seed_namespace: str | None = None,
+                        worker_index: int = 0,
+                        _rollout_capture: dict | None = None,
+                        rollout_steps: int | None = None):
+    """Evaluate any supported controller/policy on an AIOGymEnv.
 
-    Returns aggregate metrics plus the protocol/controller metadata needed to
+    Returns aggregate metrics plus the goal/controller metadata needed to
     reproduce the benchmark.
     """
 
@@ -51,36 +65,69 @@ def evaluate_controller(agent, env, episodes: int = 20, seed: int = 0,
         if not seeds:
             raise ValueError("seed_list must contain at least one seed")
     controller = as_controller(agent, action_mode=getattr(env, "action_mode", "actuator"))
-    if protocol is not None:
-        resolved_objective = protocol.resolved_objective()
-        if (
-            objective_specification is not None
-            and getattr(objective_specification, "name", objective_specification)
-            != resolved_objective.name
-        ):
-            raise ValueError("objective specification does not match protocol objective")
-    elif isinstance(objective_specification, ObjectiveSpec):
-        resolved_objective = objective_specification
-    elif objective_specification is not None:
-        resolved_objective = objective_spec(
-            str(objective_specification), source="explicit"
+    if goal_specification is not None:
+        resolved_goal = resolve_goal(
+            explicit=goal_specification,
+            source="explicit",
         )
     else:
-        resolved_objective = objective_spec(
-            _env_objective(env), source="environment-reward-mode"
+        resolved_goal = goal_spec(
+            str(getattr(env, "goal", "regulation")),
+            source="environment-reward-spec",
         )
-    objective = resolved_objective.name
+    case_profile = getattr(env, "case_profile", None) or {}
+    if str(getattr(env, "goal", resolved_goal.name)) != resolved_goal.name:
+        raise ValueError("goal specification does not match environment RewardSpec")
+    evaluation_meta = dict(case_profile.get("evaluation", {}))
+    resolved_safety_mode = str(
+        safety_mode
+        if safety_mode is not None
+        else evaluation_meta.get(
+            "safety_mode",
+            "recovery"
+            if case_profile.get("name") == "safety-recovery"
+            else "ordinary",
+        )
+    )
+    resolved_initial_safety_debt = bool(
+        initial_safety_debt
+        if initial_safety_debt is not None
+        else evaluation_meta.get(
+            "initial_safety_debt",
+            resolved_safety_mode == "recovery",
+        )
+    )
+    safety_gate_spec = SafetyGateSpec(mode=resolved_safety_mode)
     per_episode = []
     episode_schedules = []
+    episode_seed_bundles = []
     eval_start = perf_counter()
     for ep, ep_seed in enumerate(seeds):
         episode_start = perf_counter()
-        obs, reset_info = env.reset(seed=ep_seed)
+        if seed_namespace is not None:
+            from ...benchmarks import derive_seed_bundle
+
+            seed_bundle = derive_seed_bundle(
+                ep_seed,
+                seed_namespace,
+                worker_index=worker_index,
+            )
+            obs, reset_info = env.reset(
+                seed=seed_bundle["initial"],
+                options={"seed_bundle": seed_bundle},
+            )
+            episode_seed_bundles.append(seed_bundle)
+        else:
+            obs, reset_info = env.reset(seed=ep_seed)
         controller.reset(seed=ep_seed)
-        totals = _empty_episode_totals(ep, ep_seed)
+        totals = empty_episode_totals(ep, ep_seed)
+        scorecard_accumulator = ScorecardAccumulator()
+        safety_debt_tracker = SafetyDebtTracker(
+            initial_safety_debt=resolved_initial_safety_debt
+        )
         episode_schedules.append(_jsonable({
             "setpoints": getattr(env, "_episode_setpoint_events", {}),
-            "task": getattr(env, "_task_disturbance_events", {}),
+            "case": getattr(env, "_case_disturbance_events", {}),
             "auto_events": getattr(env, "_dist_events", []),
         }))
         done = False
@@ -88,26 +135,93 @@ def evaluate_controller(agent, env, episodes: int = 20, seed: int = 0,
         info = reset_info or {}
         last_unsettled_time = 0.0
         raw_last_unsettled_time = {}
+        capture_rollout = _rollout_capture is not None and ep == 0
+        capture_rows = []
+        capture_limit = (
+            rollout_steps
+            if rollout_steps is not None
+            else getattr(env, "episode_steps", None)
+        )
+        captured_payload = None
+        if capture_rollout and capture_limit is not None and capture_limit <= 0:
+            captured_payload = _rollout_payload(
+                controller,
+                env,
+                seed=ep_seed,
+                rows=capture_rows,
+            )
         while not done:
             context = build_context(env, info)
             action = validate_action(controller.act(obs, context), env, controller.name)
+            state = list(getattr(env.integ, "x", []))
+            previous_action = copy.deepcopy(getattr(env, "previous_act", action))
+            disturbance = copy.deepcopy(env._env())
             bound_metrics = _action_bound_metrics(action, env)
-            obs, reward, term, trunc, info = env.step(action)
+            obs_next, reward, term, trunc, info_next = env.step(action)
+            if (
+                capture_rollout
+                and captured_payload is None
+                and (capture_limit is None or steps < capture_limit)
+            ):
+                capture_rows.append(_rollout_step(
+                    step=steps,
+                    env=env,
+                    obs=obs,
+                    state=state,
+                    action=action,
+                    context=context,
+                    obs_next=obs_next,
+                    reward=reward,
+                    term=term,
+                    trunc=trunc,
+                    info_next=info_next,
+                ))
+                if (
+                    capture_limit is not None
+                    and len(capture_rows) >= capture_limit
+                ):
+                    captured_payload = _rollout_payload(
+                        controller,
+                        env,
+                        seed=ep_seed,
+                        rows=capture_rows,
+                    )
             time_sec = steps * float(env.control_dt)
             # ``env.y_sp`` may already contain the reference staged for the next
             # control step. Metrics for this completed transition must use the
-            # reference recorded by its stage objective.
+            # reference recorded for the completed transition.
             active_setpoint = {
-                "y_sp": list(info.get("y_sp", getattr(env, "y_sp", [])))
+                "y_sp": list(info_next.get("y_sp", getattr(env, "y_sp", [])))
             }
-            tracking = _tracking_step_metrics(info, active_setpoint, time_sec, float(env.control_dt), env)
-            safety = _safety_step_metrics(info, bound_metrics, float(env.control_dt))
+            tracking = _tracking_step_metrics(
+                info_next,
+                active_setpoint,
+                time_sec,
+                float(env.control_dt),
+                env,
+            )
+            safety = _safety_step_metrics(
+                info_next,
+                bound_metrics,
+                float(env.control_dt),
+            )
+            safety = safety_debt_tracker.observe(safety)
             totals["return"] += float(reward)
-            totals["track"] += float(info.get("track", 0.0))
-            totals["constraint"] += float(info.get("constraint", 0.0))
-            economic = economic_step_metrics(info, float(env.control_dt))
+            totals["track"] += float(info_next.get("track", 0.0))
+            totals["constraint"] += float(info_next.get("constraint", 0.0))
+            economic = economic_step_metrics(
+                info_next,
+                float(env.control_dt),
+                env=env,
+                state=list(getattr(env.integ, "x", [])),
+                action=action,
+                disturbance=disturbance,
+            )
+            economic.update(
+                service_step_metrics(info_next, float(env.control_dt))
+            )
             for key, value in economic.items():
-                totals[key] += value
+                totals[key] = totals.get(key, 0.0) + value
             for key in (
                 "tracking_cost", "tracking_return", "tracking_error_cost", "tracking_move_cost",
                 "tracking_mse", "tracking_iae", "tracking_ise", "tracking_itae",
@@ -126,12 +240,32 @@ def evaluate_controller(agent, env, episodes: int = 20, seed: int = 0,
                 if key == "safety_margin_min":
                     totals[key] = min(totals[key], value)
                 else:
-                    totals[key] += value
+                    totals[key] = totals.get(key, 0.0) + value
+            scorecard_accumulator.accumulate(
+                tracking=tracking,
+                economic=economic,
+                safety=safety,
+                costs=info_next.get("costs", {}),
+                model=env.model,
+                action=action,
+                previous_action=previous_action,
+                dt=float(env.control_dt),
+            )
+            obs = obs_next
+            info = info_next
             done = bool(term or trunc)
             steps += 1
-        rep = env.scorer.report()
+        if capture_rollout:
+            if captured_payload is None:
+                captured_payload = _rollout_payload(
+                    controller,
+                    env,
+                    seed=ep_seed,
+                    rows=capture_rows,
+                )
+            _rollout_capture.clear()
+            _rollout_capture.update(captured_payload)
         runtime_seconds = perf_counter() - episode_start
-        totals["normalized_score"] = float(rep["score"])
         totals["steps"] = steps
         totals["runtime_seconds"] = float(runtime_seconds)
         totals["runtime_seconds_per_step"] = float(runtime_seconds / steps) if steps else 0.0
@@ -145,7 +279,28 @@ def evaluate_controller(agent, env, episodes: int = 20, seed: int = 0,
         )
         controller_diag = _controller_diagnostics(controller)
         totals["controller_diagnostics"] = controller_diag
-        totals.update(_controller_diagnostic_totals(controller_diag))
+        controller_totals = _controller_diagnostic_totals(controller_diag)
+        totals.update(controller_totals)
+        episode_scorecard = scorecard_accumulator.finalize(
+            horizon_seconds=horizon_seconds,
+            settling_time=last_unsettled_time,
+            tracking_raw_by_output=totals["tracking_raw_by_output"],
+            controller_metrics={
+                **controller_totals,
+                "runtime_seconds": totals["runtime_seconds"],
+                "runtime_seconds_per_step": totals[
+                    "runtime_seconds_per_step"
+                ],
+                "runtime_total_seconds": totals["runtime_seconds"],
+            },
+        )
+        for key, value in flatten_scorecard(episode_scorecard).items():
+            if isinstance(value, (int, float, np.number)):
+                totals[key] = float(value)
+        totals["scorecard"] = episode_scorecard
+        totals["reward_spec_id"] = str(
+            getattr(env, "reward_spec_id", "unknown")
+        )
         per_episode.append(totals)
     runtime_total_seconds = perf_counter() - eval_start
 
@@ -155,34 +310,41 @@ def evaluate_controller(agent, env, episodes: int = 20, seed: int = 0,
     def std(key):
         return float(np.std([row[key] for row in per_episode]))
 
-    if protocol is not None:
-        task_meta = protocol.metadata()["task_identity"]
-    else:
-        from ...models.tasks import task_identity
+    from ...models.cases import case_identity
 
-        task_meta = task_identity(getattr(env, "task_profile", None))
-    primary_metric = primary_metric_for_objective(objective)
+    case_meta = case_identity(getattr(env, "case_profile", None))
+    primary_metric = resolved_goal.primary_metric
     aggregate_keys = _aggregate_metric_keys(per_episode)
     result = {
         "schema_version": EVALUATION_SCHEMA_VERSION,
         "controller_name": controller.name,
         "metric": primary_metric,
         "metric_direction": metric_direction(primary_metric),
-        "objective": objective,
-        "objective_source": resolved_objective.source,
-        "objective_spec": resolved_objective.metadata(),
-        "task": task_meta["name"],
-        "task_status": task_meta["status"],
-        "task_profile_hash": task_meta["profile_hash"],
+        "goal": resolved_goal.name,
+        "goal_source": resolved_goal.source,
+        "goal_spec": resolved_goal.metadata(),
+        "safety_mode": resolved_safety_mode,
+        "initial_safety_debt": resolved_initial_safety_debt,
+        "case": case_meta["name"],
+        "case_status": case_meta["status"],
+        "case_profile_hash": case_meta["profile_hash"],
         "episodes": len(seeds),
         "seed": int(seeds[0]) if seeds else int(seed),
         "seed_list": [int(s) for s in seeds],
-        "normalized_score": mean("normalized_score"),
-        "normalized_score_std": std("normalized_score"),
+        "seed_namespace": seed_namespace,
+        "seed_bundles": episode_seed_bundles,
         "profit": mean("profit"),
         "profit_std": std("profit"),
         "return": mean("return"),
         "return_std": std("return"),
+        "reward_spec_id": str(getattr(env, "reward_spec_id", "unknown")),
+        "return_metadata": {
+            "reward_spec_id": str(
+                getattr(env, "reward_spec_id", "unknown")
+            ),
+            "comparable_across_reward_specs": False,
+            "description": "sum of the environment training reward",
+        },
         "track": mean("track"),
         "track_std": std("track"),
         "constraint": mean("constraint"),
@@ -190,25 +352,18 @@ def evaluate_controller(agent, env, episodes: int = 20, seed: int = 0,
         "production": mean("production"),
         "production_std": std("production"),
         "runtime_total_seconds": float(runtime_total_seconds),
-        "protocol": (
-            protocol.metadata()
-            if protocol is not None
-            else {
-                "environment": _env_metadata(env),
-                "objective_spec": resolved_objective.metadata(),
-            }
-        ),
+        "environment": _env_metadata(env),
         "controller": controller.metadata(),
         "model": _model_metadata(env),
         "disturbance": {
-            "schedule_source": "task_and_model_schema",
+            "schedule_source": "case_and_model_schema",
             "episode_schedules": episode_schedules,
         },
         "controller_diagnostics": _aggregate_controller_diagnostics(per_episode),
-        "metric_definitions": metric_definitions(objective),
+        "metric_definitions": metric_definitions(),
         "result_schema": result_schema(),
         "reproducibility": _reproducibility_metadata(
-            env, seeds, protocol, resolved_objective
+            env, seeds, resolved_goal
         ),
     }
     result["controller_status"] = "degraded" if result["controller_diagnostics"].get("degraded") else "ok"
@@ -219,15 +374,17 @@ def evaluate_controller(agent, env, episodes: int = 20, seed: int = 0,
         result["tracking_raw_by_output"],
         result["tracking_raw_by_output_std"],
     ) = _aggregate_raw_tracking_metrics(per_episode)
+    result["scorecard"] = group_scorecard(result)
+    result = apply_safety_gate(result, safety_gate_spec)
     result["execution_status"] = (
         "degraded" if result["controller_status"] == "degraded" else "passed"
     )
-    acceptance = evaluate_task_acceptance(
-        protocol.task if protocol is not None else getattr(env, "task_profile", None),
+    acceptance = evaluate_case_acceptance(
+        getattr(env, "case_profile", None),
         result,
     )
-    result["objective_status"] = acceptance["status"]
-    result["objective_acceptance"] = acceptance
+    result["acceptance_status"] = acceptance["status"]
+    result["acceptance"] = acceptance
     if include_episodes:
         result["episode_metrics"] = per_episode
     return result

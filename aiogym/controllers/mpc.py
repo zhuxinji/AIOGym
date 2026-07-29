@@ -164,5 +164,13 @@ class MPCAgent:
         if self._target_u is not None and self.steady_input_weight:
             H += self.steady_input_weight * np.eye(nu)
             g += self.steady_input_weight * (u0 - self._target_u)
-        du = np.linalg.solve(H, -g)
+        try:
+            du = np.linalg.solve(H, -g)
+        except np.linalg.LinAlgError:
+            # With zero move suppression, unobservable/redundant actuator
+            # directions can make the positive-semidefinite Hessian singular.
+            # The minimum-norm least-squares solution is the corresponding
+            # well-defined MPC move and avoids inventing a metric penalty solely
+            # for numerical regularization.
+            du = np.linalg.lstsq(H, -g, rcond=None)[0]
         self.u = np.clip(u0 + du, 0.0, 1.0)

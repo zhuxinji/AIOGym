@@ -1,15 +1,10 @@
 """Public discovery helpers for registered and bundled AIO-Gym resources."""
 from __future__ import annotations
 
-from pathlib import Path
-
 from ._internal.identifiers import canonical_scenario_ids
 from .controllers.registry import _controller_ids
-from .models.tasks import list_tasks as _list_tasks
+from .models.cases import list_cases as _list_cases
 from .models.registry import MODELS
-
-
-_SUITE_DIR = Path(__file__).with_name("evaluation") / "suites"
 
 
 def list_scenarios() -> tuple[str, ...]:
@@ -18,18 +13,10 @@ def list_scenarios() -> tuple[str, ...]:
     return canonical_scenario_ids(tuple(MODELS))
 
 
-def list_tasks(scenario: str | None = None) -> tuple[str, ...]:
-    """Return canonical ``scenario/name`` IDs for bundled task specs."""
+def list_cases(scenario: str | None = None) -> tuple[str, ...]:
+    """Return canonical ``scenario/name`` IDs for bundled Case v2 specs."""
 
-    return _list_tasks(scenario)
-
-
-def list_suites() -> tuple[str, ...]:
-    """Return canonical IDs for bundled benchmark suites."""
-
-    if not _SUITE_DIR.is_dir():
-        return ()
-    return tuple(sorted(path.stem for path in _SUITE_DIR.glob("*.json")))
+    return _list_cases(scenario)
 
 
 def list_controllers() -> tuple[str, ...]:
@@ -38,4 +25,8 @@ def list_controllers() -> tuple[str, ...]:
     return _controller_ids()
 
 
-__all__ = ["list_controllers", "list_scenarios", "list_suites", "list_tasks"]
+__all__ = [
+    "list_cases",
+    "list_controllers",
+    "list_scenarios",
+]

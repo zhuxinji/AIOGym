@@ -47,20 +47,25 @@ jobs:
         if: matrix.python-version == '3.12'
         run: python -m build --no-isolation --outdir /tmp/aiogym_dist
       - name: Check CLI catalog
-        run: aiogym list scenarios
+        run: |
+          aiogym list scenarios
+          aiogym list tracks
       - name: Run test suite
         run: python -m pytest -q aiogym/tests
       - name: Run benchmark smoke test
         run: >-
-          aiogym benchmark suite
-          standard-baselines
-          --scenarios cstr
-          --objectives tracking
+          aiogym benchmark cstr
+          --goal regulation
+          --reward-spec regulation-v1
           --controllers pid,mpc
           --episodes 1
           --episode-steps 2
-          --artifact-dir /tmp/aiogym_suite_smoke
-      - name: Validate benchmark artifacts
-        run: aiogym artifacts check /tmp/aiogym_suite_smoke
+          --output /tmp/aiogym_benchmark_smoke.json
+      - name: Validate benchmark output
+        run: >-
+          python -c "import json;
+          payload = json.load(open('/tmp/aiogym_benchmark_smoke.json'));
+          assert payload['benchmark'] == 'case';
+          assert set(payload['results']) == {'pid', 'mpc'}"
       - name: Check patch whitespace
         run: git diff --check

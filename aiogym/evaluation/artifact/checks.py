@@ -33,12 +33,38 @@ def check_benchmark_artifacts(artifact_dir: str | Path) -> dict[str, Any]:
     rows = list(benchmark.get("rows") or [])
     expected_scenarios = _artifact_scenario_names(benchmark)
     expected_rows = len(rows)
+    compact = (
+        (root / "data").exists()
+        or "/data/" in str(artifacts.get("summary_csv") or "")
+    )
     paths = {
         "rows": _check_artifact_path(root, artifacts, "rows", "summary/rows.json"),
-        "summary_csv": _check_artifact_path(root, artifacts, "summary_csv", "summary/summary.csv"),
+        "summary_csv": _check_artifact_path(
+            root,
+            artifacts,
+            "summary_csv",
+            "data/summary.csv" if compact else "summary/summary.csv",
+        ),
+        "comparison_figure": _check_artifact_path(
+            root,
+            artifacts,
+            "comparison_figure",
+            "figures/comparison.svg",
+        ),
+        "tracking_figure": _check_artifact_path(
+            root,
+            artifacts,
+            "tracking_figure",
+            "figures/tracking.svg",
+        ),
         "tracking_comparison": _check_artifact_path(root, artifacts, "tracking_comparison", "summary/tracking_comparison.csv"),
         "tracking_comparison_figure": _check_artifact_path(root, artifacts, "tracking_comparison_figure", "figures/tracking_comparison.svg"),
-        "rollouts": _check_artifact_path(root, artifacts, "rollouts", "rollouts/rollouts.json"),
+        "rollouts": _check_artifact_path(
+            root,
+            artifacts,
+            "rollouts",
+            "data/rollouts.json.gz" if compact else "rollouts/rollouts.json",
+        ),
         "leaderboard": _check_artifact_path(root, artifacts, "leaderboard", "summary/leaderboard.json"),
         "all_summary_csv": _check_artifact_path(root, artifacts, "all_summary_csv", "summary/all_summary.csv"),
         "all_leaderboard": _check_artifact_path(root, artifacts, "all_leaderboard", "summary/all_leaderboard.json"),
@@ -48,14 +74,24 @@ def check_benchmark_artifacts(artifact_dir: str | Path) -> dict[str, Any]:
         "benchmark_config": _check_artifact_path(root, artifacts, "benchmark_config", "config/benchmark_config.json"),
         "summary_figure": _check_artifact_path(root, artifacts, "summary_figure", "figures/summary.svg"),
         "leaderboard_figure": _check_artifact_path(root, artifacts, "leaderboard_figure", "figures/leaderboard.svg"),
-        "training": _check_artifact_path(root, artifacts, "training", "training/training.json"),
-        "learning_curve": _check_artifact_path(root, artifacts, "learning_curve", "training/learning_curve.json"),
-        "learning_curve_csv": _check_artifact_path(root, artifacts, "learning_curve_csv", "training/learning_curve.csv"),
+        "training": _check_artifact_path(root, artifacts, "training", "data/training.json" if compact else "training/training.json"),
+        "learning_curve": _check_artifact_path(root, artifacts, "learning_curve", "data/learning_curve.json" if compact else "training/learning_curve.json"),
+        "learning_curve_csv": _check_artifact_path(root, artifacts, "learning_curve_csv", "data/learning_curve.csv" if compact else "training/learning_curve.csv"),
         "learning_curve_figure": _check_artifact_path(root, artifacts, "learning_curve_figure", "figures/learning_curve.svg"),
     }
+    if compact:
+        return _check_compact_artifacts(
+            root,
+            benchmark,
+            artifacts,
+            rows,
+            expected_scenarios,
+            paths,
+            checks,
+        )
     for key in ("rows", "summary_csv", "leaderboard", "results", "report", "input_config", "benchmark_config"):
         _add_exists(checks, key, paths[key], required=True)
-    tracking_rows_present = any(row.get("objective") == "tracking" for row in rows)
+    tracking_rows_present = any(row.get("goal") == "regulation" for row in rows)
     if tracking_rows_present:
         _add_exists(checks, "tracking_comparison", paths["tracking_comparison"], required=True)
         _add_exists(checks, "tracking_comparison_figure", paths["tracking_comparison_figure"], required=True)
@@ -79,10 +115,10 @@ def check_benchmark_artifacts(artifact_dir: str | Path) -> dict[str, Any]:
         expected_control_cases = len({
             (
                 str(rollout.get("scenario")),
-                str(rollout.get("task") or "default"),
+                str(rollout.get("case") or "default"),
             )
             for rollout in rollouts
-            if rollout.get("objective") == "tracking" and rollout.get("scenario")
+            if rollout.get("goal") == "regulation" and rollout.get("scenario")
         })
         checks.append(_check(
             "tracking_control_figure_count",
@@ -94,8 +130,8 @@ def check_benchmark_artifacts(artifact_dir: str | Path) -> dict[str, Any]:
     leaderboards = artifacts.get("leaderboards") if isinstance(artifacts.get("leaderboards"), Mapping) else {}
     summary_figures = artifacts.get("summary_figures") if isinstance(artifacts.get("summary_figures"), Mapping) else {}
     leaderboard_figures = artifacts.get("leaderboard_figures") if isinstance(artifacts.get("leaderboard_figures"), Mapping) else {}
-    has_objective_outputs = bool(summary_csvs or leaderboards)
-    if has_objective_outputs:
+    has_goal_outputs = bool(summary_csvs or leaderboards)
+    if has_goal_outputs:
         _add_exists(checks, "all_summary_csv", paths["all_summary_csv"], required=True)
         _add_exists(checks, "all_leaderboard", paths["all_leaderboard"], required=True)
     for key in ("summary_figure", "leaderboard_figure"):
@@ -111,8 +147,8 @@ def check_benchmark_artifacts(artifact_dir: str | Path) -> dict[str, Any]:
     leaderboard = _safe_json(checks, "leaderboard_json", paths["leaderboard"])
     summary_rows = _safe_csv_rows(checks, "summary_csv_rows", paths["summary_csv"])
     tracking_comparison_rows = _safe_csv_rows(checks, "tracking_comparison_rows", paths["tracking_comparison"]) if tracking_rows_present else None
-    all_summary_rows = _safe_csv_rows(checks, "all_summary_csv_rows", paths["all_summary_csv"]) if has_objective_outputs else None
-    all_leaderboard = _safe_json_list(checks, "all_leaderboard_json", paths["all_leaderboard"]) if has_objective_outputs else None
+    all_summary_rows = _safe_csv_rows(checks, "all_summary_csv_rows", paths["all_summary_csv"]) if has_goal_outputs else None
+    all_leaderboard = _safe_json_list(checks, "all_leaderboard_json", paths["all_leaderboard"]) if has_goal_outputs else None
     curve_rows = _safe_json_list(checks, "learning_curve_json", paths["learning_curve"]) if learning_curve else None
     curve_csv_rows = _safe_csv_rows(checks, "learning_curve_csv_rows", paths["learning_curve_csv"]) if learning_curve else None
     rollout_rows = (
@@ -123,7 +159,7 @@ def check_benchmark_artifacts(artifact_dir: str | Path) -> dict[str, Any]:
     if row_data is not None:
         _add_count_check(checks, "rows_json_count", len(row_data), expected_rows, paths["rows"])
     if summary_rows is not None:
-        expected_summary_rows = len(_rows_by_objective(rows)) if has_objective_outputs else expected_rows
+        expected_summary_rows = len(_rows_by_goal(rows)) if has_goal_outputs else expected_rows
         _add_count_check(checks, "summary_csv_count", len(summary_rows), expected_summary_rows, paths["summary_csv"])
     if tracking_comparison_rows is not None:
         expected_tracking_cases = _tracking_benchmark_case_count(rows)
@@ -137,10 +173,10 @@ def check_benchmark_artifacts(artifact_dir: str | Path) -> dict[str, Any]:
     if all_leaderboard is not None:
         active_rows = sum(1 for row in rows if row.get("execution_status") != "failed")
         _add_count_check(checks, "all_leaderboard_count", len(all_leaderboard), active_rows, paths["all_leaderboard"])
-    _check_objective_artifacts(root, checks, rows, summary_csvs, "summary_csv")
-    _check_objective_artifacts(root, checks, rows, leaderboards, "leaderboard")
-    _check_objective_artifacts(root, checks, rows, summary_figures, "summary_figure", count_rows=False)
-    _check_objective_artifacts(root, checks, rows, leaderboard_figures, "leaderboard_figure", count_rows=False)
+    _check_goal_artifacts(root, checks, rows, summary_csvs, "summary_csv")
+    _check_goal_artifacts(root, checks, rows, leaderboards, "leaderboard")
+    _check_goal_artifacts(root, checks, rows, summary_figures, "summary_figure", count_rows=False)
+    _check_goal_artifacts(root, checks, rows, leaderboard_figures, "leaderboard_figure", count_rows=False)
     if curve_rows is not None:
         _add_count_check(checks, "learning_curve_json_count", len(curve_rows), len(learning_curve), paths["learning_curve"])
     if curve_csv_rows is not None:
@@ -152,22 +188,97 @@ def check_benchmark_artifacts(artifact_dir: str | Path) -> dict[str, Any]:
     return _check_result(root, checks)
 
 
+def _check_compact_artifacts(
+    root: Path,
+    benchmark: Mapping[str, Any],
+    artifacts: Mapping[str, Any],
+    rows: Sequence[Mapping[str, Any]],
+    expected_scenarios: list[str],
+    paths: Mapping[str, Path],
+    checks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Validate the compact two-directory artifact layout."""
+
+    _add_exists(checks, "summary_csv", paths["summary_csv"], required=True)
+    if rows:
+        _add_exists(
+            checks,
+            "comparison_figure",
+            paths["comparison_figure"],
+            required=True,
+        )
+    if artifacts.get("tracking_figure"):
+        _add_exists(
+            checks,
+            "tracking_figure",
+            paths["tracking_figure"],
+            required=True,
+        )
+    if artifacts.get("rollouts"):
+        _add_exists(checks, "rollouts", paths["rollouts"], required=True)
+        _safe_json_list(
+            checks,
+            "rollouts_json",
+            paths["rollouts"],
+        )
+    if benchmark.get("training"):
+        _add_exists(checks, "training", paths["training"], required=True)
+    if benchmark.get("learning_curve"):
+        for key in (
+            "learning_curve",
+            "learning_curve_csv",
+            "learning_curve_figure",
+        ):
+            _add_exists(checks, key, paths[key], required=True)
+
+    summary_rows = _safe_csv_rows(
+        checks,
+        "summary_csv_rows",
+        paths["summary_csv"],
+    )
+    if summary_rows is not None:
+        _add_count_check(
+            checks,
+            "summary_csv_count",
+            len(summary_rows),
+            len(rows),
+            paths["summary_csv"],
+        )
+    _check_model_metadata(
+        root,
+        artifacts,
+        expected_scenarios,
+        checks,
+        compact=True,
+    )
+    return _check_result(root, checks)
+
+
 def _check_model_metadata(
     root: Path,
     artifacts: Mapping[str, str],
     expected_scenarios: list[str],
     checks: list[dict[str, Any]],
+    *,
+    compact: bool = False,
 ) -> None:
     manifest_path = _check_artifact_path(
         root,
         artifacts,
         "model_metadata_manifest",
-        "metadata/models/manifest.json",
+        "data/models/manifest.json"
+        if compact
+        else "metadata/models/manifest.json",
     )
     single_path = _check_artifact_path(
-        root, artifacts, "model_metadata", "metadata/model_metadata.json"
+        root,
+        artifacts,
+        "model_metadata",
+        "data/model_metadata.json"
+        if compact
+        else "metadata/model_metadata.json",
     )
-    models_dir = root / "metadata" / "models"
+    models_dir = root / ("data/models" if compact else "metadata/models")
     if len(expected_scenarios) <= 1:
         _add_exists(checks, "model_metadata", single_path, required=True)
         if models_dir.exists():
@@ -200,7 +311,13 @@ def _check_model_metadata(
     models = dict(manifest.get("models") or {})
     for scenario in expected_scenarios:
         path = resolve_artifact_path(
-            root, models.get(scenario), f"metadata/models/{scenario}.json"
+            root,
+            models.get(scenario),
+            (
+                f"data/models/{scenario}.json"
+                if compact
+                else f"metadata/models/{scenario}.json"
+            ),
         )
         _add_exists(checks, f"model_metadata:{scenario}", path, required=True)
     if models_dir.exists():
@@ -266,10 +383,10 @@ def _add_exists(checks: list[dict[str, Any]], name: str, path: Path, required: b
     checks.append(_check(name, exists or not required, str(path), "exists" if exists else "missing"))
 
 
-def _rows_by_objective(rows: Sequence[Mapping[str, Any]]) -> dict[str, list[Mapping[str, Any]]]:
+def _rows_by_goal(rows: Sequence[Mapping[str, Any]]) -> dict[str, list[Mapping[str, Any]]]:
     groups: dict[str, list[Mapping[str, Any]]] = {}
     for row in rows:
-        groups.setdefault(str(row.get("objective") or "benchmark"), []).append(row)
+        groups.setdefault(str(row.get("goal") or "benchmark"), []).append(row)
     return groups
 
 
@@ -281,31 +398,31 @@ def _leaderboard_count(data) -> int:
     return 0
 
 
-def _check_objective_artifacts(root: Path, checks: list[dict[str, Any]], rows: Sequence[Mapping[str, Any]],
-                               paths_by_objective, name: str, count_rows: bool = True) -> None:
-    if not isinstance(paths_by_objective, Mapping) or not paths_by_objective:
+def _check_goal_artifacts(root: Path, checks: list[dict[str, Any]], rows: Sequence[Mapping[str, Any]],
+                               paths_by_goal, name: str, count_rows: bool = True) -> None:
+    if not isinstance(paths_by_goal, Mapping) or not paths_by_goal:
         return
-    groups = _rows_by_objective(rows)
-    for objective, objective_rows in groups.items():
-        raw = paths_by_objective.get(objective)
+    groups = _rows_by_goal(rows)
+    for goal, goal_rows in groups.items():
+        raw = paths_by_goal.get(goal)
         if isinstance(raw, Mapping):
             for scenario, scenario_raw in sorted(raw.items()):
                 path = resolve_artifact_path(root, scenario_raw, "missing")
-                _add_exists(checks, f"{name}:{objective}:{scenario}", path, required=True)
+                _add_exists(checks, f"{name}:{goal}:{scenario}", path, required=True)
             continue
         path = resolve_artifact_path(root, raw, "missing")
-        check_name = f"{name}:{objective}"
+        check_name = f"{name}:{goal}"
         _add_exists(checks, check_name, path, required=True)
         if not count_rows or not path.exists():
             continue
         if name == "summary_csv":
             csv_rows = _safe_csv_rows(checks, f"{check_name}_rows", path)
             if csv_rows is not None:
-                _add_count_check(checks, f"{check_name}_count", len(csv_rows), len(objective_rows), path)
+                _add_count_check(checks, f"{check_name}_count", len(csv_rows), len(goal_rows), path)
         elif name == "leaderboard":
             data = _safe_json_list(checks, f"{check_name}_json", path)
             if data is not None:
-                active_rows = sum(1 for row in objective_rows if row.get("execution_status") != "failed")
+                active_rows = sum(1 for row in goal_rows if row.get("execution_status") != "failed")
                 _add_count_check(checks, f"{check_name}_count", len(data), active_rows, path)
 
 
@@ -327,9 +444,9 @@ def _check_result(root: Path, checks: list[dict[str, Any]]) -> dict[str, Any]:
 def _artifact_scenario_names(benchmark: Mapping[str, Any]) -> list[str]:
     if benchmark.get("scenario"):
         return [str(benchmark["scenario"])]
-    suite_config = benchmark.get("suite_config") or {}
-    if suite_config.get("scenarios"):
-        return [str(item) for item in suite_config["scenarios"]]
+    track_config = benchmark.get("track_config") or {}
+    if track_config.get("scenarios"):
+        return [str(item) for item in track_config["scenarios"]]
     return list(dict.fromkeys(str(row["scenario"]) for row in benchmark.get("rows", []) if row.get("scenario")))
 
 

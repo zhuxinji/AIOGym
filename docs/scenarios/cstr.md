@@ -12,7 +12,8 @@ A two-state exothermic reactor tracks concentration and temperature with feed di
 
 - Physical constants are simplified and partly lumped for a stable benchmark operating range.
 - Cooling is represented as a normalized actuator rather than detailed jacket hydraulics.
-- Economic value is production-oriented and should be compared only within the declared objective.
+- Economic value is production-oriented and should be compared only within a
+  declared economic Goal and Track.
 
 The executable source of truth is the model implementation under `aiogym.models.scenarios`.
 

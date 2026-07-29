@@ -1,0 +1,57 @@
+{
+  "schema_version": "aiogym.benchmark_track.v1",
+  "id": "cascade-recovery-diagnostic-v1",
+  "description": "Specialist recovery diagnostic kept separate from ordinary regulation rankings.",
+  "scenario": "cascade",
+  "goal": "regulation",
+  "reward_spec": "regulation-v1",
+  "scorecard_spec": "process-control-recovery-v1",
+  "policy_scope": "specialist",
+  "policy_contract": {
+    "action_mode": "actuator",
+    "control_dt": 0.1,
+    "disturbance_obs": true,
+    "previous_action_obs": false,
+    "normalize_observations": false,
+    "tracking_error_obs": false,
+    "case_id_obs": false
+  },
+  "training": {
+    "cases": [
+      {
+        "case": "safety-recovery",
+        "weight": 1.0
+      }
+    ],
+    "seed_spec": {
+      "namespace": "cascade-recovery-training-v1"
+    },
+    "step_budget": 10000
+  },
+  "validation": {
+    "cases": [
+      "safety-recovery"
+    ],
+    "seed_spec": {
+      "namespace": "cascade-recovery-validation-v1"
+    }
+  },
+  "test": {
+    "cases": [
+      {
+        "case": "safety-recovery",
+        "group": "recovery"
+      }
+    ],
+    "seed_spec": {
+      "namespace": "cascade-recovery-test-v1"
+    }
+  },
+  "ranking": {
+    "id": "cascade-recovery-diagnostic-ranking-v1",
+    "primary_utility": "negative_regulation_cost_rate",
+    "safety_gate": "recovery-zero-created-hard-failure-v1",
+    "case_score": "diagnostic-only-v1",
+    "track_aggregation": "arithmetic-mean-v1"
+  }
+}

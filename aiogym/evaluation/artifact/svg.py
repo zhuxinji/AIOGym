@@ -1,9 +1,16 @@
 """SVG plotting helpers for benchmark artifacts."""
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from aiogym.models import make_model
+from .tables import TRACKING_COMPARISON_METRICS
+
+
+_TRAJECTORY_ABSOLUTE_MIN_SPAN = 1e-6
+_TRAJECTORY_RELATIVE_MIN_SPAN = 0.02
+_TRAJECTORY_SCHEMA_MIN_SPAN = 0.02
 
 
 def plot_summary(rows: list[dict], path: str, scenario: str):
@@ -53,14 +60,14 @@ def plot_summary(rows: list[dict], path: str, scenario: str):
 
 
 def _summary_metrics(rows: list[dict]) -> list[tuple[str, str]]:
-    objective = str(rows[0].get("objective", "")) if rows else ""
-    if objective == "tracking":
+    goal = str(rows[0].get("goal", "")) if rows else ""
+    if goal == "regulation":
         return [
-            ("tracking_cost", "Tracking Cost"),
+            ("tracking_cost", "Tracking Objective"),
             ("tracking_error_cost", "Tracking Error Cost"),
             ("tracking_move_cost", "Move Cost"),
         ]
-    if objective == "economic":
+    if goal == "economic":
         metrics = [
             ("profit", "Profit"),
             ("energy_kwh", "Energy kWh"),
@@ -69,17 +76,21 @@ def _summary_metrics(rows: list[dict]) -> list[tuple[str, str]]:
         if _has_nonzero(rows, "production"):
             metrics.insert(1, ("production", "Production"))
         return metrics
-    if objective == "safety":
+    if goal == "safety":
         return [
             ("constraint_violation_count", "Constraint violations"),
             ("constraint_violation_severity", "Violation severity"),
             ("safety_margin_min", "Safety margin"),
         ]
     return [
-        ("normalized_score", "Normalized score"),
+        ("official_score", "Official score"),
         ("return", "Return"),
         ("energy_kwh", "Energy kWh"),
     ]
+
+
+def _metric_label(metric: str) -> str:
+    return "tracking cost" if metric == "tracking_cost" else metric
 
 
 def _has_nonzero(rows: list[dict], key: str) -> bool:
@@ -94,35 +105,85 @@ def _has_nonzero(rows: list[dict], key: str) -> bool:
 
 def plot_rollouts(rollouts: list[dict], path: str, scenario: str):
     model = make_model(scenario)
+    state_rows = list(model.state_schema())
+    output_rows = list(model.controlled_output_schema())
+    action_bounds = _combined_schema_bounds(model.action_schema())
+    level_bounds = _quantity_schema_bounds(
+        state_rows + output_rows, names=("level",), units=("m", "cm")
+    )
+    temperature_bounds = _quantity_schema_bounds(
+        state_rows + output_rows,
+        names=("temperature", "temp"),
+        units=("degC", "K"),
+    )
     if scenario == "cstr":
         panels = [
-            {"title": "Concentration Ca", "series": [state_series(0)]},
-            {"title": "Temperature", "series": [info_series("temps", 0), setpoint_series("y_sp", 0, dashed=True)]},
-            {"title": "Actuator commands", "series": action_series(model.action_names[:2])},
+            {
+                "title": "Concentration Ca",
+                "series": [state_series(0)],
+                "bounds": _combined_schema_bounds(state_rows[:1]),
+            },
+            {
+                "title": "Temperature",
+                "series": [
+                    info_series("temps", 0),
+                    setpoint_series("y_sp", 0, dashed=True),
+                ],
+                "bounds": temperature_bounds,
+            },
+            {
+                "title": "Actuator commands",
+                "series": action_series(model.action_names[:2]),
+                "bounds": action_bounds,
+            },
             {"title": "Stage profit", "series": [metric_series("profit")]},
             {"title": "Constraint penalty", "series": [metric_series("constraint")]},
         ]
     elif scenario == "hvac":
         panels = [
-            {"title": "Zone temperatures", "series": info_vector_family("temps")},
-            {"title": "Temperature setpoints", "series": setpoint_vector_family("y_sp")},
-            {"title": "Actuator commands", "series": action_series(model.action_names)},
+            {
+                "title": "Zone temperatures",
+                "series": info_vector_family("temps"),
+                "bounds": temperature_bounds,
+            },
+            {
+                "title": "Temperature setpoints",
+                "series": setpoint_vector_family("y_sp"),
+                "bounds": temperature_bounds,
+            },
+            {
+                "title": "Actuator commands",
+                "series": action_series(model.action_names),
+                "bounds": action_bounds,
+            },
             {"title": "Tracking error", "series": [metric_series("track")]},
             {"title": "Constraint penalty", "series": [metric_series("constraint")]},
         ]
     else:
         panels = [
-            {"title": "Levels", "series": info_vector_family("levels")},
-            {"title": "Temperatures", "series": info_vector_family("temps")},
-            {"title": "Actuator commands", "series": action_series(model.action_names)},
+            {
+                "title": "Levels",
+                "series": info_vector_family("levels"),
+                "bounds": level_bounds,
+            },
+            {
+                "title": "Temperatures",
+                "series": info_vector_family("temps"),
+                "bounds": temperature_bounds,
+            },
+            {
+                "title": "Actuator commands",
+                "series": action_series(model.action_names),
+                "bounds": action_bounds,
+            },
             {"title": "Tracking error", "series": [metric_series("track")]},
             {"title": "Constraint penalty", "series": [metric_series("constraint")]},
         ]
     _plot_series_panels(rollouts, panels, path, f"{scenario} rollout comparison")
 
 
-def plot_tracking_control(rollouts: list[dict], path: str, scenario: str, task: str = "default"):
-    """Plot state, setpoint, and actuator trajectories for one tracking task."""
+def plot_tracking_control(rollouts: list[dict], path: str, scenario: str, case: str = "default"):
+    """Plot state, setpoint, and actuator trajectories for one tracking case."""
 
     model = make_model(scenario)
     state_rows = list(model.state_schema())
@@ -142,6 +203,7 @@ def plot_tracking_control(rollouts: list[dict], path: str, scenario: str, task: 
                 info_series("y", i, label=name),
                 info_series("y_sp", i, label=f"{name} setpoint", dashed=True, muted=True),
             ],
+            "bounds": _combined_schema_bounds([row]),
         })
     for i, row in enumerate(state_rows):
         if i not in controlled_state_indices:
@@ -160,6 +222,7 @@ def plot_tracking_control(rollouts: list[dict], path: str, scenario: str, task: 
         panels.append({
             "title": _quantity_title(name, unit),
             "series": series,
+            "bounds": _combined_schema_bounds([row]),
         })
     action_scale = 1.0
     if scenario == "quadruple":
@@ -170,8 +233,9 @@ def plot_tracking_control(rollouts: list[dict], path: str, scenario: str, task: 
         panels.append({
             "title": _quantity_title(name, unit),
             "series": [{"kind": "action", "index": i, "label": name, "scale": action_scale}],
+            "bounds": _scaled_schema_bounds(row.get("bounds"), action_scale),
         })
-    label = scenario if task == "default" else f"{scenario} / {task}"
+    label = scenario if case == "default" else f"{scenario} / {case}"
     _plot_series_panels(rollouts, panels, path, f"{label} tracking control")
 
 
@@ -179,7 +243,7 @@ def _quadruple_voltage_scale(rollouts: list[dict], model) -> float:
     """Return the physical voltage represented by a normalized action of one."""
 
     for artifact in rollouts:
-        params = (artifact.get("protocol") or {}).get("model_params") or {}
+        params = (artifact.get("evaluation") or {}).get("model_params") or {}
         if params.get("max_voltage") is not None:
             return float(params["max_voltage"])
     return float(model.p["max_voltage"])
@@ -187,6 +251,40 @@ def _quadruple_voltage_scale(rollouts: list[dict], model) -> float:
 
 def _quantity_title(name: str, unit: str) -> str:
     return name if not unit else f"{name} ({unit})"
+
+
+def _quantity_schema_bounds(rows, *, names: tuple[str, ...], units: tuple[str, ...]):
+    selected = []
+    normalized_units = {unit.lower() for unit in units}
+    for row in rows:
+        name = str(row.get("name") or "").lower()
+        unit = str(row.get("unit") or "").lower()
+        if any(token in name for token in names) or unit in normalized_units:
+            selected.append(row)
+    return _combined_schema_bounds(selected)
+
+
+def _combined_schema_bounds(rows):
+    bounds = [
+        _scaled_schema_bounds(row.get("bounds"), 1.0)
+        for row in rows
+    ]
+    bounds = [value for value in bounds if value is not None]
+    if not bounds:
+        return None
+    return min(value[0] for value in bounds), max(value[1] for value in bounds)
+
+
+def _scaled_schema_bounds(bounds, scale: float):
+    if not isinstance(bounds, (list, tuple)) or len(bounds) != 2:
+        return None
+    try:
+        lower, upper = float(bounds[0]) * scale, float(bounds[1]) * scale
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(lower) or not math.isfinite(upper) or upper <= lower:
+        return None
+    return lower, upper
 
 
 def _controlled_state_indices(rollouts: list[dict], state_rows: list[dict],
@@ -240,7 +338,7 @@ def plot_leaderboard(board: list[dict], path: str, title: str) -> None:
     if lo == hi:
         hi = lo + 1.0
     parts = [_svg_header(width, height), _svg_text(42, 46, f"{title} leaderboard", size=22, weight="700")]
-    parts.append(_svg_text(42, 74, f"Primary metric: {metric}", size=12, fill="#475569"))
+    parts.append(_svg_text(42, 74, f"Primary metric: {_metric_label(metric)}", size=12, fill="#475569"))
     parts.append(_svg_text(value_x, 74, "Value", size=11, anchor="end", fill="#64748b"))
     parts.append(_svg_text(status_x, 74, "Status", size=11, fill="#64748b"))
     for i, row in enumerate(board):
@@ -278,7 +376,7 @@ def plot_grouped_leaderboard(sections: list[dict], path: str, title: str) -> Non
         if lo == hi:
             hi = lo + 1.0
         parts.append(_svg_text(42, y, section_title, size=16, weight="700", fill="#0f172a"))
-        parts.append(_svg_text(42, y + 22, f"Primary metric: {metric}", size=11, fill="#64748b"))
+        parts.append(_svg_text(42, y + 22, f"Primary metric: {_metric_label(metric)}", size=11, fill="#64748b"))
         parts.append(_svg_text(value_x, y + 22, "Value", size=11, anchor="end", fill="#64748b"))
         parts.append(_svg_text(status_x, y + 22, "Status", size=11, fill="#64748b"))
         y += header_h
@@ -307,55 +405,54 @@ def plot_tracking_comparison_table(rows: list[dict], path: str, title: str) -> N
         controller: "Oracle" if controller == "NMPC-oracle" else controller
         for controller in controllers
     }
-    cost_columns = [
-        ("scenario", "Scenario", 150),
-        ("task", "Task", 220),
-        ("best_controller", "Best", 150),
-        ("best_tracking_cost", "Best cost", 105),
-        ("oracle_gap_vs_best", "Oracle gap", 110),
-    ]
-    runtime_columns = [
-        ("scenario", "Scenario", 150),
-        ("task", "Task", 220),
-        ("fastest_controller", "Fastest", 150),
-        ("fastest_runtime_total_seconds", "Fastest total s", 120),
-        ("best_runtime_total_seconds", "Best error ctrl total s", 155),
-    ]
-    for controller in controllers:
-        cost_columns.append((f"{controller}_tracking_cost", f"{display_labels[controller]} cost", 105))
-        runtime_columns.append((f"{controller}_runtime_total_seconds", f"{display_labels[controller]} total s", 120))
+    multiple_cases = len(rows) > 1
     table_rows = []
-    for row in rows:
-        runtime_values = [
-            (controller, _number_or_none(row.get(f"{controller}_runtime_total_seconds")))
-            for controller in controllers
-        ]
-        runtime_values = [(controller, value) for controller, value in runtime_values if value is not None]
-        fastest_controller, fastest_seconds = min(runtime_values, key=lambda item: item[1]) if runtime_values else ("", None)
-        enriched = dict(row)
-        enriched["fastest_controller"] = fastest_controller
-        enriched["fastest_runtime_total_seconds"] = fastest_seconds
-        table_rows.append(enriched)
-    left, top = 36, 104
+    for source in rows:
+        case = str(source.get("case") or "default")
+        for metric, label in TRACKING_COMPARISON_METRICS:
+            values = {
+                controller: _number_or_none(source.get(f"{controller}_{metric}"))
+                for controller in controllers
+            }
+            ranked = [(controller, value) for controller, value in values.items() if value is not None]
+            if not ranked:
+                continue
+            table_rows.append({
+                "metric": f"{case} · {label}" if multiple_cases else label,
+                "metric_key": metric,
+                "best_controller": min(ranked, key=lambda item: item[1])[0],
+                **values,
+            })
+    metric_width = 340 if multiple_cases else 240
+    columns = [("metric", "Metric", metric_width)] + [
+        (controller, display_labels[controller], 150)
+        for controller in controllers
+    ]
+    left, top = 36, 76
     row_h, header_h = 36, 42
-    table_gap = 62
-    cost_width = sum(col[2] for col in cost_columns)
-    runtime_width = sum(col[2] for col in runtime_columns)
-    width = max(1180, left * 2 + max(cost_width, runtime_width))
+    table_width = sum(column[2] for column in columns)
+    width = max(680, left * 2 + table_width)
     table_h = header_h + row_h * len(table_rows)
-    runtime_top = top + table_h + table_gap
-    height = max(360, runtime_top + table_h + 44)
-    parts = [_svg_header(width, height), _svg_text(36, 46, f"{title} tracking comparison", size=22, weight="700")]
-    parts.append(_svg_text(36, 70, "Lower normalized tracking cost is better. Runtime is total wall-clock seconds for all evaluated episodes.", size=12, fill="#64748b"))
-    parts.append(_svg_text(36, top - 16, "Normalized tracking cost", size=16, weight="700", fill="#0f172a"))
-    _append_tracking_table(parts, table_rows, cost_columns, left, top, width - left * 2, row_h, header_h, "tracking")
-    parts.append(_svg_text(36, runtime_top - 16, "Total runtime", size=16, weight="700", fill="#0f172a"))
-    _append_tracking_table(parts, table_rows, runtime_columns, left, runtime_top, width - left * 2, row_h, header_h, "runtime")
+    height = max(260, top + table_h + 36)
+    comparison_title = str(rows[0].get("case") or "default") if len(rows) == 1 else title
+    parts = [
+        _svg_header(width, height),
+        _svg_text(
+            36,
+            46,
+            f"{comparison_title} tracking comparison (mean per episode)",
+            size=22,
+            weight="700",
+        ),
+    ]
+    _append_tracking_metric_table(
+        parts, table_rows, columns, left, top, table_width, row_h, header_h
+    )
     parts.append("</svg>")
     _write_text(path, "\n".join(parts))
 
 
-def _append_tracking_table(
+def _append_tracking_metric_table(
     parts: list[str],
     rows: list[dict],
     columns: list[tuple[str, str, int]],
@@ -364,7 +461,6 @@ def _append_tracking_table(
     table_w: int,
     row_h: int,
     header_h: int,
-    mode: str,
 ) -> None:
     x = left
     parts.append(f'<rect x="{left}" y="{top}" width="{table_w}" height="{header_h}" fill="#e2e8f0"/>')
@@ -377,22 +473,15 @@ def _append_tracking_table(
         parts.append(f'<rect x="{left}" y="{y}" width="{table_w}" height="{row_h}" fill="{fill}"/>')
         x = left
         best = str(row.get("best_controller") or "")
-        fastest = str(row.get("fastest_controller") or "")
         for key, _, col_w in columns:
             value = row.get(key)
             text_fill = "#0f172a"
             weight = "400"
-            if mode == "tracking" and (key == "best_controller" or key.startswith(f"{best}_")):
+            if key == best:
                 text_fill = "#047857"
                 weight = "700"
-            if mode == "runtime" and (key == "fastest_controller" or key == "fastest_runtime_total_seconds" or key.startswith(f"{fastest}_")):
-                text_fill = "#047857"
-                weight = "700"
-            if key == "oracle_gap_vs_best":
-                gap = _number_or_none(value)
-                if gap is not None:
-                    text_fill = "#047857" if abs(gap) < 1e-9 else "#b45309"
-            parts.append(_svg_text(x + 8, y + 23, _table_value(value, key), size=11, fill=text_fill, weight=weight))
+            text = str(value) if key == "metric" else _table_value(value, str(row["metric_key"]))
+            parts.append(_svg_text(x + 8, y + 23, text, size=11, fill=text_fill, weight=weight))
             x += col_w
     parts.append(f'<rect x="{left}" y="{top}" width="{table_w}" height="{header_h + row_h * len(rows)}" fill="none" stroke="#cbd5e1"/>')
 
@@ -469,12 +558,7 @@ def plot_learning_curve(curve: list[dict], path: str, title: str) -> None:
     if xlo == xhi:
         xhi = xlo + 1.0
     all_ys = [float(row[key]) for row in curve for key in series_keys if _is_number(row.get(key))]
-    ylo, yhi = min(all_ys), max(all_ys)
-    if ylo == yhi:
-        yhi = ylo + 1.0
-    pad = (yhi - ylo) * 0.08
-    ylo -= pad
-    yhi += pad
+    ylo, yhi = _trajectory_axis_limits(all_ys)
     if all(key.startswith("tracking_") and key.endswith("cost") for key in series_keys):
         ylo = max(0.0, ylo)
     if series_keys == ["return"] and all(value <= 0 for value in all_ys):
@@ -492,7 +576,7 @@ def plot_learning_curve(curve: list[dict], path: str, title: str) -> None:
         lx = 42 + (i % 3) * 310
         ly = 530 + (i // 3) * 26
         parts.append(f'<line x1="{lx}" y1="{ly}" x2="{lx + 28}" y2="{ly}" stroke="{color}" stroke-width="3"/>')
-        label = "reward" if key == "return" else key
+        label = "reward" if key == "return" else _metric_label(key)
         parts.append(_svg_text(lx + 36, ly + 4, label, size=12, fill="#334155"))
 
     parts.append(_svg_text(left - 12, top + 8, _fmt(yhi), size=10, anchor="end", fill="#64748b"))
@@ -639,14 +723,9 @@ def _plot_series_panels(rollouts: list[dict], panels: list[dict], path: str, tit
         if not xs or not ys:
             continue
         xlo, xhi = min(xs), max(xs)
-        ylo, yhi = min(ys), max(ys)
+        ylo, yhi = _trajectory_axis_limits(ys, bounds=panel.get("bounds"))
         if xhi == xlo:
             xhi = xlo + 1.0
-        if yhi == ylo:
-            yhi = ylo + 1.0
-        pad = (yhi - ylo) * 0.08
-        ylo -= pad
-        yhi += pad
         for series in collected:
             color = controller_colors.get(series["controller"], colors[0])
             if series["muted"]:
@@ -749,6 +828,48 @@ def _polyline_points(xs, ys, xlo, xhi, ylo, yhi, x, y, w, h):
     return " ".join(points)
 
 
+def _trajectory_axis_limits(values, *, bounds=None) -> tuple[float, float]:
+    """Return padded limits that do not magnify floating-point jitter.
+
+    Every process rollout, tracking-control figure, and learning curve uses this
+    helper.  The minimum span is relative to the displayed operating point with
+    a small absolute fallback for signals near zero.
+    """
+
+    finite = [float(value) for value in values if math.isfinite(float(value))]
+    if not finite:
+        return -0.5, 0.5
+    data_lo, data_hi = min(finite), max(finite)
+    reference = max(abs(data_lo), abs(data_hi))
+    schema_bounds = _scaled_schema_bounds(bounds, 1.0)
+    schema_minimum_span = (
+        (schema_bounds[1] - schema_bounds[0]) * _TRAJECTORY_SCHEMA_MIN_SPAN
+        if schema_bounds is not None
+        else 0.0
+    )
+    minimum_span = max(
+        _TRAJECTORY_ABSOLUTE_MIN_SPAN,
+        reference * _TRAJECTORY_RELATIVE_MIN_SPAN,
+        schema_minimum_span,
+    )
+    data_span = data_hi - data_lo
+    display_span = max(data_span, minimum_span)
+    center = 0.5 * (data_lo + data_hi)
+    ylo = center - 0.5 * display_span
+    yhi = center + 0.5 * display_span
+    pad = display_span * 0.08
+    ylo -= pad
+    yhi += pad
+    if schema_bounds is not None and data_lo >= schema_bounds[0] and data_hi <= schema_bounds[1]:
+        if ylo < schema_bounds[0]:
+            yhi += schema_bounds[0] - ylo
+            ylo = schema_bounds[0]
+        if yhi > schema_bounds[1]:
+            ylo -= yhi - schema_bounds[1]
+            yhi = schema_bounds[1]
+    return ylo, yhi
+
+
 def _append_time_axis(parts: list[str], x: float, y: float, w: float, h: float,
                       xlo: float, xhi: float, *, show_label: bool) -> None:
     for i in range(5):
@@ -805,7 +926,9 @@ def _table_value(value, key: str) -> str:
     number = _number_or_none(value)
     if number is None:
         return "" if value is None else str(value)
-    if key.endswith("_runtime_total_seconds"):
+    if key in {"runtime_seconds", "runtime_total_seconds"} or key.endswith(
+        ("_runtime_seconds", "_runtime_total_seconds")
+    ):
         return f"{number:.2f}"
     return _fmt(number)
 

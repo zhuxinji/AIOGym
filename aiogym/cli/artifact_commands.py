@@ -7,7 +7,11 @@ import json
 import sys
 from pathlib import Path
 
-from aiogym.evaluation import check_benchmark_artifacts, render_benchmark_report
+from aiogym.evaluation import (
+    check_benchmark_artifacts,
+    compact_benchmark_artifacts,
+    render_benchmark_report,
+)
 
 
 def report_main(argv=None, prog=None):
@@ -50,14 +54,30 @@ def artifact_check_main(argv=None, prog=None):
         raise SystemExit(1)
 
 
+def compact_main(argv=None, prog=None):
+    ap = argparse.ArgumentParser(
+        prog=prog,
+        description="Migrate a benchmark artifact directory to the compact layout.",
+    )
+    ap.add_argument("artifact_dir", help="standard benchmark artifact directory")
+    args = ap.parse_args(argv)
+
+    compact_benchmark_artifacts(args.artifact_dir)
+    print(f"compacted artifacts {args.artifact_dir}")
+
+
 def main(argv=None):
     commands = {
         "report": report_main,
         "check": artifact_check_main,
+        "compact": compact_main,
     }
     args = list(sys.argv[1:] if argv is None else argv)
     if not args or args[0] in {"-h", "--help"}:
-        print("usage: python -m aiogym.cli.artifact_commands {report,check} ...")
+        print(
+            "usage: python -m aiogym.cli.artifact_commands "
+            "{report,check,compact} ..."
+        )
         return
     command = args[0]
     if command not in commands:

@@ -4,14 +4,76 @@ from __future__ import annotations
 from ..._internal.serialization import jsonable as _jsonable
 from ...controllers import as_controller, build_context, validate_action
 from ..results import result_schema
-from .metadata import _env_disturbances, _env_metadata, _env_objective
-from ..objective_specs import ObjectiveSpec, objective_spec
-from ..protocols import BenchmarkProtocol
+from .metadata import _env_disturbances, _env_metadata
 
 
-def rollout_controller(agent, env, seed: int = 0, max_steps: int | None = None,
-                       protocol: BenchmarkProtocol | None = None,
-                       objective_specification: ObjectiveSpec | None = None):
+def _rollout_step(
+    *,
+    step,
+    env,
+    obs,
+    state,
+    action,
+    context,
+    obs_next,
+    reward,
+    term,
+    trunc,
+    info_next,
+):
+    return _jsonable({
+        "step": step,
+        "time": step * float(env.control_dt),
+        "obs": obs,
+        "state": state,
+        "action": action,
+        "setpoint": context.setpoint,
+        "measurement": context.measurement,
+        "disturbance": _env_disturbances(env),
+        "reward": reward,
+        "reward_spec_id": str(
+            info_next.get(
+                "reward_spec_id",
+                getattr(env, "reward_spec_id", "unknown"),
+            )
+        ),
+        "profit": info_next.get("profit", 0.0),
+        "constraint": info_next.get("constraint", 0.0),
+        "terminated": bool(term),
+        "truncated": bool(trunc),
+        "next_obs": obs_next,
+        "next_state": list(getattr(env.integ, "x", [])),
+        "info": info_next,
+    })
+
+
+def _rollout_payload(
+    controller,
+    env,
+    *,
+    seed,
+    rows,
+):
+    return {
+        "controller_name": controller.name,
+        "seed": int(seed),
+        "steps": len(rows),
+        "goal": str(getattr(env, "goal", "regulation")),
+        "reward_spec_id": str(
+            getattr(env, "reward_spec_id", "unknown")
+        ),
+        "return_comparable_across_reward_specs": False,
+        "environment": _env_metadata(env),
+        "controller": controller.metadata(),
+        "setpoint_schedule": _jsonable(
+            getattr(env, "_episode_setpoint_events", {})
+        ),
+        "rollout_schema": result_schema()["rollout"],
+        "rollout": rows,
+    }
+
+
+def rollout_controller(agent, env, seed: int = 0, max_steps: int | None = None):
     """Run one episode and return a generic per-step rollout artifact.
 
     The recorder is scenario-neutral. Common fields are always present, and
@@ -31,60 +93,27 @@ def rollout_controller(agent, env, seed: int = 0, max_steps: int | None = None,
         action = validate_action(controller.act(obs, context), env, controller.name)
         state = list(getattr(env.integ, "x", []))
         obs_next, reward, term, trunc, info_next = env.step(action)
-        rows.append(_jsonable({
-            "step": step,
-            "time": step * float(env.control_dt),
-            "obs": obs,
-            "state": state,
-            "action": action,
-            "setpoint": context.setpoint,
-            "measurement": context.measurement,
-            "disturbance": _env_disturbances(env),
-            "reward": reward,
-            "profit": info_next.get("profit", 0.0),
-            "constraint": info_next.get("constraint", 0.0),
-            "terminated": bool(term),
-            "truncated": bool(trunc),
-            "next_obs": obs_next,
-            "next_state": list(getattr(env.integ, "x", [])),
-            "info": info_next,
-        }))
+        rows.append(_rollout_step(
+            step=step,
+            env=env,
+            obs=obs,
+            state=state,
+            action=action,
+            context=context,
+            obs_next=obs_next,
+            reward=reward,
+            term=term,
+            trunc=trunc,
+            info_next=info_next,
+        ))
         obs = obs_next
         info = info_next
         done = bool(term or trunc)
         step += 1
 
-    return {
-        "controller_name": controller.name,
-        "seed": int(seed),
-        "steps": len(rows),
-        "objective": (
-            protocol.objective
-            if protocol is not None
-            else getattr(objective_specification, "name", _env_objective(env))
-        ),
-        "objective_source": (
-            protocol.objective_source
-            if protocol is not None
-            else getattr(objective_specification, "source", "environment-reward-mode")
-        ),
-        "protocol": (
-            protocol.metadata()
-            if protocol is not None
-            else {
-                "environment": _env_metadata(env),
-                "objective_spec": (
-                    objective_specification.metadata()
-                    if objective_specification is not None
-                    else objective_spec(_env_objective(env), source="environment-reward-mode").metadata()
-                ),
-            }
-        ),
-        "controller": controller.metadata(),
-        "setpoint_schedule": _jsonable(
-            getattr(env, "_episode_setpoint_events", {})
-        ),
-        "scorer": _jsonable(env.scorer.report()),
-        "rollout_schema": result_schema()["rollout"],
-        "rollout": rows,
-    }
+    return _rollout_payload(
+        controller,
+        env,
+        seed=seed,
+        rows=rows,
+    )

@@ -15,6 +15,7 @@ node_modules/
 
 # Trained policies (build artifacts)
 *.onnx
+/aiogym.zip
 
 # Editor / tooling
 .claude/

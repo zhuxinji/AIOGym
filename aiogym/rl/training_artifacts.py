@@ -9,9 +9,10 @@ from aiogym._internal.serialization import jsonable as _jsonable
 from aiogym.evaluation import build_evaluation_report
 from aiogym.evaluation.artifact import finalize_benchmark_artifacts
 from aiogym.evaluation.results import compact_result_row
+from aiogym.evaluation.provenance import track_provenance
 
 
-RL_ARTIFACT_SCHEMA_VERSION = "aiogym.rl_training_artifact.v1"
+RL_ARTIFACT_SCHEMA_VERSION = "aiogym.rl_training_artifact.v3"
 
 
 def utc_run_id(now: datetime | None = None) -> str:
@@ -20,15 +21,18 @@ def utc_run_id(now: datetime | None = None) -> str:
 
 
 def result_row(result: Mapping[str, Any], scenario: str, action_mode: str,
-               controller: str | None = None, suite_case: str | None = None) -> dict[str, Any]:
-    """Return a summary row following the benchmark-suite artifact schema."""
+               controller: str | None = None, run_case_id: str | None = None) -> dict[str, Any]:
+    """Return a canonical Case/Goal summary row."""
 
     return compact_result_row(
         result,
         scenario=scenario,
-        objective=result.get("objective"),
+        goal=result.get("goal"),
         action_mode=action_mode,
-        suite_case=suite_case or f"{result.get('objective', '')}:{scenario}:{controller or result.get('name', '')}",
+        run_case_id=run_case_id or (
+            f"{result.get('goal', '')}:{scenario}:"
+            f"{controller or result.get('name', '')}"
+        ),
         controller=controller,
     )
 
@@ -45,9 +49,14 @@ def learning_curve_point(step: int, result: Mapping[str, Any], phase: str = "eva
         "metric_direction": result.get("metric_direction"),
         "episodes": result.get("episodes"),
         "runtime_total_seconds": result.get("runtime_total_seconds"),
+        "ranking_eligible": result.get("ranking_eligible", True),
+        "track_id": result.get("track_id"),
+        "track_split": result.get("track_split"),
+        "case_id": result.get("case_id"),
+        "seed_namespace": result.get("seed_namespace"),
     }
     for key in (
-        "normalized_score",
+        "official_score",
         "profit",
         "return",
         "track",
@@ -66,8 +75,8 @@ def learning_curve_point(step: int, result: Mapping[str, Any], phase: str = "eva
     return _jsonable(row)
 
 
-def rl_payload(kind: str, scenario: str, objective: str, action_mode: str,
-               training: Mapping[str, Any], protocol: Mapping[str, Any],
+def rl_payload(kind: str, scenario: str, goal: str, action_mode: str,
+               training: Mapping[str, Any], evaluation: Mapping[str, Any],
                results: Sequence[Mapping[str, Any]], rows: Sequence[Mapping[str, Any]],
                learning_curve: Sequence[Mapping[str, Any]] | None = None,
                rollouts: Sequence[Mapping[str, Any]] | None = None,
@@ -80,18 +89,88 @@ def rl_payload(kind: str, scenario: str, objective: str, action_mode: str,
         "benchmark": "rl_training",
         "kind": kind,
         "scenario": scenario,
-        "objective": objective,
+        "goal": goal,
         "action_mode": action_mode,
         "config": dict(training),
-        "benchmark_config": dict(protocol),
+        "benchmark_config": dict(evaluation),
         "training": dict(training),
-        "evaluation_protocol": dict(protocol),
+        "evaluation": dict(evaluation),
         "rows": list(rows),
         "results": list(results),
         "report": build_evaluation_report(results),
         "learning_curve": list(learning_curve or []),
         "rollouts": list(rollouts or []),
     }
+    for name in (
+        "track_id",
+        "track_hash",
+        "goal",
+        "reward_spec_id",
+        "policy_scope",
+        "training_seed_namespace",
+        "validation_seed_namespace",
+        "test_seed_namespace",
+        "training_seed_namespace_hash",
+        "validation_seed_namespace_hash",
+        "test_seed_namespace_hash",
+    ):
+        if training.get(name) is not None:
+            payload[name] = training[name]
+    track_id = training.get("track_id")
+    if track_id:
+        from aiogym.benchmarks import load_track
+
+        track = load_track(
+            str(track_id),
+            validate_policy_contract=False,
+        )
+        eligibility_reasons = [
+            str(reason)
+            for result in results
+            for reason in dict(
+                result.get("safety_gate") or {}
+            ).get("reasons", ())
+        ]
+        provenance = track_provenance(
+            track,
+            controller=kind,
+            training_seed=training.get("seed"),
+            custom_overrides={
+                "environment": training.get("env_kwargs", {}),
+                "controller": training.get("controller_config", {}),
+            },
+            eligible=all(
+                bool(result.get("ranking_eligible", True))
+                for result in results
+            ),
+            eligibility_reasons=eligibility_reasons,
+        )
+        payload["provenance"] = provenance
+        for name in (
+            "track_id",
+            "track_hash",
+            "goal",
+            "reward_spec_id",
+            "reward_spec_hash",
+            "scorecard_spec_id",
+            "ranking_spec_id",
+            "policy_scope",
+            "training_seed",
+            "training_seed_namespace",
+            "validation_seed_namespace",
+            "test_seed_namespace",
+            "training_seed_namespace_hash",
+            "validation_seed_namespace_hash",
+            "test_seed_namespace_hash",
+            "controller_access_level",
+            "model_access_level",
+            "code_commit",
+            "package_version",
+            "custom_override_hash",
+            "eligibility_status",
+            "eligibility_reasons",
+        ):
+            payload[name] = provenance[name]
     if extra:
         payload.update(dict(extra))
     return _jsonable(payload)
