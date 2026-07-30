@@ -6,17 +6,18 @@ import importlib.util
 import pytest
 
 import aiogym
+from aiogym.rewards import get_reward_spec, list_reward_specs
 
 
 def test_only_canonical_reward_specs_exist():
-    assert aiogym.list_reward_specs() == ("economic-v1", "regulation-v1")
+    assert list_reward_specs() == ("economic-v1", "regulation-v1")
     for retired in (
         "legacy-kpi-v1",
         "legacy-economic-v1",
         "legacy-tracking-v1",
     ):
         with pytest.raises(ValueError, match="reward_spec must be one of"):
-            aiogym.get_reward_spec(retired)
+            get_reward_spec(retired)
 
 
 @pytest.mark.parametrize(
@@ -43,11 +44,16 @@ def test_legacy_reward_modules_are_deleted(module_name):
 )
 def test_environment_rejects_retired_reward_options(retired_option):
     with pytest.raises(TypeError, match="unexpected keyword argument"):
-        aiogym.AIOGymEnv("cstr", **retired_option)
+        aiogym.make_env("cstr", **retired_option)
 
 
 def test_reward_result_has_one_canonical_scalar_field():
-    env = aiogym.AIOGymEnv("cstr", episode_steps=1)
+    env = aiogym.make_env(
+        config={
+            "scenario": "cstr",
+            "environment": {"episode_steps": 1},
+        }
+    )
     try:
         env.reset(seed=4)
         result = env.evaluate_transition(

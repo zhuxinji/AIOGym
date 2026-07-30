@@ -48,6 +48,11 @@ _POLICY_CONTRACT_FIELDS = frozenset(
         "tracking_error_obs",
         "integral_obs",
         "case_id_obs",
+        "observation_mode",
+        "temporal_observation",
+        "history_length",
+        "include_action_history",
+        "recurrent_state_shape",
         "action_shape",
         "action_low",
         "action_high",
@@ -70,6 +75,16 @@ _ENTRY_FIELDS = frozenset(
         "pair_id",
         "condition",
         "base_case_id",
+    }
+)
+_RANKING_FIELDS = frozenset(
+    {
+        "id",
+        "primary_utility",
+        "safety_gate",
+        "case_score",
+        "track_aggregation",
+        "anchor_id",
     }
 )
 
@@ -123,11 +138,18 @@ class TrackSpec:
     """Immutable benchmark track with explicit goal, reward, and cases."""
 
     _canonical_json: str
+    _official: bool
 
-    def __init__(self, declaration: Mapping[str, Any]) -> None:
+    def __init__(
+        self,
+        declaration: Mapping[str, Any],
+        *,
+        official: bool = False,
+    ) -> None:
         data = deepcopy(dict(declaration))
         validate_track_declaration(data)
         object.__setattr__(self, "_canonical_json", _canonical_json(data))
+        object.__setattr__(self, "_official", bool(official))
 
     @property
     def declaration(self) -> dict[str, Any]:
@@ -162,11 +184,22 @@ class TrackSpec:
         return str(self.declaration["scorecard_spec"])
 
     @property
+    def official(self) -> bool:
+        return self._official
+
+    @property
+    def ranking_declaration(self) -> dict[str, Any]:
+        return deepcopy(dict(self.declaration["ranking"]))
+
+    @property
     def ranking_spec_id(self) -> str:
-        ranking = dict(self.declaration.get("ranking") or {})
-        return str(
-            ranking.get("id")
-            or f"{self.id}:ranking:{_mapping_hash(ranking)[:12]}"
+        return str(self.ranking_declaration["id"])
+
+    def safety_gate_spec(self):
+        from aiogym.benchmarks.safety_gates import get_safety_gate_spec
+
+        return get_safety_gate_spec(
+            str(self.ranking_declaration["safety_gate"])
         )
 
     @property
@@ -178,6 +211,42 @@ class TrackSpec:
     def seed_namespace(self, split: str) -> str:
         _require_split(split)
         return str(self.declaration[split]["seed_spec"]["namespace"])
+
+    @property
+    def train_distribution_id(self) -> str | None:
+        value = self.declaration["training"].get("distribution_id")
+        return None if value is None else str(value)
+
+    def training_distribution(self):
+        """Load and validate the programmatic distribution for this Track."""
+
+        distribution_id = self.train_distribution_id
+        if distribution_id is None:
+            raise ValueError(
+                f"benchmark track {self.id!r} has no training distribution"
+            )
+        from aiogym.generation import load_distribution
+
+        distribution = load_distribution(distribution_id)
+        if distribution.scenario_id != self.scenario:
+            raise ValueError(
+                "training distribution scenario does not match Track"
+            )
+        if distribution.goal != self.goal:
+            raise ValueError(
+                "training distribution goal does not match Track"
+            )
+        declared_dt = float(self.policy_contract["control_dt"])
+        if not math.isclose(
+            distribution.control_dt,
+            declared_dt,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ):
+            raise ValueError(
+                "training distribution control_dt does not match Track"
+            )
+        return distribution
 
     def resolved_cases(self, split: str) -> tuple[ResolvedTrackCase, ...]:
         _require_split(split)
@@ -195,12 +264,14 @@ class TrackSpec:
         """Validate every case against one fixed policy-facing contract."""
 
         if env_factory is None:
-            from aiogym.env import AIOGymEnv
+            from aiogym._environment.builder import (
+                build_case_environment,
+            )
 
-            env_factory = lambda case: AIOGymEnv(
+            env_factory = lambda case: build_case_environment(
                 self.scenario,
-                case=case.profile,
-                reward_spec=self.reward_spec_id,
+                case,
+                self.reward_spec_id,
             )
         cases = _unique_resolved_cases(self)
         baseline = None
@@ -290,6 +361,59 @@ def validate_track_declaration(declaration: Mapping[str, Any]) -> None:
             "benchmark track policy_scope must be one of: "
             "generalist, specialist"
         )
+    ranking = declaration.get("ranking")
+    if not isinstance(ranking, Mapping):
+        raise TypeError("benchmark track ranking must be a mapping")
+    unknown_ranking = set(ranking) - _RANKING_FIELDS
+    if unknown_ranking:
+        raise ValueError(
+            "unknown benchmark ranking fields: "
+            + ", ".join(sorted(unknown_ranking))
+        )
+    required_ranking = (
+        "id",
+        "primary_utility",
+        "safety_gate",
+        "case_score",
+        "track_aggregation",
+    )
+    missing_ranking = [
+        name for name in required_ranking if not ranking.get(name)
+    ]
+    if missing_ranking:
+        raise ValueError(
+            "benchmark ranking is missing required fields: "
+            + ", ".join(missing_ranking)
+        )
+    expected_utility = (
+        "negative_regulation_cost_rate"
+        if declaration["goal"] == "regulation"
+        else "profit_rate"
+    )
+    if ranking["primary_utility"] != expected_utility:
+        raise ValueError(
+            "benchmark ranking primary_utility conflicts with Track goal"
+        )
+    if ranking["case_score"] not in {
+        "fixed-anchor-v1",
+        "diagnostic-only-v1",
+    }:
+        raise ValueError("unsupported benchmark case_score rule")
+    if ranking["track_aggregation"] not in {
+        "weighted-geometric-mean-v1",
+        "arithmetic-mean-v1",
+    }:
+        raise ValueError("unsupported benchmark track_aggregation rule")
+    if ranking["case_score"] == "fixed-anchor-v1" and not isinstance(
+        ranking.get("anchor_id"),
+        str,
+    ):
+        raise ValueError(
+            "fixed-anchor-v1 ranking requires a non-empty anchor_id"
+        )
+    from aiogym.benchmarks.safety_gates import get_safety_gate_spec
+
+    get_safety_gate_spec(str(ranking["safety_gate"]))
     contract = declaration["policy_contract"]
     if not isinstance(contract, Mapping):
         raise TypeError("benchmark track policy_contract must be a mapping")
@@ -336,6 +460,63 @@ def validate_track_declaration(declaration: Mapping[str, Any]) -> None:
         raise ValueError(
             "case_id_obs=true is not supported by generalist benchmark tracks"
         )
+    observation_mode = contract.get("observation_mode", "full_state")
+    if observation_mode not in {"full_state", "measured_output"}:
+        raise ValueError(
+            "policy contract observation_mode must be one of: "
+            "full_state, measured_output"
+        )
+    temporal = contract.get("temporal_observation", "single_step")
+    if temporal not in {"single_step", "history", "recurrent"}:
+        raise ValueError(
+            "policy contract temporal_observation must be one of: "
+            "single_step, history, recurrent"
+        )
+    history_length = contract.get("history_length", 1)
+    if (
+        isinstance(history_length, bool)
+        or not isinstance(history_length, int)
+        or history_length <= 0
+    ):
+        raise ValueError(
+            "policy contract history_length must be a positive integer"
+        )
+    include_actions = contract.get("include_action_history", False)
+    if not isinstance(include_actions, bool):
+        raise TypeError(
+            "policy contract include_action_history must be a boolean"
+        )
+    recurrent_shape = contract.get("recurrent_state_shape", [])
+    if not isinstance(recurrent_shape, list) or any(
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value <= 0
+        for value in recurrent_shape
+    ):
+        raise ValueError(
+            "policy contract recurrent_state_shape must contain "
+            "positive integers"
+        )
+    if temporal == "single_step" and (
+        history_length != 1 or include_actions or recurrent_shape
+    ):
+        raise ValueError(
+            "single-step policy contract cannot declare temporal state"
+        )
+    if temporal == "history" and (
+        history_length < 2 or recurrent_shape
+    ):
+        raise ValueError(
+            "history policy contract requires history_length >= 2 "
+            "and no recurrent state"
+        )
+    if temporal == "recurrent" and (
+        history_length != 1 or include_actions or not recurrent_shape
+    ):
+        raise ValueError(
+            "recurrent policy contract requires recurrent_state_shape "
+            "without frame history"
+        )
 
     namespaces = {}
     for split in TRACK_SPLITS:
@@ -364,6 +545,13 @@ def validate_track_declaration(declaration: Mapping[str, Any]) -> None:
         raise ValueError(
             "training, validation, and test seed namespaces must be distinct"
         )
+    distribution_id = declaration["training"].get("distribution_id")
+    if distribution_id is not None and (
+        not isinstance(distribution_id, str) or not distribution_id
+    ):
+        raise ValueError(
+            "benchmark track training distribution_id must be non-empty"
+        )
     if (
         declaration["policy_scope"] == "specialist"
         and len(declaration["training"]["cases"]) != 1
@@ -376,14 +564,21 @@ def validate_track_declaration(declaration: Mapping[str, Any]) -> None:
 def policy_contract_for_env(env) -> dict[str, Any]:
     """Return the complete policy-facing contract of a constructed env."""
 
-    state_features = [
-        str(row.get("name", f"state_{index}"))
-        for index, row in enumerate(env.model.state_schema())
-    ]
+    observation_mode = str(
+        getattr(env.unwrapped, "observation_mode", "full_state")
+    )
     output_features = [
         str(row.get("name", f"output_{index}"))
         for index, row in enumerate(env.model.setpoint_schema())
     ]
+    state_features = (
+        [
+            str(row.get("name", f"state_{index}"))
+            for index, row in enumerate(env.model.state_schema())
+        ]
+        if observation_mode == "full_state"
+        else [f"measured_output:{name}" for name in output_features]
+    )
     reference_prefix = (
         "tracking_error" if env.tracking_error_obs else "setpoint"
     )
@@ -405,6 +600,22 @@ def policy_contract_for_env(env) -> dict[str, Any]:
         observation_features.extend(
             f"integral_error:{name}" for name in output_features
         )
+    temporal_contract = getattr(env, "observation_contract", None)
+    temporal = (
+        temporal_contract.temporal
+        if temporal_contract is not None
+        else "single_step"
+    )
+    history_length = (
+        temporal_contract.history_length
+        if temporal_contract is not None
+        else 1
+    )
+    include_action_history = bool(
+        temporal_contract.include_action_history
+        if temporal_contract is not None
+        else False
+    )
     if env.action_mode == "setpoint":
         action_features = [
             (
@@ -419,6 +630,19 @@ def policy_contract_for_env(env) -> dict[str, Any]:
             str(row.get("name", f"action_{index}"))
             for index, row in enumerate(env.model.action_schema())
         ]
+    if temporal == "history":
+        base_features = list(observation_features)
+        observation_features = [
+            f"history[{offset}]:{feature}"
+            for offset in range(history_length)
+            for feature in base_features
+        ]
+        if include_action_history:
+            observation_features.extend(
+                f"action_history[{offset}]:{feature}"
+                for offset in range(history_length - 1)
+                for feature in action_features
+            )
     return {
         "scenario": str(env.scenario),
         "action_mode": str(env.action_mode),
@@ -427,6 +651,15 @@ def policy_contract_for_env(env) -> dict[str, Any]:
         "previous_action_obs": bool(env.previous_action_obs),
         "normalize_observations": bool(env.normalize_observations),
         "tracking_error_obs": bool(env.tracking_error_obs),
+        "observation_mode": observation_mode,
+        "temporal_observation": temporal,
+        "history_length": history_length,
+        "include_action_history": include_action_history,
+        "recurrent_state_shape": (
+            list(temporal_contract.recurrent_state_shape)
+            if temporal_contract is not None
+            else []
+        ),
         "integral_obs": bool(env.integral_obs),
         "case_id_obs": False,
         "action_shape": list(env.action_space.shape),

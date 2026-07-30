@@ -52,7 +52,8 @@
     "primary_utility": "profit_rate",
     "safety_gate": "zero-hard-failure-v1",
     "case_score": "fixed-anchor-v1",
-    "track_aggregation": "arithmetic-mean-v1"
+    "track_aggregation": "arithmetic-mean-v1",
+    "anchor_id": "cascade-economic-anchors-v1"
   },
   "release_audit": {
     "id": "cascade-economic-nondegeneracy-v1",

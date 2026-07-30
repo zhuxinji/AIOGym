@@ -1,0 +1,14 @@
+{
+  "schema_version": "aiogym.benchmark_run.v1",
+  "target": "quadruple-regulation-generalist-v1",
+  "controllers": [
+    "pid"
+  ],
+  "seeds": [
+    5000,
+    5001,
+    5002
+  ],
+  "include_episodes": true,
+  "output": "runs/quadruple-validation-v1.json"
+}

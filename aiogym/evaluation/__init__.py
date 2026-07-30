@@ -50,6 +50,14 @@ _EXPORTS = {
     "plot_leaderboard": ".artifact",
     "plot_constraint_timeline": ".artifact",
     "plot_learning_curve": ".artifact",
+    "STATISTICAL_REPORT_SCHEMA_VERSION": ".statistics",
+    "INTERVENTION_REPORT_SCHEMA_VERSION": ".statistics",
+    "build_final_statistical_report": ".statistics",
+    "build_intervention_report": ".statistics",
+    "interquartile_mean": ".statistics",
+    "performance_profile": ".statistics",
+    "probability_of_improvement": ".statistics",
+    "stratified_bootstrap_ci": ".statistics",
 }
 __all__ = sorted(_EXPORTS)
 

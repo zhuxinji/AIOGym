@@ -12,24 +12,17 @@ class ObservationRuntimeMixin:
         return self.model.action_vector(a)
 
     def _obs(self):
-        state = self.model.state_vector(self.integ.x)
-        if self.noise:
-            noisy = []
-            for value, row in zip(state, self.model.state_schema()):
-                bounds = row.get("bounds")
-                scale = max(abs(float(value)), 1.0)
-                if isinstance(bounds, (tuple, list)) and len(bounds) == 2:
-                    lo, hi = bounds
-                    if lo is not None and hi is not None and float(hi) > float(lo):
-                        scale = float(hi) - float(lo)
-                rng = getattr(self, "_noise_rng", self.np_random)
-                noisy.append(
-                    float(value)
-                    + float(rng.normal(0, self.noise_pct * scale))
-                )
-            state = noisy
+        measured_state = self._measured_state()
+        if self.observation_mode == "full_state":
+            state = list(measured_state)
+            state_schema = self.model.state_schema()
+        else:
+            state = list(self.model.controlled_output(measured_state))
+            state_schema = self.model.setpoint_schema()
         setpoint = list(self.y_sp)
-        observed_output = list(self.model.controlled_output(state))
+        observed_output = list(
+            self.model.controlled_output(measured_state)
+        )
         tracking_error = [
             float(target) - float(value)
             for target, value in zip(setpoint, observed_output)
@@ -38,7 +31,7 @@ class ObservationRuntimeMixin:
         previous_action = self.model.action_vector(self.previous_act)
         if self.normalize_observations:
             state = self._normalize_observation_values(
-                state, self.model.state_schema()
+                state, state_schema
             )
             if self.tracking_error_obs:
                 tracking_error = self._normalize_observation_deltas(
@@ -149,8 +142,16 @@ class ObservationRuntimeMixin:
         return np.array(a, np.float32)
 
     def _meas(self):
-        """buildState-like dict the inner PID reads (true state)."""
-        return self.model.measurement(self.integ.x, self._env())
+        """Build the measured-state mapping consumed by the inner PID."""
+
+        return self.model.measurement(self._measured_state(), self._env())
+
+    def _measured_state(self):
+        true_state = self.model.state_vector(self.integ.x)
+        runtime = getattr(self, "_sensor_runtime", None)
+        if runtime is None:
+            return true_state
+        return runtime.observe(true_state, step=int(self._k)).tolist()
 
     def _supervise(self, action):
         """Supervisory action = normalized setpoints -> set SPs, inner PID regulates

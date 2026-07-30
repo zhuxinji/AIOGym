@@ -73,7 +73,12 @@ class DisturbanceRuntimeMixin:
         self._regime_target = dict(self._regime_mult)
 
     def _apply_plant_drift(self):
-        if not self.plant_drift or not self._regime_mult:
+        drift_enabled = getattr(
+            self,
+            "_episode_plant_drift_enabled",
+            self.plant_drift,
+        )
+        if not drift_enabled or not self._regime_mult:
             return
         if not self._regime_target:
             self._regime_target = self._sample_regime_mult()

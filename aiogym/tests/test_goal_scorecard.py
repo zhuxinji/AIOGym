@@ -6,16 +6,19 @@ import json
 import pytest
 
 import aiogym
+from aiogym.tests._env import make_test_env
+from aiogym.evaluation import goal_spec
 from aiogym.evaluation.metric_catalog import (
     EVALUATION_SCHEMA_VERSION,
     METRIC_DEFINITIONS,
     SCORECARD_GROUPS,
     metric_definitions,
 )
+from aiogym.rewards import list_reward_specs
 
 
 def _evaluate(reward_spec: str):
-    env = aiogym.AIOGymEnv(
+    env = make_test_env(
         "cstr",
         reward_spec=reward_spec,
         episode_steps=5,
@@ -31,16 +34,16 @@ def _evaluate(reward_spec: str):
 
 
 def test_goal_spec_only_accepts_regulation_and_economic():
-    assert aiogym.goal_spec("regulation").primary_metric == "regulation_cost"
-    assert aiogym.goal_spec("economic").primary_metric == "profit"
+    assert goal_spec("regulation").primary_metric == "regulation_cost"
+    assert goal_spec("economic").primary_metric == "profit"
     with pytest.raises(ValueError, match="economic, regulation"):
-        aiogym.goal_spec("tracking")
+        goal_spec("tracking")
     with pytest.raises(ValueError, match="not a cross-reward ranking metric"):
-        aiogym.goal_spec("regulation", primary_metric="return")
+        goal_spec("regulation", primary_metric="return")
 
 
 def test_same_trajectory_has_same_scorecard_under_all_reward_specs():
-    specs = aiogym.list_reward_specs()
+    specs = list_reward_specs()
     results = [_evaluate(spec) for spec in specs]
     baseline = results[0]["scorecard"]
     assert all(result["scorecard"] == baseline for result in results[1:])

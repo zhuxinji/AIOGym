@@ -10,7 +10,7 @@ if __package__ is None or __package__ == "":
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
-from aiogym.env import AIOGymEnv
+from aiogym.env_factory import make_env
 from aiogym.models import define_model, register_model, unregister_model
 
 
@@ -39,8 +39,17 @@ model = define_model({
 def main():
     register_model("simple_process", model, replace=True)
     try:
-        env = AIOGymEnv("simple_process", auto_events=False, randomize=False,
-                              randomize_setpoints=False, episode_steps=5)
+        env = make_env(
+            config={
+                "scenario": "simple_process",
+                "environment": {
+                    "auto_events": False,
+                    "randomize": False,
+                    "randomize_setpoints": False,
+                    "episode_steps": 5,
+                },
+            }
+        )
         obs, _ = env.reset(seed=0)
         total_reward = 0.0
         for _ in range(env.episode_steps):

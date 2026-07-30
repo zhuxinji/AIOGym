@@ -6,6 +6,7 @@ import importlib.util
 import pytest
 
 import aiogym
+from aiogym.tests._env import make_test_env
 from aiogym.controllers import make_controller
 from aiogym.evaluation import evaluate_controller, rollout_controller
 
@@ -26,7 +27,7 @@ def test_retired_runtime_modules_are_deleted(module_name):
 
 
 def test_evaluation_uses_goal_and_reward_spec_only():
-    env = aiogym.AIOGymEnv(
+    env = make_test_env(
         "cstr",
         reward_spec="regulation-v1",
         episode_steps=2,
@@ -53,7 +54,7 @@ def test_evaluation_uses_goal_and_reward_spec_only():
 
 
 def test_goal_must_match_environment_reward_spec():
-    env = aiogym.AIOGymEnv(
+    env = make_test_env(
         "cstr",
         reward_spec="regulation-v1",
         episode_steps=1,
@@ -70,7 +71,7 @@ def test_goal_must_match_environment_reward_spec():
 
 
 def test_rollout_metadata_has_no_objective_or_protocol():
-    env = aiogym.AIOGymEnv(
+    env = make_test_env(
         "cstr",
         reward_spec="regulation-v1",
         episode_steps=1,

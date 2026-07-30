@@ -13,7 +13,7 @@ Bundled Cases:
 ```python
 import aiogym
 
-env = aiogym.AIOGymEnv(
+env = aiogym.make_env(
     "quadruple",
     case="minimum-phase",
     reward_spec="regulation-v1",

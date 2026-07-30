@@ -1,24 +1,32 @@
-"""Reinforcement-learning algorithms and training entrypoints.
+"""Stable reinforcement-learning configuration and runner API.
 
-Training dependencies such as torch are optional, so algorithm classes are
-loaded lazily when requested.
+Algorithm implementations, replay primitives, wrappers, and research
+components remain importable from their explicit modules but are not part of
+the stable facade.
 """
+from __future__ import annotations
 
-_RLPD_EXPORTS = {"Actor", "Critic", "ReplayBuffer", "RLPD"}
-_TRANSITION_EXPORTS = {
-    "TRANSITION_SCHEMA_VERSION",
-    "Transition",
-    "TransitionDataset",
-    "collect_transitions",
+from aiogym._internal.lazy import exported_dir, resolve_export
+
+
+_EXPORTS = {
+    "RL_TRAINING_CONFIG_SCHEMA_VERSION": ".config",
+    "RLTrainingConfig": ".config",
+    "list_algorithms": ".config",
+    "TRAINING_CHECKPOINT_SCHEMA_VERSION": ".checkpoints",
+    "CheckpointManager": ".checkpoints",
+    "TrainingCheckpoint": ".checkpoints",
+    "RUN_RESULT_SCHEMA_VERSION": ".runner",
+    "RunResult": ".runner",
+    "run_experiment": ".runner",
+    "run_seed_sweep": ".runner",
 }
-__all__ = sorted(_RLPD_EXPORTS | _TRANSITION_EXPORTS)
+__all__ = sorted(_EXPORTS)
 
 
 def __getattr__(name):
-    if name in _RLPD_EXPORTS:
-        from . import rlpd
-        return getattr(rlpd, name)
-    if name in _TRANSITION_EXPORTS:
-        from . import transitions
-        return getattr(transitions, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return resolve_export(globals(), __name__, _EXPORTS, name)
+
+
+def __dir__():
+    return exported_dir(globals(), _EXPORTS)

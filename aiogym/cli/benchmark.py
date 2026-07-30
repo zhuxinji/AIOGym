@@ -11,9 +11,10 @@ from aiogym._internal.config import parse_seed_list
 from aiogym._internal.serialization import jsonable
 from aiogym._internal.vocabulary import GOAL_NAMES
 from aiogym.benchmarks import evaluate_policy_on_track, list_tracks, load_track
+from aiogym.benchmarks.calibration import calibrate_anchor_manifest
 from aiogym.catalog import list_cases, list_scenarios
 from aiogym.controllers import make_controller
-from aiogym.env import AIOGymEnv
+from aiogym.env_factory import make_env
 from aiogym.evaluation import evaluate_controller
 from aiogym.models import make_model
 from aiogym.models.cases import case_identity, load_case
@@ -71,17 +72,21 @@ def _direct_case_result(args, controller_name: str, seeds: tuple[int, ...]):
         if args.case is not None
         else None
     )
-    env = AIOGymEnv(
-        args.target,
-        case=profile,
-        reward_spec=args.reward_spec,
-        action_mode=(
-            args.policy_action_mode
-            if controller_name in {"sb3", "onnx"}
-            else "actuator"
-        ),
-        episode_steps=args.episode_steps,
-        control_dt=args.control_dt,
+    env = make_env(
+        config={
+            "scenario": args.target,
+            "case": profile,
+            "reward_spec": args.reward_spec,
+            "environment": {
+                "action_mode": (
+                    args.policy_action_mode
+                    if controller_name in {"sb3", "onnx"}
+                    else "actuator"
+                ),
+                "episode_steps": args.episode_steps,
+                "control_dt": args.control_dt,
+            },
+        }
     )
     controller = _make_controller(args, controller_name, args.target)
     try:
@@ -123,6 +128,7 @@ def _print_result(controller_name: str, payload: dict) -> None:
     if aggregate:
         print(
             f"{controller_name:14s} "
+            f"official_score={aggregate['official_score']:.6g} "
             f"{aggregate['metric']}={aggregate['metric_value']:.6g} "
             f"eligible={aggregate['ranking_eligible']}"
         )
@@ -153,19 +159,25 @@ def build_parser(prog=None):
     )
     parser.add_argument(
         "target",
+        nargs="?",
         metavar="TRACK_OR_SCENARIO",
         help=(
             f"Track ({', '.join(list_tracks())}) or scenario "
             f"({', '.join(list_scenarios())})"
         ),
     )
+    parser.add_argument("--config")
     parser.add_argument(
         "case",
         nargs="?",
         metavar="CASE",
         help="Case ID/name for a direct scenario run",
     )
-    parser.add_argument("--split", choices=("validation", "test"), default="test")
+    parser.add_argument(
+        "--split",
+        choices=("validation",),
+        default="validation",
+    )
     parser.add_argument("--goal", choices=GOAL_NAMES)
     parser.add_argument("--reward-spec")
     parser.add_argument("--controllers")
@@ -193,13 +205,137 @@ def build_parser(prog=None):
     return parser
 
 
+def _calibrate_anchors(argv, *, prog=None):
+    parser = argparse.ArgumentParser(
+        prog=f"{prog or 'aiogym benchmark'} calibrate-anchors",
+        description="Generate a reviewable fixed-anchor candidate manifest.",
+    )
+    parser.add_argument("--track", required=True, choices=list_tracks())
+    parser.add_argument("--anchor-id")
+    parser.add_argument("--bad-controller", default="hold")
+    parser.add_argument("--reference-controller", default="pid")
+    parser.add_argument(
+        "--seeds",
+        default="9000,9001,9002,9003,9004",
+    )
+    parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--overwrite",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    args = parser.parse_args(argv)
+    try:
+        track = load_track(args.track)
+        seeds = tuple(
+            int(value.strip())
+            for value in args.seeds.split(",")
+            if value.strip()
+        )
+        anchor_id = (
+            args.anchor_id
+            or str(track.ranking_declaration.get("anchor_id") or "")
+        )
+        if not anchor_id:
+            raise ValueError("Track does not declare an anchor_id")
+        payload = calibrate_anchor_manifest(
+            track,
+            anchor_id=anchor_id,
+            bad_controller_id=args.bad_controller,
+            reference_controller_id=args.reference_controller,
+            base_seeds=seeds,
+        )
+        _write_payload(args.output, payload, overwrite=args.overwrite)
+    except (FileExistsError, FileNotFoundError, KeyError, TypeError, ValueError) as exc:
+        parser.error(str(exc))
+    print(
+        f"candidate anchor_id={payload['id']} "
+        f"artifact_hash={payload['artifact_hash']} "
+        f"output={args.output}"
+    )
+    return 0
+
+
 def main(argv=None, prog=None):
     raw_args = list(sys.argv[1:] if argv is None else argv)
+    if raw_args[:1] == ["calibrate-anchors"]:
+        return _calibrate_anchors(raw_args[1:], prog=prog)
     parser = build_parser(prog)
     if not raw_args:
         parser.print_help()
         return 0
     args = parser.parse_args(raw_args)
+    if args.config is not None:
+        if args.target is not None:
+            parser.error("--config and positional target are mutually exclusive")
+        try:
+            declaration = json.loads(
+                Path(args.config).read_text(encoding="utf-8")
+            )
+            if (
+                not isinstance(declaration, dict)
+                or declaration.get("schema_version")
+                != "aiogym.benchmark_run.v1"
+            ):
+                raise ValueError("unsupported benchmark config schema")
+            allowed = {
+                "schema_version",
+                "target",
+                "case",
+                "controllers",
+                "seeds",
+                "goal",
+                "reward_spec",
+                "controller_profile",
+                "sb3_path",
+                "sb3_algo",
+                "onnx_path",
+                "policy_action_mode",
+                "include_episodes",
+                "output",
+            }
+            unknown = set(declaration) - allowed
+            if unknown:
+                raise ValueError(
+                    "unknown benchmark config fields: "
+                    + ", ".join(sorted(unknown))
+                )
+            args.target = declaration["target"]
+            for name in (
+                "case",
+                "goal",
+                "reward_spec",
+                "controller_profile",
+                "sb3_path",
+                "sb3_algo",
+                "onnx_path",
+                "policy_action_mode",
+                "include_episodes",
+                "output",
+            ):
+                if name in declaration:
+                    setattr(args, name, declaration[name])
+            if "controllers" in declaration:
+                controllers = declaration["controllers"]
+                args.controllers = (
+                    ",".join(controllers)
+                    if isinstance(controllers, list)
+                    else str(controllers)
+                )
+            if "seeds" in declaration:
+                args.seed_list = ",".join(
+                    str(seed) for seed in declaration["seeds"]
+                )
+        except (
+            FileNotFoundError,
+            KeyError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as exc:
+            parser.error(str(exc))
+    if args.target is None:
+        parser.error("provide --config or TRACK_OR_SCENARIO")
     tracks = set(list_tracks())
     scenarios = set(list_scenarios())
     is_track = args.target in tracks

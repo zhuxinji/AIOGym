@@ -1,35 +1,43 @@
-"""Public environment construction from direct arguments or config mappings."""
+"""The single public environment-construction entry point."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
-from ._internal.config import load_config
-from .env import AIOGymEnv
+import gymnasium as gym
+
+from ._environment.builder import build_environment
+from ._environment.spec import resolve_env_spec
+from .models import CaseSpec
+from .rewards import RewardSpec
 
 
 def make_env(
-    scenario: Any = "cascade",
-    seed: int | None = None,
+    scenario: str | None = None,
+    *,
+    case: str | Mapping[str, Any] | CaseSpec | None = None,
+    reward_spec: str | RewardSpec | None = None,
     config: str | Path | Mapping[str, Any] | None = None,
-    **overrides,
-) -> AIOGymEnv:
-    """Create an AIO-Gym environment from direct arguments or a config mapping."""
+    info_level: str = "full",
+) -> gym.Env:
+    """Create one resolved physical environment.
 
-    data = load_config(config)
-    removed = sorted(set(data) & {"model", "env"})
-    if removed:
-        raise ValueError(
-            f"unsupported environment config field(s): {', '.join(removed)}; "
-            "use 'scenario' and 'environment'"
-        )
-    nested_environment = data.pop("environment", {})
-    if not isinstance(nested_environment, Mapping):
-        raise TypeError("config['environment'] must be a mapping of environment options")
-    data.update(nested_environment)
-    data.update(overrides)
-    scenario = data.pop("scenario", scenario)
-    env = AIOGymEnv(scenario, **data)
-    if seed is not None:
-        env.reset(seed=seed)
-    return env
+    Seeding belongs to ``env.reset(seed=...)``. Track sampling, split
+    orchestration, and algorithm preprocessing are intentionally outside this
+    public factory.
+    """
+
+    if isinstance(case, CaseSpec):
+        case = case.profile
+    spec = resolve_env_spec(
+        scenario,
+        case=case,
+        reward_spec=reward_spec,
+        config=config,
+        info_level=info_level,
+    )
+    return build_environment(spec)
+
+
+__all__ = ["make_env"]

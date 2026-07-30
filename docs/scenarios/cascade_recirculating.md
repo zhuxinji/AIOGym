@@ -14,7 +14,7 @@ Bundled Cases:
 ```python
 import aiogym
 
-env = aiogym.AIOGymEnv(
+env = aiogym.make_env(
     "cascade-recirculating",
     case="commissioning",
     reward_spec="regulation-v1",

@@ -19,6 +19,7 @@ DIRECT_ENV_DEFAULTS = {
     "previous_action_obs": False,
     "normalize_observations": False,
     "tracking_error_obs": False,
+    "observation_mode": "full_state",
     "action_mode": "actuator",
     "noise": False,
     "noise_pct": 0.01,

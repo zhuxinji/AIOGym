@@ -10,15 +10,17 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import inspect
+import hashlib
+import json
 import math
 import os
 import time
 
 from aiogym._internal.config import parse_seed_list
 from aiogym._internal.paths import run_path
-from aiogym.benchmarks import CaseMixtureEnv, evaluate_policy_on_track
 from aiogym.controllers import make_controller
-from aiogym.env import AIOGymEnv
+from aiogym.env_factory import make_env
 from aiogym.evaluation import (
     evaluate_controller,
     rollout_controller,
@@ -36,49 +38,112 @@ from aiogym.rl.training_artifacts import (
     utc_run_id,
     write_rl_artifacts,
 )
+from aiogym.rl.algorithm_registry import (
+    get_algorithm_adapter,
+    load_algorithm_checkpoint,
+)
+from aiogym.rl.checkpoints import (
+    CheckpointManager,
+    TrainingCheckpoint,
+    capture_rng_state,
+    restore_rng_state,
+)
+from aiogym.rl.coordinator import EpisodeCoordinator
+from aiogym.rl.episode_env import make_track_training_env
+from aiogym.rl.config import RLTrainingConfig
+from aiogym.rl.statistics import NormalizedActionWrapper
+from aiogym.rl.utd import sb3_update_schedule
+from aiogym.rl.validation import (
+    CompleteValidationCallback,
+    ValidationEpisodePlan,
+    evaluate_validation_policy,
+)
 
 
-def make_training_env(args, rank: int = 0):
+def make_training_env(
+    args,
+    rank: int = 0,
+    *,
+    coordinator: EpisodeCoordinator | None = None,
+):
     def _init():
         track = getattr(args, "track_spec", None)
         if track is not None:
-            env = CaseMixtureEnv(
+            if coordinator is not None:
+                resolved_coordinator = coordinator
+            else:
+                resume_state = getattr(
+                    args,
+                    "_resume_coordinator_state",
+                    None,
+                )
+                start = (
+                    int(resume_state["next_episode_index"])
+                    if resume_state is not None
+                    else 0
+                )
+                resolved_coordinator = EpisodeCoordinator(
+                    base_seed=args.seed,
+                    namespace=track.seed_namespace("training"),
+                    next_episode_index=start + rank,
+                    stride=max(1, int(getattr(args, "n_envs", 1))),
+                )
+            env = make_track_training_env(
                 track,
-                split="training",
+                base_seed=args.seed,
                 worker_index=rank,
-                training=True,
+                coordinator=resolved_coordinator,
+                info_level="minimal",
             )
-            env.reset(seed=args.seed)
-            return env
-        env = AIOGymEnv(
-            args.scenario,
-            case=getattr(args, "case", None),
-            reward_spec=args.resolved_reward_spec_id,
-            action_mode=args.action_mode,
-            control_dt=args.control_dt,
-            episode_steps=args.train_episode_steps,
-            auto_events=args.auto_events,
-            randomize=args.randomize,
-            randomize_setpoints=args.randomize_setpoints,
-            randomize_plant=args.randomize_plant,
-            plant_drift=args.plant_drift,
-            integral_obs=args.integral_obs,
-            disturbance_obs=args.disturbance_obs,
-            previous_action_obs=args.previous_action_obs,
-            normalize_observations=args.normalize_observations,
-            tracking_error_obs=args.tracking_error_obs,
-            terminate_on_runaway=args.terminate_on_runaway,
-            noise=args.noise,
-            noise_pct=args.noise_pct,
+            return NormalizedActionWrapper(env)
+        env = make_env(
+            config={
+                "scenario": args.scenario,
+                "case": getattr(args, "case", None),
+                "reward_spec": args.resolved_reward_spec_id,
+                "info_level": "minimal",
+                "environment": {
+                    "action_mode": args.action_mode,
+                    "control_dt": args.control_dt,
+                    "episode_steps": args.train_episode_steps,
+                    "auto_events": args.auto_events,
+                    "randomize": args.randomize,
+                    "randomize_setpoints": args.randomize_setpoints,
+                    "randomize_plant": args.randomize_plant,
+                    "plant_drift": args.plant_drift,
+                    "integral_obs": args.integral_obs,
+                    "disturbance_obs": args.disturbance_obs,
+                    "previous_action_obs": args.previous_action_obs,
+                    "normalize_observations": args.normalize_observations,
+                    "tracking_error_obs": args.tracking_error_obs,
+                    "terminate_on_runaway": args.terminate_on_runaway,
+                    "noise": args.noise,
+                    "noise_pct": args.noise_pct,
+                },
+            }
         )
-        env.reset(seed=args.seed + rank)
-        return env
+        return NormalizedActionWrapper(env)
 
     return _init
 
 
 def default_n_envs():
     return min(16, max(1, (os.cpu_count() or 4) - 2))
+
+
+def _make_custom_evaluation_env(args):
+    return make_env(
+        config={
+            "scenario": args.scenario,
+            "case": getattr(args, "case", None),
+            "reward_spec": args.resolved_reward_spec_id,
+            "environment": {
+                "action_mode": args.action_mode,
+                "episode_steps": args.eval_episode_steps,
+                "control_dt": args.control_dt,
+            },
+        }
+    )
 
 
 def best_device():
@@ -89,53 +154,72 @@ def best_device():
 
 
 def build_algo(args, env):
-    try:
-        from stable_baselines3 import PPO, SAC, TD3
-    except ModuleNotFoundError as ex:
-        raise SystemExit(
-            "stable-baselines3 is required for training; install AIO-Gym "
-            "with `pip install 'aiogym[rl]'`."
-        ) from ex
-
-    algo = args.algo.lower()
-    common = dict(
-        policy="MlpPolicy",
-        env=env,
+    config = unified_config(args)
+    if args.resume:
+        model = load_algorithm_checkpoint(
+            args.algo,
+            args.resume,
+            env=env,
+            device=args.device,
+        )
+        replay_path = f"{args.resume}.replay.pkl"
+        if (
+            get_algorithm_adapter(args.algo).off_policy
+            and os.path.exists(replay_path)
+        ):
+            model.load_replay_buffer(replay_path)
+        state_path = f"{args.resume}.training.ckpt"
+        if os.path.exists(state_path):
+            checkpoint = getattr(
+                args,
+                "_resume_training_checkpoint",
+                None,
+            ) or CheckpointManager.load(
+                state_path,
+                expected_config=config,
+                allow_runtime_changes=True,
+            )
+            restore_rng_state(checkpoint.rng_state)
+        return model
+    return get_algorithm_adapter(args.algo).build(
+        config,
+        env,
         verbose=args.verbose,
-        seed=args.seed,
-        device=args.device,
-        learning_rate=args.learning_rate,
-        gamma=args.gamma,
-        tensorboard_log=args.tensorboard_log,
     )
-    if algo == "sac":
-        return SAC(
-            batch_size=args.batch_size,
-            train_freq=args.train_freq,
-            gradient_steps=args.gradient_steps,
-            buffer_size=args.buffer_size,
-            learning_starts=args.learning_starts,
-            **common,
-        )
-    if algo == "td3":
-        return TD3(
-            batch_size=args.batch_size,
-            train_freq=args.train_freq,
-            gradient_steps=args.gradient_steps,
-            buffer_size=args.buffer_size,
-            learning_starts=args.learning_starts,
-            **common,
-        )
-    if algo == "ppo":
-        return PPO(
-            n_steps=args.ppo_n_steps,
-            batch_size=args.batch_size,
-            **common,
-        )
-    raise ValueError(f"unsupported SB3 algorithm: {args.algo}")
 
 
-def evaluate_checkpoint(args, checkpoint_path: str):
+def unified_config(args) -> RLTrainingConfig:
+    algorithm = {
+        "learning_rate": args.learning_rate,
+        "gamma": args.gamma,
+        "batch_size": args.batch_size,
+        "tensorboard_log": args.tensorboard_log,
+        "utd_ratio": 0.0 if args.algo == "ppo" else args.utd_ratio,
+        "rollout_vector_steps": args.train_freq,
+        "n_steps": args.ppo_n_steps,
+    }
+    return RLTrainingConfig(
+        track_id=args.track or training_identity(args),
+        algorithm_id=args.algo,
+        training_seed=args.seed,
+        total_transitions=args.steps,
+        n_envs=args.n_envs,
+        device=args.device,
+        algorithm=algorithm,
+        replay={
+            "capacity": args.buffer_size,
+            "learning_starts": args.learning_starts,
+        },
+        evaluation={
+            "every_transitions": args.learning_curve_every,
+            "episodes": args.learning_curve_episodes,
+        },
+        checkpointing={},
+        curriculum_id=getattr(args, "curriculum_id", None),
+    )
+
+
+def _evaluate_validation_checkpoint(args, checkpoint_path: str):
     if getattr(args, "track_spec", None) is not None:
         controller = make_controller(
             "sb3",
@@ -144,6 +228,7 @@ def evaluate_checkpoint(args, checkpoint_path: str):
                 "path": checkpoint_path,
                 "algo": args.algo,
                 "action_mode": args.action_mode,
+                "normalized_actions": True,
             },
         )
         seeds = parse_seed_list(
@@ -152,17 +237,19 @@ def evaluate_checkpoint(args, checkpoint_path: str):
             args.eval_episodes,
             option="--eval-seed-list",
         )
-        evaluation = evaluate_policy_on_track(
-            controller,
+        validation_plan = ValidationEpisodePlan(
             args.track_spec,
-            split="test",
             base_seeds=seeds,
+        )
+        evaluation = evaluate_validation_policy(
+            controller,
+            validation_plan,
             include_episodes=True,
         )
         rollouts = []
         if args.save_rollout:
-            for case in args.track_spec.resolved_cases("test"):
-                env = AIOGymEnv(
+            for case in args.track_spec.resolved_cases("validation"):
+                env = make_env(
                     args.scenario,
                     case=case.profile,
                     reward_spec=args.reward_spec,
@@ -179,7 +266,7 @@ def evaluate_checkpoint(args, checkpoint_path: str):
                 rollout.update(
                     {
                         "track_id": args.track,
-                        "track_split": "test",
+                        "track_split": "validation",
                         "case_id": case.case_id,
                         "resolved_case_hash": case.resolved_case_hash,
                     }
@@ -194,6 +281,7 @@ def evaluate_checkpoint(args, checkpoint_path: str):
             "path": checkpoint_path,
             "algo": args.algo,
             "action_mode": args.action_mode,
+            "normalized_actions": True,
         },
     )
     seeds = parse_seed_list(
@@ -202,14 +290,7 @@ def evaluate_checkpoint(args, checkpoint_path: str):
         args.eval_episodes,
         option="--eval-seed-list",
     )
-    evaluation_env = AIOGymEnv(
-        args.scenario,
-        case=getattr(args, "case", None),
-        reward_spec=args.resolved_reward_spec_id,
-        action_mode=args.action_mode,
-        episode_steps=args.eval_episode_steps,
-        control_dt=args.control_dt,
-    )
+    evaluation_env = _make_custom_evaluation_env(args)
     result = evaluate_controller(
         controller,
         evaluation_env,
@@ -221,14 +302,7 @@ def evaluate_checkpoint(args, checkpoint_path: str):
     )
     rollout = None
     if args.save_rollout:
-        rollout_env = AIOGymEnv(
-            args.scenario,
-            case=getattr(args, "case", None),
-            reward_spec=args.resolved_reward_spec_id,
-            action_mode=args.action_mode,
-            episode_steps=args.eval_episode_steps,
-            control_dt=args.control_dt,
-        )
+        rollout_env = _make_custom_evaluation_env(args)
         rollout = rollout_controller(
             controller,
             rollout_env,
@@ -237,7 +311,7 @@ def evaluate_checkpoint(args, checkpoint_path: str):
         )
         rollout_env.close()
     evaluation = {
-        "split": "test",
+        "split": "validation",
         "case_count": 1,
         "results": [result],
         "aggregate": {
@@ -251,7 +325,16 @@ def evaluate_checkpoint(args, checkpoint_path: str):
     return None, evaluation, [rollout] if rollout is not None else []
 
 
-def evaluate_training_policy(args, model, step: int, phase: str = "eval"):
+def evaluate_training_policy(
+    args,
+    model,
+    step: int,
+    phase: str = "eval",
+    *,
+    episode_plan=None,
+    validation_callback=None,
+    checkpoint_id=None,
+):
     if getattr(args, "track_spec", None) is not None:
         controller = make_controller(
             "sb3",
@@ -261,6 +344,7 @@ def evaluate_training_policy(args, model, step: int, phase: str = "eval"):
                 "algo": args.algo,
                 "action_mode": args.action_mode,
                 "name": f"SB3-{args.algo.upper()}",
+                "normalized_actions": True,
             },
         )
         seeds = parse_seed_list(
@@ -269,12 +353,22 @@ def evaluate_training_policy(args, model, step: int, phase: str = "eval"):
             args.learning_curve_episodes,
             option="--eval-seed-list",
         )
-        evaluation = evaluate_policy_on_track(
-            controller,
-            args.track_spec,
-            split="validation",
-            base_seeds=seeds,
-            include_episodes=False,
+        evaluation = (
+            validation_callback.evaluate(
+                controller,
+                checkpoint_id=(
+                    str(checkpoint_id)
+                    if checkpoint_id is not None
+                    else f"step-{step}"
+                ),
+                step=step,
+            )
+            if validation_callback is not None
+            else evaluate_validation_policy(
+                controller,
+                episode_plan,
+                include_episodes=False,
+            )
         )
         aggregate = evaluation["aggregate"]
         row = {
@@ -284,6 +378,12 @@ def evaluate_training_policy(args, model, step: int, phase: str = "eval"):
             "track_id": args.track,
             "track_split": "validation",
             "seed_namespace": evaluation["seed_namespace"],
+            "case_values": list(aggregate["case_values"]),
+            "validation_plan_hash": (
+                episode_plan.plan_hash
+                if episode_plan is not None
+                else None
+            ),
         }
         return row
 
@@ -295,6 +395,7 @@ def evaluate_training_policy(args, model, step: int, phase: str = "eval"):
             "algo": args.algo,
             "action_mode": args.action_mode,
             "name": f"SB3-{args.algo.upper()}",
+            "normalized_actions": True,
         },
     )
     seeds = parse_seed_list(
@@ -303,14 +404,7 @@ def evaluate_training_policy(args, model, step: int, phase: str = "eval"):
         args.learning_curve_episodes,
         option="--eval-seed-list",
     )
-    env = AIOGymEnv(
-        args.scenario,
-        case=getattr(args, "case", None),
-        reward_spec=args.resolved_reward_spec_id,
-        action_mode=args.action_mode,
-        episode_steps=args.eval_episode_steps,
-        control_dt=args.control_dt,
-    )
+    env = _make_custom_evaluation_env(args)
     try:
         result = evaluate_controller(
             controller,
@@ -359,6 +453,8 @@ def training_metadata(
         "learning_starts": args.learning_starts,
         "train_freq": args.train_freq,
         "gradient_steps": args.gradient_steps,
+        "utd_ratio": args.utd_ratio,
+        "training_config_hash": unified_config(args).config_hash,
         "learning_curve_every": args.learning_curve_every,
         "learning_curve_episodes": args.learning_curve_episodes,
         "save_rollout": args.save_rollout,
@@ -412,11 +508,6 @@ def training_metadata(
                 "validation_seed_namespace",
                 None,
             ),
-            "test_seed_namespace": getattr(
-                args,
-                "test_seed_namespace",
-                None,
-            ),
             "training_seed_namespace_hash": getattr(
                 args,
                 "training_seed_namespace_hash",
@@ -425,11 +516,6 @@ def training_metadata(
             "validation_seed_namespace_hash": getattr(
                 args,
                 "validation_seed_namespace_hash",
-                None,
-            ),
-            "test_seed_namespace_hash": getattr(
-                args,
-                "test_seed_namespace_hash",
                 None,
             ),
         }
@@ -443,6 +529,184 @@ def training_metadata(
     if best_metric_value is not None:
         metadata["best_metric_value"] = float(best_metric_value)
     return metadata
+
+
+def save_resumable_training_state(
+    args,
+    model,
+    checkpoint_path: str,
+    *,
+    best_validation=None,
+) -> str:
+    """Save SB3 state for a declared restart-episode continuation."""
+
+    adapter = get_algorithm_adapter(args.algo)
+    if adapter.off_policy:
+        model.save_replay_buffer(f"{checkpoint_path}.replay.pkl")
+    config = unified_config(args)
+    resume_state = _capture_sb3_resume_state(args, model)
+    state = TrainingCheckpoint(
+        config=config,
+        transition_count=int(getattr(model, "num_timesteps", 0)),
+        update_count=int(getattr(model, "_n_updates", 0)),
+        algorithm_state={
+            "format": "stable-baselines3",
+            "checkpoint_path": checkpoint_path,
+            "algorithm_class": type(model).__name__,
+            "optimizer_updates": int(getattr(model, "_n_updates", 0)),
+        },
+        replay_state=(
+            {"reference": f"{checkpoint_path}.replay.pkl"}
+            if adapter.off_policy
+            else None
+        ),
+        normalization_state=None,
+        coordinator_state=resume_state,
+        curriculum_state=(
+            {"curriculum_id": args.curriculum_id}
+            if getattr(args, "curriculum_id", None)
+            else None
+        ),
+        best_validation=best_validation,
+        rng_state=capture_rng_state(),
+        resume_mode="restart_episode",
+        last_committed_episode_index=resume_state.get(
+            "last_committed_episode_index"
+        ),
+        next_episode_index=resume_state.get("next_episode_index"),
+        partial_episodes_discarded=int(
+            resume_state.get("partial_episodes_discarded", 0)
+        ),
+        n_envs=int(args.n_envs),
+        vector_backend=str(args.vec_env),
+        code_commit=os.environ.get("GIT_COMMIT"),
+    )
+    path = f"{checkpoint_path}.training.ckpt"
+    CheckpointManager.save(path, state)
+    return path
+
+
+def prepare_resume_training_state(args):
+    """Load and validate the sidecar before constructing training envs."""
+
+    if not args.resume:
+        args._resume_training_checkpoint = None
+        args._resume_coordinator_state = None
+        return None
+    state_path = f"{args.resume}.training.ckpt"
+    if not os.path.exists(state_path):
+        raise FileNotFoundError(
+            f"restart-episode resume requires sidecar: {state_path}"
+        )
+    checkpoint = CheckpointManager.load(
+        state_path,
+        expected_config=unified_config(args),
+        allow_runtime_changes=True,
+    )
+    _validate_sb3_resume_contract(args, checkpoint)
+    args._resume_training_checkpoint = checkpoint
+    args._resume_coordinator_state = checkpoint.coordinator_state
+    return checkpoint
+
+
+def _capture_sb3_resume_state(args, model) -> dict:
+    if getattr(args, "track_spec", None) is None:
+        return {
+            "managed": False,
+            "resume_mode": "restart_episode",
+            "next_episode_index": None,
+            "last_committed_episode_index": None,
+            "partial_episodes_discarded": 0,
+            "n_envs": int(args.n_envs),
+            "vector_backend": str(args.vec_env),
+        }
+    vector_env = model.get_env()
+    try:
+        worker_states = vector_env.env_method("training_resume_state")
+    except Exception as exc:
+        raise RuntimeError(
+            "training vector backend cannot expose real coordinator state"
+        ) from exc
+    active = [
+        int(state["active_episode_index"])
+        for state in worker_states
+        if state.get("active_episode_index") is not None
+    ]
+    completed = [
+        int(state["last_completed_episode_index"])
+        for state in worker_states
+        if state.get("last_completed_episode_index") is not None
+    ]
+    next_episode_index = (
+        max(active) + 1
+        if active
+        else max(
+            int(state["coordinator"]["next_episode_index"])
+            for state in worker_states
+        )
+    )
+    distribution = args.track_spec.training_distribution()
+    return {
+        "managed": True,
+        "resume_mode": "restart_episode",
+        "base_seed": int(args.seed),
+        "namespace": args.training_seed_namespace,
+        "worker_states": worker_states,
+        "last_committed_episode_index": (
+            max(completed) if completed else None
+        ),
+        "next_episode_index": next_episode_index,
+        "active_episode_indexes": active,
+        "partial_episodes_discarded": len(active),
+        "n_envs": int(args.n_envs),
+        "vector_backend": str(args.vec_env),
+        "track_hash": args.track_spec.track_hash,
+        "reward_spec_id": args.resolved_reward_spec_id,
+        "distribution_hash": distribution.distribution_hash,
+        "policy_contract_hash": _mapping_hash(
+            args.track_spec.policy_contract
+        ),
+        "algorithm_id": args.algo,
+        "replay_schema": "stable-baselines3-native-v1",
+    }
+
+
+def _validate_sb3_resume_contract(args, checkpoint) -> None:
+    if checkpoint.resume_mode != "restart_episode":
+        raise ValueError(
+            "SB3 supports only resume_mode='restart_episode'"
+        )
+    state = dict(checkpoint.coordinator_state)
+    if getattr(args, "track_spec", None) is None:
+        return
+    expected = {
+        "track_hash": args.track_spec.track_hash,
+        "reward_spec_id": args.resolved_reward_spec_id,
+        "distribution_hash": (
+            args.track_spec.training_distribution().distribution_hash
+        ),
+        "policy_contract_hash": _mapping_hash(
+            args.track_spec.policy_contract
+        ),
+        "algorithm_id": args.algo,
+        "replay_schema": "stable-baselines3-native-v1",
+    }
+    for name, value in expected.items():
+        if state.get(name) != value:
+            raise ValueError(
+                f"resume checkpoint {name} does not match training contract"
+            )
+
+
+def _mapping_hash(value) -> str:
+    canonical = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def artifact_dir_for(args, run_name: str) -> str:
@@ -459,7 +723,9 @@ def run_name_for(args, run_id: str | None = None) -> str:
     return f"{stem}_{run_id or utc_run_id()}"
 
 
-def _learning_curve_point_is_better(row, best_metric_value):
+def _custom_learning_curve_point_is_better(row, best_metric_value):
+    if not bool(row.get("ranking_eligible", True)):
+        return False
     value = float(row["metric_value"])
     if not math.isfinite(value):
         return False
@@ -480,20 +746,59 @@ def make_learning_curve_callback(args, best_checkpoint_path: str | None = None):
             self._next_eval = max(1, int(args.learning_curve_every))
             self.best_metric_value = None
             self.best_step = None
+            self.validator = (
+                CompleteValidationCallback(
+                    args.track_spec,
+                    base_seeds=parse_seed_list(
+                        args.eval_seed_list,
+                        args.eval_seed,
+                        args.learning_curve_episodes,
+                        option="--eval-seed-list",
+                    ),
+                )
+                if getattr(args, "track_spec", None) is not None
+                else None
+            )
+            self.validation_plan = (
+                self.validator.plan
+                if self.validator is not None
+                else None
+            )
 
         def _on_step(self) -> bool:
             if args.learning_curve_every <= 0 or self.num_timesteps < self._next_eval:
                 return True
-            row = evaluate_training_policy(args, self.model, self.num_timesteps)
+            row = evaluate_training_policy(
+                args,
+                self.model,
+                self.num_timesteps,
+                episode_plan=self.validation_plan,
+                validation_callback=self.validator,
+                checkpoint_id=f"step-{self.num_timesteps}",
+            )
             row["timesteps"] = self.num_timesteps
             self.history.append(row)
-            if (
-                best_checkpoint_path is not None
-                and _learning_curve_point_is_better(row, self.best_metric_value)
-            ):
+            improved = (
+                self.validator is not None
+                and self.validator.selector.best is not None
+                and self.validator.selector.best.checkpoint_id
+                == f"step-{self.num_timesteps}"
+            )
+            if self.validator is None:
+                improved = _custom_learning_curve_point_is_better(
+                    row,
+                    self.best_metric_value,
+                )
+            if best_checkpoint_path is not None and improved:
                 self.best_metric_value = float(row["metric_value"])
                 self.best_step = int(self.num_timesteps)
                 self.model.save(best_checkpoint_path)
+                save_resumable_training_state(
+                    args,
+                    self.model,
+                    f"{best_checkpoint_path}.zip",
+                    best_validation=row,
+                )
             self._next_eval += max(1, int(args.learning_curve_every))
             return True
 
@@ -516,13 +821,18 @@ def export_onnx(model, obs_dim: int, path: str):
     device = next(policy.parameters()).device
     dummy = torch.zeros(1, obs_dim, device=device)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    export_options = {
+        "input_names": ["obs"],
+        "output_names": ["action"],
+        "opset_version": 17,
+    }
+    if "dynamo" in inspect.signature(torch.onnx.export).parameters:
+        export_options["dynamo"] = False
     torch.onnx.export(
         DeterministicPolicy(policy),
         dummy,
         path,
-        input_names=["obs"],
-        output_names=["action"],
-        opset_version=17,
+        **export_options,
     )
 
 
@@ -541,7 +851,7 @@ def require_onnx_export_dependencies():
         )
 
 
-def main(argv=None, prog=None):
+def _run_backend(argv=None, prog=None):
     ap = argparse.ArgumentParser(prog=prog)
     ap.add_argument(
         "--track",
@@ -656,10 +966,16 @@ def main(argv=None, prog=None):
         help="vector-environment rollout steps between optimizer phases",
     )
     ap.add_argument(
+        "--utd-ratio",
+        type=float,
+        default=1.0,
+        help="optimizer updates per collected transition (SAC/TD3)",
+    )
+    ap.add_argument(
         "--gradient-steps",
         type=int,
-        default=1,
-        help="optimizer steps per phase; with N environments, N gives about one update per collected transition",
+        default=None,
+        help="deprecated compatibility field; derived from UTD and n-envs",
     )
     ap.add_argument("--ppo-n-steps", type=int, default=2048)
     ap.add_argument("--device", default=None,
@@ -689,9 +1005,14 @@ def main(argv=None, prog=None):
     ap.add_argument("--rollout-steps", type=int, default=None)
     ap.add_argument("--onnx", action="store_true", help="export deterministic policy to ONNX after training")
     ap.add_argument("--onnx-path", default=None, help="optional ONNX export path; defaults to checkpoint basename + .onnx")
+    ap.add_argument("--resume", default=None, help="resume from an SB3 checkpoint")
     args = ap.parse_args(argv)
     if not 0.0 < args.gamma <= 1.0:
         ap.error("--gamma must be in (0, 1]")
+    if args.utd_ratio < 0.0:
+        ap.error("--utd-ratio must be non-negative")
+    if args.gradient_steps is not None:
+        ap.error("--gradient-steps is replaced by explicit --utd-ratio")
     configure_training_track(args)
     configure_training_auto_events(args)
     if args.track_spec is None:
@@ -700,7 +1021,6 @@ def main(argv=None, prog=None):
         require_onnx_export_dependencies()
 
     try:
-        from stable_baselines3.common.env_util import make_vec_env
         from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
         import torch
     except ModuleNotFoundError as ex:
@@ -709,22 +1029,33 @@ def main(argv=None, prog=None):
             "AIO-Gym with `pip install 'aiogym[rl]'`."
         ) from ex
     args.device = args.device or best_device()
+    args.train_freq, args.gradient_steps = sb3_update_schedule(
+        utd_ratio=0.0 if args.algo == "ppo" else args.utd_ratio,
+        n_envs=args.n_envs,
+        vector_steps=args.train_freq,
+    )
     torch.set_num_threads(max(1, int(args.torch_threads)))
+    prepare_resume_training_state(args)
 
     os.makedirs(args.out_dir, exist_ok=True)
     run_name = run_name_for(args)
     checkpoint_path = os.path.join(args.out_dir, run_name)
 
-    vec_env_cls = SubprocVecEnv if args.vec_env == "subproc" else DummyVecEnv
-    vec_env_kwargs = {"start_method": args.subproc_start_method} if args.vec_env == "subproc" else None
-    env = make_vec_env(
-        make_training_env(args),
-        n_envs=args.n_envs,
-        seed=args.seed,
-        vec_env_cls=vec_env_cls,
-        vec_env_kwargs=vec_env_kwargs,
+    env_fns = [
+        make_training_env(args, rank=rank)
+        for rank in range(args.n_envs)
+    ]
+    env = (
+        SubprocVecEnv(
+            env_fns,
+            start_method=args.subproc_start_method,
+        )
+        if args.vec_env == "subproc"
+        else DummyVecEnv(env_fns)
     )
+    env.seed(args.seed)
     model = build_algo(args, env)
+    starting_step = int(getattr(model, "num_timesteps", 0))
     print(
         f"training {args.algo.upper()} | {args.n_envs} {args.vec_env} envs | "
         f"device={args.device} | action={args.action_mode} | "
@@ -732,13 +1063,27 @@ def main(argv=None, prog=None):
         f"reward={args.reward_spec}"
     )
     curve_callback = make_learning_curve_callback(args, checkpoint_path)
-    initial_curve_point = evaluate_training_policy(args, model, 0, phase="initial")
-    initial_curve_point["timesteps"] = 0
+    initial_curve_point = evaluate_training_policy(
+        args,
+        model,
+        starting_step,
+        phase="resume" if args.resume else "initial",
+        episode_plan=curve_callback.validation_plan,
+    )
+    initial_curve_point["timesteps"] = starting_step
     curve_callback.history.append(initial_curve_point)
     t0 = time.time()
-    model.learn(total_timesteps=args.steps, progress_bar=False, callback=curve_callback)
+    remaining_steps = max(0, int(args.steps) - starting_step)
+    if remaining_steps:
+        model.learn(
+            total_timesteps=remaining_steps,
+            progress_bar=False,
+            callback=curve_callback,
+            reset_num_timesteps=not bool(args.resume),
+        )
     train_seconds = time.time() - t0
     final_step = int(getattr(model, "num_timesteps", args.steps))
+    collected_transitions = max(0, final_step - starting_step)
     if (
         curve_callback.history
         and int(curve_callback.history[-1].get("timesteps", -1)) == final_step
@@ -747,18 +1092,43 @@ def main(argv=None, prog=None):
         final_curve_point["phase"] = "final"
     else:
         final_curve_point = evaluate_training_policy(
-            args, model, final_step, phase="final"
+            args,
+            model,
+            final_step,
+            phase="final",
+            episode_plan=curve_callback.validation_plan,
         )
     final_curve_point["timesteps"] = final_step
     final_checkpoint_path = f"{checkpoint_path}_final"
     model.save(final_checkpoint_path)
     final_checkpoint_zip = f"{final_checkpoint_path}.zip"
+    best_validation = (
+        {
+            "step": curve_callback.best_step,
+            "metric_value": curve_callback.best_metric_value,
+        }
+        if curve_callback.best_step is not None
+        else None
+    )
+    save_resumable_training_state(
+        args,
+        model,
+        final_checkpoint_zip,
+        best_validation=best_validation,
+    )
     if curve_callback.best_step is None:
         model.save(checkpoint_path)
         checkpoint_selection = "final"
     else:
         checkpoint_selection = "best-validation"
     checkpoint_zip = f"{checkpoint_path}.zip"
+    if checkpoint_selection == "final":
+        save_resumable_training_state(
+            args,
+            model,
+            checkpoint_zip,
+            best_validation=best_validation,
+        )
     onnx_path = None
     if args.onnx:
         onnx_path = args.onnx_path or f"{checkpoint_path}.onnx"
@@ -772,7 +1142,7 @@ def main(argv=None, prog=None):
         export_onnx(export_model, env.observation_space.shape[0], onnx_path)
     env.close()
 
-    evaluation_spec, evaluation, rollouts = evaluate_checkpoint(
+    evaluation_spec, evaluation, rollouts = _evaluate_validation_checkpoint(
         args,
         checkpoint_zip,
     )
@@ -841,8 +1211,17 @@ def main(argv=None, prog=None):
             ),
             "training_runtime": {
                 "seconds": train_seconds,
-                "steps_per_second": args.steps / train_seconds if train_seconds > 0 else None,
-                "steps_per_second_per_env": (args.steps / train_seconds / args.n_envs) if train_seconds > 0 else None,
+                "collected_transitions": collected_transitions,
+                "steps_per_second": (
+                    collected_transitions / train_seconds
+                    if train_seconds > 0 and collected_transitions
+                    else None
+                ),
+                "steps_per_second_per_env": (
+                    collected_transitions / train_seconds / args.n_envs
+                    if train_seconds > 0 and collected_transitions
+                    else None
+                ),
             },
         },
     )
@@ -854,17 +1233,14 @@ def main(argv=None, prog=None):
     if onnx_path is not None:
         print(f"exported onnx {onnx_path}")
     print(f"saved artifacts {artifact_dir_for(args, run_name)}")
-    if train_seconds > 0:
+    if train_seconds > 0 and collected_transitions:
         print(
-            f"train throughput {args.steps / train_seconds:.1f} steps/s "
-            f"({args.n_envs} envs x {args.steps / train_seconds / args.n_envs:.1f}/env/s)"
+            f"train throughput {collected_transitions / train_seconds:.1f} "
+            f"steps/s ({args.n_envs} envs x "
+            f"{collected_transitions / train_seconds / args.n_envs:.1f}/env/s)"
         )
     print(
-        f"eval {metric}={aggregate['metric_value']:.3f} "
+        f"validation {metric}={aggregate['metric_value']:.3f} "
         f"cases={aggregate['case_count']} "
         f"eligible={aggregate['ranking_eligible']}"
     )
-
-
-if __name__ == "__main__":
-    main()

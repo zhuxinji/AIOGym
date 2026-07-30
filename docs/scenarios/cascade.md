@@ -16,7 +16,7 @@ Example:
 ```python
 import aiogym
 
-env = aiogym.AIOGymEnv(
+env = aiogym.make_env(
     "cascade",
     case="continuous-benchmark",
     reward_spec="economic-v1",

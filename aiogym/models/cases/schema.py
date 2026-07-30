@@ -46,6 +46,7 @@ CASE_ENVIRONMENT_FIELDS = frozenset({
     "previous_action_obs",
     "normalize_observations",
     "tracking_error_obs",
+    "observation_mode",
     "terminate_on_runaway",
     "noise",
     "noise_pct",
@@ -170,6 +171,14 @@ def _validate_case_contents(
             raise ValueError("case episode_steps must be a positive integer")
     if "action_mode" in environment and environment["action_mode"] not in {"actuator", "setpoint"}:
         raise ValueError("case action_mode must be one of: actuator, setpoint")
+    if environment.get("observation_mode", "full_state") not in {
+        "full_state",
+        "measured_output",
+    }:
+        raise ValueError(
+            "case observation_mode must be one of: "
+            "full_state, measured_output"
+        )
     for key in ENVIRONMENT_BOOLEAN_FIELDS:
         if key in environment and not isinstance(environment[key], bool):
             raise TypeError(f"case {key} must be a boolean")

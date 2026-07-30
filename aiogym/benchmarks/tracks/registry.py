@@ -22,12 +22,14 @@ def load_track(
     *,
     validate_policy_contract: bool = True,
 ) -> TrackSpec:
+    official = False
     if isinstance(source, Mapping):
         declaration = dict(source)
     else:
         path = Path(source)
         if isinstance(source, str) and "/" not in source and not path.suffix:
             path = BUILTIN_TRACK_DIR / f"{source}.json"
+            official = True
         if not path.is_file():
             if isinstance(source, str) and "/" not in source:
                 available = ", ".join(list_tracks()) or "none"
@@ -36,9 +38,16 @@ def load_track(
                     f"available tracks: {available}"
                 )
             raise FileNotFoundError(f"benchmark track not found: {source}")
+        try:
+            official = (
+                official
+                or path.resolve().parent == BUILTIN_TRACK_DIR.resolve()
+            )
+        except OSError:
+            pass
         with path.open(encoding="utf-8") as stream:
             declaration = json.load(stream)
-    track = TrackSpec(declaration)
+    track = TrackSpec(declaration, official=official)
     if validate_policy_contract:
         track.validate_policy_contract()
     return track

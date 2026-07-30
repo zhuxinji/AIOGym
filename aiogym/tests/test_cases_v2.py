@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 import aiogym
+from aiogym.tests._env import make_test_env
 from aiogym.models.cases import (
     CASE_PROFILE_SCHEMA_VERSION,
     CaseSpec,
@@ -61,7 +62,7 @@ def test_case_overrides_are_whitelisted_validated_and_hashed():
 
 
 def test_case_environment_path_rejects_retired_task_alias():
-    env = aiogym.AIOGymEnv(
+    env = make_test_env(
         "quadruple",
         case="minimum-phase",
         episode_steps=1,
@@ -70,7 +71,7 @@ def test_case_environment_path_rejects_retired_task_alias():
     env.close()
 
     with pytest.raises(TypeError, match="unexpected keyword argument 'task'"):
-        aiogym.AIOGymEnv(
+        aiogym.make_env(
             "quadruple",
             task="minimum-phase",
         )

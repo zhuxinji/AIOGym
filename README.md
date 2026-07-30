@@ -37,32 +37,29 @@ do not define the benchmark population. Tracks join those independent pieces.
 ```python
 import aiogym
 
-env = aiogym.AIOGymEnv(
-    "quadruple",
-    case="minimum-phase",
-    reward_spec="regulation-v1",
-)
-
+env = aiogym.make_env("quadruple", case="minimum-phase")
 observation, info = env.reset(seed=7)
-observation, reward, terminated, truncated, info = env.step(
-    env.action_space.sample()
-)
+observation, reward, terminated, truncated, info = env.step(env.action_space.sample())
 env.close()
 ```
 
-The equivalent factory is:
+Advanced timing, observation, and realism settings use mutually exclusive
+config mode:
 
 ```python
 env = aiogym.make_env(
-    scenario="cascade",
-    case="continuous-benchmark",
-    reward_spec="economic-v1",
+    config={
+        "scenario": "cascade",
+        "case": "continuous-benchmark",
+        "reward_spec": "economic-v1",
+        "environment": {"episode_steps": 400, "control_dt": 0.5},
+    }
 )
 ```
 
-Only `AIOGymEnv`, `case`, `load_case`, and `load_track` are current names. The
-pre-redesign environment, Task, Objective, Protocol, and Suite APIs are not
-accepted by live execution.
+`make_env()` is the only public environment-construction API. The concrete
+Gymnasium environment class consumes an immutable resolved spec and is an
+implementation detail. Seed only through `env.reset(seed=...)`.
 
 ## Discovery
 
@@ -70,10 +67,12 @@ accepted by live execution.
 aiogym.list_scenarios()
 aiogym.list_cases()
 aiogym.list_cases("quadruple")
-aiogym.list_reward_specs()
 aiogym.list_tracks()
 aiogym.list_controllers()
 ```
+
+Advanced registries are explicit submodule APIs, for example
+`from aiogym.rewards import list_reward_specs`.
 
 CLI equivalents:
 
@@ -89,10 +88,12 @@ aiogym list controllers
 
 ```python
 controller = aiogym.make_controller("pid", scenario="cstr")
-env = aiogym.AIOGymEnv(
-    "cstr",
-    reward_spec="regulation-v1",
-    episode_steps=100,
+env = aiogym.make_env(
+    config={
+        "scenario": "cstr",
+        "reward_spec": "regulation-v1",
+        "environment": {"episode_steps": 100},
+    }
 )
 
 result = aiogym.evaluate_controller(
@@ -109,16 +110,17 @@ env.close()
 ```
 
 `return` is comparable only when `reward_spec_id` matches. Official ranking uses
-the Track Goal metric and safety gate, not raw training return.
+the Track Goal utility, a committed fixed-anchor manifest, the declared
+cross-case aggregation, and the Track-owned safety gate—not raw training
+return. Any gate failure has official score `0`.
 
 ## Benchmarks
 
 Run an official Track:
 
 ```bash
-aiogym benchmark quadruple-regulation-generalist-v1 \
-  --controllers pid \
-  --split validation
+aiogym benchmark \
+  --config configs/benchmark/quadruple-validation-v1.json
 ```
 
 Run one explicit specialist Case:
@@ -135,6 +137,17 @@ Use `--output FILE` to write the JSON result. Official Tracks validate their
 policy contract before evaluation and record Track/Case hashes and seed
 namespaces for provenance.
 
+Anchor updates are an explicit review workflow. Calibration writes a candidate;
+official evaluation never recalculates anchors:
+
+```bash
+aiogym benchmark calibrate-anchors \
+  --track quadruple-regulation-generalist-v1 \
+  --bad-controller hold \
+  --reference-controller pid \
+  --output /tmp/quadruple-anchors-candidate.json
+```
+
 Bundled Tracks:
 
 - `quadruple-regulation-generalist-v1`
@@ -147,13 +160,14 @@ Bundled Tracks:
 ## RL training
 
 ```bash
-aiogym train sb3 --track quadruple-regulation-generalist-v1
-aiogym train rlpd --track quadruple-regulation-generalist-v1
+aiogym train --config configs/train/quadruple-sac-v1.json
+aiogym train --config configs/train/quadruple-sac-v1.json --seeds 0,1,2
+aiogym tune --config configs/tune/quadruple-sac-v1.json
 ```
 
-Training resolves the Track before constructing vector environments. The
-checkpoint is evaluated across the declared validation or test Cases with the
-same observation/action contract.
+The config selects SAC, TD3, PPO, RLPD, or BC. Training resolves the Track and
+fixed validation plan before constructing environments; formal test remains
+available only through `aiogym final-test`.
 
 ## Artifacts
 
@@ -187,3 +201,5 @@ python3 -m compileall -q aiogym
 See [Concepts](docs/concepts.md), [Public API](docs/public_api.md),
 [Architecture](docs/architecture.md), and
 [Benchmark semantics ADR](docs/adr/0001-benchmark-semantics-v2.md).
+Breaking migrations are summarized in
+[API compatibility](docs/api_compatibility.md).

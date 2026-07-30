@@ -10,6 +10,7 @@ from aiogym.evaluation import evaluate_controller
 from aiogym.evaluation.provenance import track_provenance
 from aiogym.evaluation.results import build_evaluation_report
 
+from .ranking import rank_track_results
 from .tracks import TrackSpec, load_track
 
 
@@ -22,6 +23,8 @@ def evaluate_policy_on_track(
     include_episodes: bool = True,
     env_factory=None,
     evaluate_fn=None,
+    episode_plan=None,
+    safety_gate_spec=None,
 ) -> dict[str, Any]:
     """Evaluate the same controller instance on all declared split cases."""
 
@@ -30,16 +33,37 @@ def evaluate_policy_on_track(
         if isinstance(track, TrackSpec)
         else load_track(track)
     )
+    if resolved_track.official and safety_gate_spec is not None:
+        raise ValueError(
+            "official Track safety gate cannot be overridden"
+        )
+    resolved_safety_gate = (
+        resolved_track.safety_gate_spec()
+        if safety_gate_spec is None
+        else safety_gate_spec
+    )
     seeds = tuple(int(seed) for seed in base_seeds)
     if not seeds:
         raise ValueError("track evaluation requires at least one base seed")
+    if episode_plan is not None:
+        if split != "validation":
+            raise ValueError(
+                "fixed ValidationEpisodePlan may be used only on validation"
+            )
+        if episode_plan.track.id != resolved_track.id:
+            raise ValueError("episode plan track does not match evaluation track")
+        if episode_plan.track.track_hash != resolved_track.track_hash:
+            raise ValueError("episode plan track hash does not match")
+        if tuple(episode_plan.base_seeds) != seeds:
+            raise ValueError("episode plan seeds do not match base_seeds")
     if env_factory is None:
-        from aiogym.env import AIOGymEnv
+        from aiogym._environment.builder import (
+            build_track_case_environment,
+        )
 
-        env_factory = lambda case: AIOGymEnv(
-            resolved_track.scenario,
-            case=case.profile,
-            reward_spec=resolved_track.reward_spec_id,
+        env_factory = lambda case: build_track_case_environment(
+            resolved_track,
+            case,
         )
     evaluator = evaluate_fn or evaluate_controller
     results = []
@@ -58,11 +82,27 @@ def evaluate_policy_on_track(
                 goal_specification=resolved_track.goal,
                 seed_namespace=resolved_track.seed_namespace(split),
                 include_episodes=include_episodes,
+                episode_specs=(
+                    episode_plan.episode_specs(case.case_id)
+                    if episode_plan is not None
+                    else None
+                ),
+                safety_gate_spec=resolved_safety_gate,
             )
         finally:
             close = getattr(env, "close", None)
             if callable(close):
                 close()
+        if bool(
+            dict(result.get("controller") or {}).get(
+                "environment_context_access",
+                False,
+            )
+        ):
+            raise ValueError(
+                "official Track policies cannot access the environment "
+                "through ControllerContext"
+            )
         result.update(
             {
                 "track_id": resolved_track.id,
@@ -89,6 +129,14 @@ def evaluate_policy_on_track(
         )
         results.append(result)
     aggregate = aggregate_track_results(results, resolved_track)
+    for result, utility, score in zip(
+        results,
+        aggregate["case_utilities"],
+        aggregate["case_scores"],
+    ):
+        result["ranking_utility"] = utility
+        result["official_score"] = score
+        result["ranking_spec_id"] = resolved_track.ranking_spec_id
     report = build_evaluation_report(results)
     return {
         "track_id": resolved_track.id,
@@ -96,6 +144,9 @@ def evaluate_policy_on_track(
         "split": split,
         "seed_namespace": resolved_track.seed_namespace(split),
         "base_seeds": list(seeds),
+        "episode_plan_hash": (
+            episode_plan.plan_hash if episode_plan is not None else None
+        ),
         "case_count": len(results),
         "results": results,
         "aggregate": aggregate,
@@ -134,20 +185,19 @@ def aggregate_track_results(
         metric = "profit_rate"
         direction = "maximize"
     values = []
-    eligible = True
     for result in results:
         horizon = float(result.get("case_horizon_seconds", 0.0))
         if horizon <= 0.0:
             raise ValueError("track case horizon must be positive")
         values.append(float(result[source_metric]) / horizon)
-        eligible = eligible and bool(result.get("ranking_eligible", True))
+    ranking = rank_track_results(results, track)
     return {
         "metric": metric,
         "metric_direction": direction,
         "metric_value": float(np.mean(values)),
         "case_values": values,
         "case_count": len(values),
-        "ranking_eligible": eligible,
+        **ranking,
     }
 
 

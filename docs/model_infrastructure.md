@@ -21,9 +21,9 @@ not part of a generalist Track policy contract.
 `apply_case_overrides()` accepts only Case-owned sections, validates the result,
 and never mutates the source profile.
 
-`AIOGymEnv` resolves settings in this order:
+The environment created by `make_env()` resolves settings in this order:
 
-1. explicit constructor values;
+1. config-mode environment values;
 2. selected Case environment values;
 3. Scenario defaults.
 

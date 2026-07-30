@@ -12,7 +12,7 @@ Load Cases through:
 
 ```python
 case = aiogym.load_case("quadruple/minimum-phase")
-env = aiogym.AIOGymEnv(
+env = aiogym.make_env(
     "quadruple",
     case=case,
     reward_spec="regulation-v1",

@@ -4,14 +4,14 @@ from __future__ import annotations
 import numpy as np
 
 from aiogym.controllers import make_controller
-from aiogym.env import AIOGymEnv
+from aiogym.tests._env import make_test_env as make_env
 from aiogym.evaluation import evaluate_controller, rollout_controller
 from aiogym import list_scenarios
 from aiogym.models import make_model
 
 
 def _make_env(**kwargs):
-    return AIOGymEnv(
+    return make_env(
         "crystallization",
         action_mode="actuator",
         auto_events=False,

@@ -5,6 +5,8 @@ import numpy as np
 import pytest
 
 import aiogym
+from aiogym.models import make_model
+from aiogym.tests._env import make_test_env
 
 
 CASE_NAMES = {
@@ -29,7 +31,7 @@ def test_open_cascade_cases_are_discoverable():
 
 def test_commissioning_case_starts_cold_with_declared_schedule():
     case = aiogym.load_case("cascade/commissioning")
-    env = aiogym.AIOGymEnv(
+    env = make_test_env(
         "cascade",
         case=case,
         reward_spec="regulation-v1",
@@ -46,7 +48,7 @@ def test_commissioning_case_starts_cold_with_declared_schedule():
 
 def test_temperature_step_case_targets_are_physically_bounded():
     case = aiogym.load_case("cascade/temperature-step")
-    model = aiogym.make_model("cascade")
+    model = make_model("cascade")
     low = np.asarray([bounds[0] for bounds in model.output_bounds.values()])
     high = np.asarray([bounds[1] for bounds in model.output_bounds.values()])
     targets = [
@@ -58,7 +60,7 @@ def test_temperature_step_case_targets_are_physically_bounded():
 
 
 def test_disturbance_case_applies_feed_pump_loss():
-    env = aiogym.AIOGymEnv(
+    env = make_test_env(
         "cascade",
         case="disturbance-rejection",
         reward_spec="regulation-v1",
@@ -73,7 +75,7 @@ def test_disturbance_case_applies_feed_pump_loss():
 
 
 def test_safety_recovery_case_starts_inside_hard_limits():
-    env = aiogym.AIOGymEnv(
+    env = make_test_env(
         "cascade",
         case="safety-recovery",
         reward_spec="regulation-v1",
@@ -91,7 +93,7 @@ def test_safety_recovery_case_starts_inside_hard_limits():
 @pytest.mark.parametrize("controller", ["pid", "mpc"])
 def test_controllers_complete_short_commissioning_case(controller):
     agent = aiogym.make_controller(controller, scenario="cascade")
-    env = aiogym.AIOGymEnv(
+    env = make_test_env(
         "cascade",
         case="commissioning",
         reward_spec="regulation-v1",
@@ -106,7 +108,7 @@ def test_controllers_complete_short_commissioning_case(controller):
 
 
 def test_continuous_case_can_use_economic_goal():
-    env = aiogym.AIOGymEnv(
+    env = make_test_env(
         "cascade",
         case="continuous-benchmark",
         reward_spec="economic-v1",

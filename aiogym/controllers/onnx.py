@@ -25,6 +25,7 @@ class ONNXPolicyController:
         output_name: str | None = None,
         expected_action_dim: int | None = None,
         scenario: str | None = None,
+        normalized_actions: bool = False,
     ):
         if action_mode not in {"actuator", "setpoint"}:
             raise ValueError("action_mode must be one of: actuator, setpoint")
@@ -34,6 +35,7 @@ class ONNXPolicyController:
         self.action_mode = action_mode
         self.control_structure = control_structure
         self.scenario = scenario
+        self.normalized_actions = bool(normalized_actions)
         self.input_name, self.input_shape = _resolve_node(
             session.get_inputs(), input_name, "input"
         )
@@ -86,6 +88,8 @@ class ONNXPolicyController:
             )
         if not np.all(np.isfinite(action)):
             raise ValueError("ONNX policy produced a non-finite action")
+        if self.normalized_actions:
+            action = np.clip(0.5 * (action + 1.0), 0.0, 1.0)
         return action
 
     def metadata(self):
@@ -100,6 +104,7 @@ class ONNXPolicyController:
             "input_shape": list(self.input_shape),
             "output_shape": list(self.output_shape),
             "action_mode": self.action_mode,
+            "normalized_actions": self.normalized_actions,
             "control_structure": self.control_structure,
         }
 

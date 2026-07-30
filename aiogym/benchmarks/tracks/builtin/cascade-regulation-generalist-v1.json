@@ -17,6 +17,7 @@
     "case_id_obs": false
   },
   "training": {
+    "distribution_id": "cascade-regulation-training-l2-v1",
     "cases": [
       {
         "case": "commissioning",
@@ -79,6 +80,7 @@
     "primary_utility": "negative_regulation_cost_rate",
     "safety_gate": "zero-hard-failure-v1",
     "case_score": "fixed-anchor-v1",
-    "track_aggregation": "weighted-geometric-mean-v1"
+    "track_aggregation": "weighted-geometric-mean-v1",
+    "anchor_id": "cascade-regulation-anchors-v1"
   }
 }

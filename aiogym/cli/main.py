@@ -19,16 +19,34 @@ def _benchmark(argv):
     return main(argv, prog="aiogym benchmark")
 
 
-def _train_sb3(argv):
-    from aiogym.rl.train_sb3 import main
+def _train(argv):
+    from aiogym.cli.train import main
 
-    return main(argv, prog="aiogym train sb3")
+    return main(argv, prog="aiogym train")
 
 
-def _train_rlpd(argv):
-    from aiogym.rl.train_rlpd import main
+def _evaluate(argv):
+    from aiogym.cli.evaluate import main
 
-    return main(argv, prog="aiogym train rlpd")
+    return main(argv, prog="aiogym evaluate")
+
+
+def _tune(argv):
+    from aiogym.cli.tune import main
+
+    return main(argv, prog="aiogym tune")
+
+
+def _collect(argv):
+    from aiogym.datasets.collect import main
+
+    return main(argv, prog="aiogym collect")
+
+
+def _final_test(argv):
+    from aiogym.cli.final_test import main
+
+    return main(argv, prog="aiogym final-test")
 
 
 def _artifact_report(argv):
@@ -70,6 +88,12 @@ def _list_controllers(_args):
     _print_items(list_controllers())
 
 
+def _list_algorithms(_args):
+    from aiogym.rl import list_algorithms
+
+    _print_items(list_algorithms())
+
+
 def _add_delegate(subparsers, name, help_text, handler):
     parser = subparsers.add_parser(
         name,
@@ -107,14 +131,45 @@ def build_parser():
     controllers = list_commands.add_parser("controllers", help="registered controllers")
     controllers.set_defaults(handler=_list_controllers, selected_parser=controllers)
 
+    algorithms = list_commands.add_parser(
+        "algorithms",
+        help="stable training algorithms",
+    )
+    algorithms.set_defaults(handler=_list_algorithms, selected_parser=algorithms)
+
     benchmark = commands.add_parser("benchmark", help="run benchmarks")
     benchmark.set_defaults(selected_parser=benchmark)
+    _add_delegate(
+        commands,
+        "collect",
+        "Dataset v2 collector",
+        _collect,
+    )
+    _add_delegate(
+        commands,
+        "final-test",
+        "locked one-shot final test",
+        _final_test,
+    )
+    _add_delegate(
+        commands,
+        "evaluate",
+        "validation-only checkpoint evaluation",
+        _evaluate,
+    )
+    _add_delegate(
+        commands,
+        "tune",
+        "validation-only hyperparameter tuning",
+        _tune,
+    )
 
-    train = commands.add_parser("train", help="train reinforcement-learning agents")
-    train.set_defaults(selected_parser=train)
-    train_commands = train.add_subparsers(dest="train_command", metavar="BACKEND")
-    _add_delegate(train_commands, "sb3", "Stable-Baselines3 trainer", _train_sb3)
-    _add_delegate(train_commands, "rlpd", "RLPD trainer", _train_rlpd)
+    _add_delegate(
+        commands,
+        "train",
+        "config-first reinforcement-learning training",
+        _train,
+    )
 
     artifacts = commands.add_parser("artifacts", help="inspect benchmark artifacts")
     artifacts.set_defaults(selected_parser=artifacts)
@@ -135,8 +190,11 @@ def main(argv=None):
     raw_args = list(sys.argv[1:] if argv is None else argv)
     delegated_commands = {
         ("benchmark",): _benchmark,
-        ("train", "sb3"): _train_sb3,
-        ("train", "rlpd"): _train_rlpd,
+        ("train",): _train,
+        ("evaluate",): _evaluate,
+        ("tune",): _tune,
+        ("collect",): _collect,
+        ("final-test",): _final_test,
         ("artifacts", "report"): _artifact_report,
         ("artifacts", "check"): _artifact_check,
         ("artifacts", "compact"): _artifact_compact,

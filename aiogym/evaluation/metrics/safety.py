@@ -34,6 +34,14 @@ def safety_step_metrics(info, bound_metrics, dt: float):
     runaway = bool(info.get("runaway", False))
     hard_termination = bool(info.get("termination_reason"))
     protection_active = _protection_active(info)
+    shield_active = bool(info.get("shield_intervened", False))
+    shield_magnitude = float(
+        info.get("shield_intervention_magnitude", 0.0)
+    )
+    actuator_active = bool(info.get("actuator_intervened", False))
+    actuator_magnitude = float(
+        info.get("actuator_command_applied_l1", 0.0)
+    )
     worst = max(
         state_severity,
         command_severity,
@@ -48,6 +56,12 @@ def safety_step_metrics(info, bound_metrics, dt: float):
         "command_violation_severity": command_severity,
         "protection_intervention_count": 1.0 if protection_active else 0.0,
         "protection_intervention_duration": dt if protection_active else 0.0,
+        "shield_intervention_count": 1.0 if shield_active else 0.0,
+        "shield_intervention_duration": dt if shield_active else 0.0,
+        "shield_intervention_magnitude": shield_magnitude,
+        "actuator_intervention_count": 1.0 if actuator_active else 0.0,
+        "actuator_intervention_duration": dt if actuator_active else 0.0,
+        "actuator_intervention_magnitude": actuator_magnitude,
         "hard_termination_count": 1.0 if hard_termination else 0.0,
         "runaway_count": 1.0 if runaway else 0.0,
         "runaway_duration": dt if runaway else 0.0,

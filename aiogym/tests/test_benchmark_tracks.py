@@ -3,11 +3,9 @@ from __future__ import annotations
 from copy import deepcopy
 from types import SimpleNamespace
 
-import numpy as np
 import pytest
 
 from aiogym.benchmarks import (
-    CaseMixtureEnv,
     TrackSpec,
     evaluate_policy_on_track,
     load_track,
@@ -65,73 +63,6 @@ def test_track_rejects_observation_contract_mismatch():
         match="disturbance_obs|observation",
     ):
         track.validate_policy_contract()
-
-
-def test_case_sampler_is_seed_reproducible():
-    track = load_track(
-        "quadruple-regulation-generalist-v1"
-    )
-    first = CaseMixtureEnv(track, worker_index=2)
-    second = CaseMixtureEnv(track, worker_index=2)
-    try:
-        first_obs, first_info = first.reset(seed=41)
-        second_obs, second_info = second.reset(seed=41)
-        assert np.array_equal(first_obs, second_obs)
-        assert first_info["case_id"] == second_info["case_id"]
-        assert first_info["seed_bundle"] == second_info["seed_bundle"]
-        component_seeds = {
-            first_info["seed_bundle"][name]
-            for name in (
-                "initial",
-                "reference",
-                "disturbance",
-                "noise",
-                "plant",
-            )
-        }
-        assert len(component_seeds) == 5
-        assert first_obs.shape == first.observation_space.shape
-        assert track.policy_contract["case_id_obs"] is False
-        assert first.action_space == second.action_space
-        assert first.observation_space == second.observation_space
-        _, _, _, _, step_info = first.step(
-            np.zeros(first.action_space.shape, dtype=np.float32)
-        )
-        assert step_info["case_id"] == first_info["case_id"]
-    finally:
-        first.close()
-        second.close()
-
-    other_worker = CaseMixtureEnv(track, worker_index=3)
-    try:
-        _, other_info = other_worker.reset(seed=41)
-        assert (
-            other_info["seed_bundle"]
-            != first_info["seed_bundle"]
-        )
-    finally:
-        other_worker.close()
-
-
-def test_test_seeds_are_not_sampled_during_training():
-    track = load_track(
-        "quadruple-regulation-generalist-v1"
-    )
-    env = CaseMixtureEnv(track, split="training", training=True)
-    try:
-        _, info = env.reset(seed=7)
-        assert (
-            info["seed_bundle"]["namespace"]
-            == track.seed_namespace("training")
-        )
-        assert (
-            info["seed_bundle"]["namespace"]
-            != track.seed_namespace("test")
-        )
-    finally:
-        env.close()
-    with pytest.raises(ValueError, match="cannot read.*test"):
-        CaseMixtureEnv(track, split="test", training=True)
 
 
 def test_one_checkpoint_is_evaluated_on_all_track_cases():
@@ -220,7 +151,6 @@ def test_track_training_artifact_records_split_provenance():
         "policy_scope": track.policy_scope,
         "training_seed_namespace": track.seed_namespace("training"),
         "validation_seed_namespace": track.seed_namespace("validation"),
-        "test_seed_namespace": track.seed_namespace("test"),
     }
     payload = rl_payload(
         kind="test",
@@ -235,10 +165,8 @@ def test_track_training_artifact_records_split_provenance():
     assert RL_ARTIFACT_SCHEMA_VERSION == "aiogym.rl_training_artifact.v3"
     assert payload["track_id"] == track.id
     assert payload["policy_scope"] == "generalist"
-    assert (
-        payload["validation_seed_namespace"]
-        != payload["test_seed_namespace"]
-    )
+    assert "test_seed_namespace" not in payload
+    assert "test_seed_namespace_hash" not in payload
 
 
 def _track_declaration(

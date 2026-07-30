@@ -1,0 +1,98 @@
+{
+  "artifact_hash": "ea35d7c3600b3717f55a87e93041aae62e3e5f417b4468b34b07403d64888096",
+  "bad_controller": {
+    "config_scope": "per-case",
+    "id": "hold"
+  },
+  "cases": {
+    "477c88fdc5d8a0477f7a9e6520350d2e7af7c30dab2e483ed4e7cacab2b0a700": {
+      "bad_controller": {
+        "controller_api_version": "aiogym.controller.v1",
+        "controller_config_hash": "d38f761aaf9a0bbb51b7e8dc6227f6836b5bbc4c51ffb8f7d26af8bfe1a4f4e3",
+        "id": "hold",
+        "source_config": {}
+      },
+      "bad_utility": -0.000589359661733415,
+      "case_id": "disturbance-rejection",
+      "reference_controller": {
+        "controller_api_version": "aiogym.controller.v1",
+        "controller_config_hash": "bb78df1934e04230504a7c9fb9d8eb467cee8667a3b12d881d3183c58a9567a8",
+        "id": "mpc",
+        "source_config": {}
+      },
+      "reference_utility": -1.0747103834563847e-06,
+      "resolved_case_hash": "477c88fdc5d8a0477f7a9e6520350d2e7af7c30dab2e483ed4e7cacab2b0a700"
+    },
+    "4bb229c1f066018dfbad0de2d5e8370000e1b6a4a9e3e517e428d9a60040f69e": {
+      "bad_controller": {
+        "controller_api_version": "aiogym.controller.v1",
+        "controller_config_hash": "d38f761aaf9a0bbb51b7e8dc6227f6836b5bbc4c51ffb8f7d26af8bfe1a4f4e3",
+        "id": "hold",
+        "source_config": {}
+      },
+      "bad_utility": -0.0006670943858537271,
+      "case_id": "temperature-step",
+      "reference_controller": {
+        "controller_api_version": "aiogym.controller.v1",
+        "controller_config_hash": "bb78df1934e04230504a7c9fb9d8eb467cee8667a3b12d881d3183c58a9567a8",
+        "id": "mpc",
+        "source_config": {}
+      },
+      "reference_utility": -0.000462032636743823,
+      "resolved_case_hash": "4bb229c1f066018dfbad0de2d5e8370000e1b6a4a9e3e517e428d9a60040f69e"
+    },
+    "5a5cb0c805fffd81575364e34969a665cff4f36c6616ca727e6cae5e8383e9a3": {
+      "bad_controller": {
+        "controller_api_version": "aiogym.controller.v1",
+        "controller_config_hash": "d38f761aaf9a0bbb51b7e8dc6227f6836b5bbc4c51ffb8f7d26af8bfe1a4f4e3",
+        "id": "hold",
+        "source_config": {}
+      },
+      "bad_utility": -1.503165922362377e-16,
+      "case_id": "disturbance-rejection:nominal",
+      "reference_controller": {
+        "controller_api_version": "aiogym.controller.v1",
+        "controller_config_hash": "bb78df1934e04230504a7c9fb9d8eb467cee8667a3b12d881d3183c58a9567a8",
+        "id": "mpc",
+        "source_config": {}
+      },
+      "reference_utility": -8.306330744631984e-20,
+      "resolved_case_hash": "5a5cb0c805fffd81575364e34969a665cff4f36c6616ca727e6cae5e8383e9a3"
+    },
+    "8503f7dac08103be2a3c0b765e36fadbf7c6c2fc812385db94a673ce1d2d959b": {
+      "bad_controller": {
+        "controller_api_version": "aiogym.controller.v1",
+        "controller_config_hash": "d38f761aaf9a0bbb51b7e8dc6227f6836b5bbc4c51ffb8f7d26af8bfe1a4f4e3",
+        "id": "hold",
+        "source_config": {}
+      },
+      "bad_utility": -4.2198792633300085e-17,
+      "case_id": "commissioning",
+      "reference_controller": {
+        "controller_api_version": "aiogym.controller.v1",
+        "controller_config_hash": "bb78df1934e04230504a7c9fb9d8eb467cee8667a3b12d881d3183c58a9567a8",
+        "id": "mpc",
+        "source_config": {}
+      },
+      "reference_utility": -4.7320678057880513e-20,
+      "resolved_case_hash": "8503f7dac08103be2a3c0b765e36fadbf7c6c2fc812385db94a673ce1d2d959b"
+    }
+  },
+  "evaluation_seeds": [
+    9000,
+    9001,
+    9002,
+    9003,
+    9004
+  ],
+  "goal": "regulation",
+  "id": "cascade-recirculating-regulation-anchors-v1",
+  "ranking_spec_id": "cascade-recirculating-regulation-ranking-v1",
+  "reference_controller": {
+    "config_scope": "per-case",
+    "id": "mpc"
+  },
+  "schema_version": "aiogym.ranking_anchors.v1",
+  "track_hash": "98ed64d34ac29a479990a37ec023a2eff766c870be6ffdf9ac1a287334b8f098",
+  "track_id": "cascade-recirculating-regulation-generalist-v1"
+}

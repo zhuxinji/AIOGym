@@ -1,15 +1,19 @@
 """Public API checks after removing the pre-redesign compatibility surface."""
 from __future__ import annotations
 
+import importlib.util
+
 import pytest
 
 import aiogym
 from aiogym.cli.main import main as cli_main
+from aiogym.models import CASE_PROFILE_SCHEMA_VERSION
 
 
 @pytest.mark.parametrize(
     "retired_name",
     (
+        "AIOGymEnv",
         "AIOGymNativeEnv",
         "BenchmarkProtocol",
         "ObjectiveSpec",
@@ -30,20 +34,47 @@ def test_retired_names_are_not_public(retired_name):
     assert not hasattr(aiogym, retired_name)
 
 
+def test_legacy_transition_dataset_is_only_in_explicit_compat_layer():
+    assert importlib.util.find_spec("aiogym.rl.transitions") is None
+    assert not hasattr(aiogym, "TransitionDataset")
+
+
+def test_rlpd_does_not_define_a_second_replay_buffer():
+    from aiogym.rl import rlpd
+
+    assert not hasattr(rlpd, "ReplayBuffer")
+
+
+def test_backend_modules_are_not_standalone_cli_entrypoints():
+    from aiogym.rl import train_offline, train_rlpd, train_sb3
+
+    for module in (train_offline, train_rlpd, train_sb3):
+        assert not hasattr(module, "main")
+        assert callable(module._run_backend)
+
+
+def test_legacy_randomization_compiler_is_retired():
+    import aiogym.generation as generation
+
+    assert not hasattr(generation, "compile_legacy_distribution")
+
+
 def test_canonical_case_and_track_api():
     case = aiogym.load_case("quadruple/minimum-phase")
     track = aiogym.load_track("quadruple-regulation-generalist-v1")
 
-    assert case["schema_version"] == aiogym.CASE_PROFILE_SCHEMA_VERSION
+    assert case["schema_version"] == CASE_PROFILE_SCHEMA_VERSION
     assert track.id in aiogym.list_tracks()
 
 
 def test_environment_uses_case_and_rejects_task_keyword():
-    env = aiogym.AIOGymEnv(
-        "quadruple",
-        case="minimum-phase",
-        reward_spec="regulation-v1",
-        episode_steps=1,
+    env = aiogym.make_env(
+        config={
+            "scenario": "quadruple",
+            "case": "minimum-phase",
+            "reward_spec": "regulation-v1",
+            "environment": {"episode_steps": 1},
+        }
     )
     try:
         observation, _ = env.reset(seed=7)
@@ -54,7 +85,7 @@ def test_environment_uses_case_and_rejects_task_keyword():
         env.close()
 
     with pytest.raises(TypeError, match="unexpected keyword argument 'task'"):
-        aiogym.AIOGymEnv("quadruple", task="minimum-phase")
+        aiogym.make_env("quadruple", task="minimum-phase")
 
 
 def test_task_v1_input_is_not_migrated():

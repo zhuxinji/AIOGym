@@ -1,4 +1,4 @@
-"""AIOGymEnv - a Gymnasium-first native process-control environment.
+"""Internal Gymnasium-native process-control environment implementation.
 
 Fast, synchronous, seedable, and vectorizable for benchmark evaluation,
 offline-data generation, and online RL training.
@@ -22,27 +22,29 @@ their own deterministic event schedules. The policy observes changed conditions
 """
 from __future__ import annotations
 import copy
+from time import perf_counter
 
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 
-from ._internal.config import resolve_auto_events
-from ._internal.identifiers import canonical_scenario_id
 from .models import apply_model_params, make_model
 from .models.integration import Integrator
-from .rewards import resolve_reward_spec
 
 from ._environment.config import (
-    DIRECT_ENV_DEFAULTS as _DIRECT_ENV_DEFAULTS,
     validated_range as _validated_range,
 )
+from ._environment.spec import ResolvedEnvSpec
 from ._environment.disturbances import DisturbanceRuntimeMixin
 from ._environment.observations import ObservationRuntimeMixin
+from ._environment.realism import (
+    ActuatorModelRuntime,
+    SensorModelRuntime,
+)
 from ._environment.transitions import TransitionRuntimeMixin
 
 # ---- Environment wrapper ----
-class AIOGymEnv(
+class _AIOGymEnv(
     DisturbanceRuntimeMixin,
     ObservationRuntimeMixin,
     TransitionRuntimeMixin,
@@ -50,52 +52,36 @@ class AIOGymEnv(
 ):
     metadata = {"render_modes": []}
 
-    def __init__(self, scenario="cascade", control_dt=None, episode_steps=None,
-                 auto_events=None, randomize=None,
-                 randomize_setpoints=None,
-                 randomize_plant=None, plant_drift=None, integral_obs=None, action_mode=None,
-                 disturbance_obs=None, previous_action_obs=None,
-                 normalize_observations=None, tracking_error_obs=None,
-                 initial_setpoint=None, setpoint_schedule=None,
-                 noise=None, noise_pct=None, custom_stage_reward=None,
-                 model_params=None,
-                 terminate_on_runaway=None,
-                 crystal_ln_sp=None, crystal_cv_sp=None, crystal_random_targets=False,
-                 crystal_ln_range=(10.0, 11.5), crystal_cv_range=(0.75, 0.95),
-                 reward_spec=None, case=None):
+    def __init__(self, spec: ResolvedEnvSpec):
         super().__init__()
-        base_model = make_model(scenario)
-        self.scenario = canonical_scenario_id(base_model.scenario)
-        from .models.cases import resolve_environment_options
-
-        auto_events = resolve_auto_events(auto_events)
-
-        self.case_profile, environment_options = resolve_environment_options(
-            scenario=self.scenario,
-            case=case,
-            explicit={
-                "control_dt": control_dt,
-                "episode_steps": episode_steps,
-                "action_mode": action_mode,
-                "auto_events": auto_events,
-                "randomize": randomize,
-                "randomize_setpoints": randomize_setpoints,
-                "randomize_plant": randomize_plant,
-                "plant_drift": plant_drift,
-                "integral_obs": integral_obs,
-                "disturbance_obs": disturbance_obs,
-                "previous_action_obs": previous_action_obs,
-                "normalize_observations": normalize_observations,
-                "tracking_error_obs": tracking_error_obs,
-                "terminate_on_runaway": terminate_on_runaway,
-                "noise": noise,
-                "noise_pct": noise_pct,
-                "model_params": model_params,
-            },
-            defaults=_DIRECT_ENV_DEFAULTS,
-            default_control_dt=0.5,
-            default_episode_steps=600,
-        )
+        if not isinstance(spec, ResolvedEnvSpec):
+            raise TypeError("_AIOGymEnv requires a ResolvedEnvSpec")
+        self.env_spec = spec
+        runtime = spec.runtime()
+        self.case_profile = runtime["case_profile"]
+        observation = runtime["observation"]
+        realism = runtime["realism"]
+        events = runtime["events"]
+        environment_options = {
+            **observation,
+            **realism,
+            "control_dt": spec.control_dt,
+            "episode_steps": spec.episode_steps,
+            "action_mode": spec.action_mode,
+            "model_params": runtime["model_params"],
+        }
+        initial_setpoint = events["initial_setpoint"]
+        setpoint_schedule = events["setpoint_schedule"]
+        profile_timing = spec.profile_timing
+        info_level = spec.info_level
+        reward_spec = spec.reward_spec
+        crystal_ln_sp = realism["crystal_ln_sp"]
+        crystal_cv_sp = realism["crystal_cv_sp"]
+        crystal_random_targets = realism["crystal_random_targets"]
+        crystal_ln_range = realism["crystal_ln_range"]
+        crystal_cv_range = realism["crystal_cv_range"]
+        base_model = make_model(spec.scenario)
+        self.scenario = spec.scenario
         self.model = apply_model_params(base_model, environment_options["model_params"])
         if self.case_profile is not None:
             from .models.cases import configure_model_for_case
@@ -159,30 +145,32 @@ class AIOGymEnv(
         previous_action_obs = environment_options["previous_action_obs"]
         normalize_observations = environment_options["normalize_observations"]
         tracking_error_obs = environment_options["tracking_error_obs"]
+        observation_mode = environment_options["observation_mode"]
         action_mode = environment_options["action_mode"]
         noise = environment_options["noise"]
         terminate_on_runaway = environment_options["terminate_on_runaway"]
         self.control_dt = environment_options["control_dt"]
         self.episode_steps = environment_options["episode_steps"]
-        self.reward_spec = resolve_reward_spec(reward_spec)
+        self.reward_spec = reward_spec
         if action_mode not in {"actuator", "setpoint"}:
             raise ValueError("action_mode must be one of: actuator, setpoint")
         self.noise_pct = environment_options["noise_pct"]
         self.reward_spec_id = self.reward_spec.id
         self.goal = self.reward_spec.goal
+        if info_level not in {"minimal", "full"}:
+            raise ValueError("info_level must be one of: minimal, full")
+        self.info_level = str(info_level)
+        self.profile_timing = bool(profile_timing)
+        self.last_step_timings = {}
         self.auto_events = auto_events
         self.randomize_plant = randomize_plant    # per-episode operating-regime variation
         self.plant_drift = plant_drift            # slow within-episode parameter drift
         self.randomize = randomize
         self.randomize_setpoints = randomize_setpoints
         self.noise = noise                        # measurement noise on observed levels/temps
-        # Measurement noise standard deviation as a fraction of each quantity scale.
-        if custom_stage_reward is not None and not callable(custom_stage_reward):
-            raise TypeError("custom_stage_reward must be callable")
-        self.custom_stage_reward = custom_stage_reward
-        self.reward_spec_is_canonical = bool(
-            self.reward_spec.canonical and custom_stage_reward is None
-        )
+        # Custom stage reward hooks are intentionally outside the stable env API.
+        self.custom_stage_reward = None
+        self.reward_spec_is_canonical = bool(self.reward_spec.canonical)
         self.terminate_on_runaway = terminate_on_runaway
         self.crystal_ln_sp = crystal_ln_sp
         self.crystal_cv_sp = crystal_cv_sp
@@ -201,6 +189,7 @@ class AIOGymEnv(
         self._p_nominal = {k: (list(v) if isinstance(v, list) else v) for k, v in self.model.p.items()}
         self._regime = copy.deepcopy(getattr(self.model, "plant_regime", {}))
         self._econ = copy.deepcopy(getattr(self.model, "economic_config", {}))
+        self._econ_nominal = copy.deepcopy(self._econ)
         self._disturbance_defaults = self.model.runtime_env(self.model.disturbance_defaults())
         self._disturbance_attrs = self.model.disturbance_attribute_map()
         self._disturbance_by_event = {
@@ -252,7 +241,12 @@ class AIOGymEnv(
             if not isinstance(value, bool):
                 raise TypeError(f"{name} must be a boolean")
             setattr(self, name, value)
-        obs_dim = len(self.model.initial_state()) + len(self._ysp0)
+        self.observation_mode = str(observation_mode)
+        obs_dim = (
+            len(self.model.initial_state())
+            if self.observation_mode == "full_state"
+            else len(self._ysp0)
+        ) + len(self._ysp0)
         if self.disturbance_obs:
             obs_dim += len(self.model.dynamics_disturbance_names())
         if self.previous_action_obs:
@@ -278,13 +272,49 @@ class AIOGymEnv(
         self.observation_space = spaces.Box(-np.inf, np.inf, (obs_dim,), dtype=np.float32)
         self._k = 0
         self.last_act = self.model.action_vector(self.model.default_action())
+        self.last_commanded_act = copy.deepcopy(self.last_act)
         self.previous_act = copy.deepcopy(self.last_act)
+        self._episode_spec = None
+        self._episode_noise_enabled = self.noise
+        self._episode_noise_pct = self.noise_pct
+        self._episode_plant_drift_enabled = self.plant_drift
+        self._episode_disturbance_events = copy.deepcopy(
+            self._case_disturbance_events
+        )
+        self._sensor_runtime = None
+        self._actuator_runtime = None
+        self._active_sensor_model = {"kind": "identity"}
+        self._active_actuator_model = {"kind": "identity"}
 
     # ---- helpers ----
     # ---- gym API ----
     def reset(self, *, seed=None, options=None):
+        reset_options = dict(options or {})
+        episode_spec = reset_options.get("episode_spec")
+        if episode_spec is not None:
+            return self._reset_from_episode_spec(
+                episode_spec,
+                seed=seed,
+            )
         super().reset(seed=seed)
-        seed_bundle = dict((options or {}).get("seed_bundle") or {})
+        self._episode_spec = None
+        self._episode_noise_enabled = self.noise
+        self._episode_noise_pct = self.noise_pct
+        self._active_sensor_model = (
+            {
+                "kind": "additive_gaussian",
+                "noise_pct": self.noise_pct,
+            }
+            if self.noise
+            else {"kind": "identity"}
+        )
+        self._active_actuator_model = {"kind": "identity"}
+        self._episode_plant_drift_enabled = self.plant_drift
+        self._episode_disturbance_events = copy.deepcopy(
+            self._case_disturbance_events
+        )
+        self._econ = copy.deepcopy(self._econ_nominal)
+        seed_bundle = dict(reset_options.get("seed_bundle") or {})
         if seed_bundle:
             required_seed_components = (
                 "initial",
@@ -384,14 +414,16 @@ class AIOGymEnv(
         self._iy = [0.0] * len(self.y_sp)
         self._k = 0
         self.last_act = self.model.action_vector(self.model.default_action())
+        self.last_commanded_act = copy.deepcopy(self.last_act)
         self.previous_act = copy.deepcopy(self.last_act)
+        self._reset_realism(x0)
         self._schedule_disturbances()
         # A case event at t=0 is part of the initial controller context. Applying
         # it before the first observation avoids an artificial one-sample delay
         # in paper-style reference-step experiments.
         if 0 in self._episode_setpoint_events:
             self.y_sp = list(self._episode_setpoint_events[0])
-        for event in self._case_disturbance_events.get(0, []):
+        for event in self._episode_disturbance_events.get(0, []):
             self._set_disturbance_value(event["name"], event["value"])
         info = (
             {"seed_bundle": copy.deepcopy(seed_bundle)}
@@ -400,21 +432,167 @@ class AIOGymEnv(
         )
         return self._obs(), info
 
+    def _reset_from_episode_spec(self, episode_spec, *, seed=None):
+        from .generation import EpisodeSpec, validate_episode_for_env
+
+        resolved = (
+            episode_spec
+            if isinstance(episode_spec, EpisodeSpec)
+            else EpisodeSpec(episode_spec)
+        )
+        validate_episode_for_env(resolved, self)
+        if seed is not None and int(seed) != resolved.base_seed:
+            raise ValueError(
+                "reset seed must match EpisodeSpec base_seed when an "
+                "EpisodeSpec is injected"
+            )
+        super().reset(
+            seed=resolved.base_seed if seed is None else int(seed)
+        )
+        seeds = resolved.component_seeds
+        self._initial_rng = np.random.default_rng(seeds["initial_state"])
+        self._reference_rng = np.random.default_rng(seeds["reference"])
+        self._disturbance_rng = np.random.default_rng(seeds["disturbance"])
+        self._noise_rng = np.random.default_rng(seeds["sensor"])
+        self._plant_rng = np.random.default_rng(seeds["plant"])
+
+        self._episode_spec = resolved
+        self._restore_nominal()
+        self._init_regime_state()
+        for name, value in resolved.plant_parameters.items():
+            self.model.p[name] = copy.deepcopy(value)
+        self._episode_plant_drift_enabled = False
+
+        sensor_model = resolved.sensor_model
+        self._episode_noise_enabled = (
+            sensor_model.get("kind") == "additive_gaussian"
+        )
+        self._episode_noise_pct = float(
+            sensor_model.get("noise_pct", 0.0)
+        )
+        self._active_sensor_model = sensor_model
+        self._active_actuator_model = resolved.actuator_model
+        self._econ = (
+            resolved.economic_context
+            if resolved.economic_context
+            else copy.deepcopy(self._econ_nominal)
+        )
+
+        self._episode_setpoint_events = {
+            int(event["at_step"]): list(event["values"])
+            for event in resolved.reference_schedule
+        }
+        self.y_sp = list(self._episode_setpoint_events[0])
+        self._episode_disturbance_events = {}
+        for event in resolved.disturbance_schedule:
+            self._episode_disturbance_events.setdefault(
+                int(event["at_step"]),
+                [],
+            ).append(
+                {
+                    "name": str(event["name"]),
+                    "value": copy.deepcopy(event["value"]),
+                }
+            )
+
+        self._reset_disturbance_values()
+        for event in self._episode_disturbance_events.get(0, []):
+            self._set_disturbance_value(event["name"], event["value"])
+        self._sync_known_disturbances()
+        self.integ.reset(resolved.initial_state)
+        if self.pid is not None:
+            self.pid.reset()
+        self._iy = [0.0] * len(self.y_sp)
+        self._k = 0
+        self.last_act = self.model.action_vector(
+            self.model.default_action()
+        )
+        self.last_commanded_act = copy.deepcopy(self.last_act)
+        self.previous_act = copy.deepcopy(self.last_act)
+        self._reset_realism(resolved.initial_state)
+        self._dist_events = []
+        return self._obs(), {
+            **self._episode_provenance(),
+            "episode_spec": resolved.as_dict(),
+        }
+
+    def _episode_provenance(self):
+        if self._episode_spec is None:
+            return {}
+        return {
+            "episode_spec_id": self._episode_spec.episode_spec_id,
+            "episode_spec_hash": self._episode_spec.resolved_hash,
+            "distribution_id": self._episode_spec.distribution_id,
+            "distribution_hash": self._episode_spec.distribution_hash,
+            "episode_base_seed": self._episode_spec.base_seed,
+            "episode_component_seeds": (
+                self._episode_spec.component_seeds
+            ),
+        }
+
+    def _reset_realism(self, initial_state):
+        self._sensor_runtime = SensorModelRuntime(
+            self._active_sensor_model,
+            state_schema=self.model.state_schema(),
+            control_dt=self.control_dt,
+            rng=self._noise_rng,
+        )
+        self._sensor_runtime.reset(initial_state)
+        self._actuator_runtime = ActuatorModelRuntime(
+            self._active_actuator_model,
+            dimension=self.nu,
+            control_dt=self.control_dt,
+            low=np.zeros(self.nu, dtype=np.float64),
+            high=np.ones(self.nu, dtype=np.float64),
+        )
+        self.last_act = self.model.action_vector(
+            self._actuator_runtime.reset(self.last_act)
+        )
+
     def step(self, action):
+        step_started = perf_counter() if self.profile_timing else None
         action = self._validated_action(action)
-        act = self._supervise(action) if self.pid is not None else self._split(action)
+        commanded_act = (
+            self._supervise(action)
+            if self.pid is not None
+            else self._split(action)
+        )
+        act, actuator_audit = self._actuator_runtime.apply(commanded_act)
+        act = self.model.action_vector(act)
         state = list(self.integ.x)
+        self.last_commanded_act = self.model.action_vector(commanded_act)
         self.last_act = act
         for (t, event) in self._dist_events:
             if t == self._k:
                 self._apply_disturbance(event)
-        for event in self._case_disturbance_events.get(self._k, []):
+        for event in self._episode_disturbance_events.get(self._k, []):
             self._set_disturbance_value(event["name"], event["value"])
         self._apply_plant_drift()
+        integration_started = perf_counter() if self.profile_timing else None
         self.integ.step(self.control_dt, act, self._env())
+        if self.profile_timing:
+            integration_seconds = perf_counter() - integration_started
         self._accumulate_integral()
         self._k += 1
+        reward_started = perf_counter() if self.profile_timing else None
         reward, terminated, info = self._reward_done(state, act)
+        info.update(actuator_audit)
+        info["action_commanded_physical"] = [
+            float(value)
+            for value in self.model.physical_action_vector(commanded_act)
+        ]
+        info["action_applied_physical"] = [
+            float(value)
+            for value in self.model.physical_action_vector(act)
+        ]
+        if self.profile_timing:
+            reward_seconds = perf_counter() - reward_started
+        info_started = perf_counter() if self.profile_timing else None
+        info.update(self._episode_provenance())
+        if self.info_level == "minimal":
+            info = self._minimal_step_info(info)
+        if self.profile_timing:
+            info_seconds = perf_counter() - info_started
         self.previous_act = copy.deepcopy(act)
         # Stage the next step's scheduled reference before returning its
         # observation. The controller therefore sees an event at step k before
@@ -423,7 +601,46 @@ class AIOGymEnv(
         if self._k in self._episode_setpoint_events:
             self.y_sp = list(self._episode_setpoint_events[self._k])
         truncated = self._k >= self.episode_steps
-        return self._obs(), reward, terminated, truncated, info
+        observation_started = perf_counter() if self.profile_timing else None
+        observation = self._obs()
+        if self.profile_timing:
+            observation_seconds = perf_counter() - observation_started
+            self.last_step_timings = {
+                "ode_integration_seconds": integration_seconds,
+                "reward_metric_seconds": reward_seconds,
+                "info_construction_seconds": info_seconds,
+                "observation_seconds": observation_seconds,
+                "total_seconds": perf_counter() - step_started,
+            }
+        return observation, reward, terminated, truncated, info
+
+    @staticmethod
+    def _minimal_step_info(info):
+        """Keep trainer inputs and provenance without diagnostic payloads."""
+
+        keep = {
+            "reward_terms",
+            "costs",
+            "termination_reason",
+            "goal",
+            "reward_spec_id",
+            "episode_spec_id",
+            "episode_spec_hash",
+            "distribution_id",
+            "distribution_hash",
+            "episode_base_seed",
+            "action_commanded_physical",
+            "action_applied_physical",
+            "actuator_model_kind",
+            "actuator_intervened",
+            "actuator_command_applied_delta",
+            "actuator_command_applied_l1",
+        }
+        return {
+            name: copy.deepcopy(value)
+            for name, value in info.items()
+            if name in keep
+        }
 
     def render(self):
         pass

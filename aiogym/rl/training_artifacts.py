@@ -68,6 +68,11 @@ def learning_curve_point(step: int, result: Mapping[str, Any], phase: str = "eva
         "tracking_iae",
         "constraint_violation_count",
         "constraint_violation_severity",
+        "shield_intervention_count",
+        "shield_intervention_duration",
+        "shield_intervention_magnitude",
+        "actuator_intervention_count",
+        "actuator_intervention_magnitude",
         "safety_margin_min",
     ):
         if key in result:
@@ -109,10 +114,8 @@ def rl_payload(kind: str, scenario: str, goal: str, action_mode: str,
         "policy_scope",
         "training_seed_namespace",
         "validation_seed_namespace",
-        "test_seed_namespace",
         "training_seed_namespace_hash",
         "validation_seed_namespace_hash",
-        "test_seed_namespace_hash",
     ):
         if training.get(name) is not None:
             payload[name] = training[name]
@@ -144,6 +147,7 @@ def rl_payload(kind: str, scenario: str, goal: str, action_mode: str,
                 for result in results
             ),
             eligibility_reasons=eligibility_reasons,
+            include_test_split=False,
         )
         payload["provenance"] = provenance
         for name in (
@@ -158,10 +162,8 @@ def rl_payload(kind: str, scenario: str, goal: str, action_mode: str,
             "training_seed",
             "training_seed_namespace",
             "validation_seed_namespace",
-            "test_seed_namespace",
             "training_seed_namespace_hash",
             "validation_seed_namespace_hash",
-            "test_seed_namespace_hash",
             "controller_access_level",
             "model_access_level",
             "code_commit",

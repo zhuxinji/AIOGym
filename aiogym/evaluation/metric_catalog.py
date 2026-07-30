@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 
-EVALUATION_SCHEMA_VERSION = "aiogym.evaluation.v6"
-PUBLIC_BENCHMARK_SCHEMA_VERSION = "aiogym.public_benchmark.v5"
+EVALUATION_SCHEMA_VERSION = "aiogym.evaluation.v7"
+PUBLIC_BENCHMARK_SCHEMA_VERSION = "aiogym.public_benchmark.v6"
 
 ROLLOUT_SCHEMA = {
     "step": "integer control-step index",
@@ -70,6 +70,12 @@ METRIC_DEFINITIONS = {
     "command_violation_severity": "sum of controller command bound excess",
     "protection_intervention_count": "number of steps with active protection intervention",
     "protection_intervention_duration": "seconds with active protection intervention",
+    "shield_intervention_count": "number of steps where the safety shield changed the policy proposal",
+    "shield_intervention_duration": "seconds where the safety shield changed the policy proposal",
+    "shield_intervention_magnitude": "cumulative L1 distance between policy proposal and shielded command",
+    "actuator_intervention_count": "number of steps where actuator dynamics changed the commanded action",
+    "actuator_intervention_duration": "seconds where actuator dynamics changed the commanded action",
+    "actuator_intervention_magnitude": "cumulative L1 distance between commanded and applied actuator action",
     "hard_termination_count": "number of hard process terminations",
     "initial_safety_debt_count": "recovery-case state violations inherited at reset",
     "initial_safety_debt_duration": "seconds spent clearing inherited recovery debt",
@@ -126,6 +132,12 @@ SCORECARD_GROUPS = {
         "command_violation_severity",
         "protection_intervention_count",
         "protection_intervention_duration",
+        "shield_intervention_count",
+        "shield_intervention_duration",
+        "shield_intervention_magnitude",
+        "actuator_intervention_count",
+        "actuator_intervention_duration",
+        "actuator_intervention_magnitude",
         "hard_termination_count",
         "initial_safety_debt_count",
         "initial_safety_debt_duration",
@@ -198,6 +210,12 @@ METRIC_DIRECTIONS = {
     "command_violation_severity": "minimize",
     "protection_intervention_count": "minimize",
     "protection_intervention_duration": "minimize",
+    "shield_intervention_count": "minimize",
+    "shield_intervention_duration": "minimize",
+    "shield_intervention_magnitude": "minimize",
+    "actuator_intervention_count": "minimize",
+    "actuator_intervention_duration": "minimize",
+    "actuator_intervention_magnitude": "minimize",
     "hard_termination_count": "minimize",
     "initial_safety_debt_count": "minimize",
     "initial_safety_debt_duration": "minimize",

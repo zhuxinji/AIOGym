@@ -1,0 +1,91 @@
+"""Validation-only checkpoint evaluation."""
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+from aiogym.benchmarks import evaluate_policy_on_track, load_track
+from aiogym.controllers import make_controller
+
+
+def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog=prog,
+        description="Evaluate a frozen checkpoint on validation only.",
+    )
+    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--track", required=True)
+    parser.add_argument(
+        "--split",
+        choices=("validation",),
+        default="validation",
+    )
+    parser.add_argument(
+        "--algorithm",
+        choices=("ppo", "sac", "td3"),
+        required=True,
+    )
+    parser.add_argument("--seeds", default="5000")
+    parser.add_argument("--output", default=None)
+    return parser
+
+
+def main(argv=None, prog: str | None = None) -> int:
+    args = build_parser(prog).parse_args(argv)
+    checkpoint = Path(args.checkpoint)
+    if not checkpoint.is_file():
+        raise FileNotFoundError(checkpoint)
+    track = load_track(args.track)
+    controller = make_controller(
+        "sb3",
+        scenario=track.scenario,
+        config={
+            "path": str(checkpoint),
+            "algo": args.algorithm,
+            "action_mode": track.policy_contract["action_mode"],
+            "normalized_actions": True,
+        },
+    )
+    seeds = tuple(
+        int(part.strip())
+        for part in args.seeds.split(",")
+        if part.strip()
+    )
+    if not seeds or min(seeds) < 0 or len(set(seeds)) != len(seeds):
+        raise ValueError("--seeds must contain unique non-negative integers")
+    result = evaluate_policy_on_track(
+        controller,
+        track,
+        split="validation",
+        base_seeds=seeds,
+        include_episodes=True,
+    )
+    if args.output:
+        target = Path(args.output)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps(result, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    print(
+        json.dumps(
+            {
+                "track_id": result["track_id"],
+                "track_hash": result["track_hash"],
+                "split": result["split"],
+                "seed_namespace": result["seed_namespace"],
+                "base_seeds": result["base_seeds"],
+                "case_count": result["case_count"],
+                "aggregate": result["aggregate"],
+                "output": args.output,
+                "next_command": "aiogym final-test --config FILE",
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+__all__ = ["build_parser", "main"]

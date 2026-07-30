@@ -4,29 +4,33 @@ from __future__ import annotations
 import itertools
 
 from aiogym.controllers import make_controller
-from aiogym.env import AIOGymEnv
+from aiogym.env_factory import make_env
 from aiogym.evaluation import evaluate_controller
 
 
-def make_env(episode_steps: int = 400):
-    return AIOGymEnv(
-        "cstr",
-        reward_spec="regulation-v1",
-        control_dt=0.5,
-        episode_steps=episode_steps,
-        auto_events=True,
-        randomize=True,
-        randomize_setpoints=False,
-        action_mode="actuator",
-        randomize_plant=True,
-        plant_drift=True,
-        integral_obs=False,
-        terminate_on_runaway=False,
+def make_tuning_env(episode_steps: int = 400):
+    return make_env(
+        config={
+            "scenario": "cstr",
+            "reward_spec": "regulation-v1",
+            "environment": {
+                "control_dt": 0.5,
+                "episode_steps": episode_steps,
+                "auto_events": True,
+                "randomize": True,
+                "randomize_setpoints": False,
+                "action_mode": "actuator",
+                "randomize_plant": True,
+                "plant_drift": True,
+                "integral_obs": False,
+                "terminate_on_runaway": False,
+            },
+        }
     )
 
 
 def eval_agent(agent, episodes: int = 1):
-    return evaluate_controller(agent, make_env(), episodes=episodes)
+    return evaluate_controller(agent, make_tuning_env(), episodes=episodes)
 
 
 def main():

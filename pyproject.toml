@@ -31,12 +31,16 @@ onnx = [
   "onnx>=1.16",
   "onnxruntime>=1.17",
 ]
+hpo = [
+  "optuna>=4.0",
+]
 all = [
   "casadi>=3.6",
   "stable-baselines3>=2.3",
   "torch>=2.2",
   "onnx>=1.16",
   "onnxruntime>=1.17",
+  "optuna>=4.0",
 ]
 dev = [
   "build>=1.2",
@@ -72,19 +76,26 @@ packages = [
   "aiogym._environment",
   "aiogym._internal",
   "aiogym.cli",
+  "aiogym.compat",
   "aiogym.benchmarks",
+  "aiogym.benchmarks.anchors",
   "aiogym.benchmarks.tracks",
   "aiogym.controllers",
   "aiogym.controllers.tuning",
+  "aiogym.datasets",
   "aiogym.evaluation",
   "aiogym.evaluation.artifact",
   "aiogym.evaluation.execution",
   "aiogym.evaluation.metrics",
+  "aiogym.experimental",
+  "aiogym.generation",
   "aiogym.models",
   "aiogym.models.scenarios",
   "aiogym.models.cases",
   "aiogym.rewards",
   "aiogym.rl",
+  "aiogym.rl.adapters",
+  "aiogym.tools",
 ]
 
 [tool.setuptools.package-data]
@@ -95,4 +106,5 @@ aiogym = [
   "models/parameters/*.json",
   "models/cases/builtin/*/*.json",
   "benchmarks/tracks/builtin/*.json",
+  "benchmarks/anchors/builtin/*.json",
 ]

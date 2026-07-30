@@ -14,9 +14,15 @@
     "previous_action_obs": true,
     "normalize_observations": true,
     "tracking_error_obs": true,
+    "observation_mode": "full_state",
+    "temporal_observation": "single_step",
+    "history_length": 1,
+    "include_action_history": false,
+    "recurrent_state_shape": [],
     "case_id_obs": false
   },
   "training": {
+    "distribution_id": "quadruple-regulation-training-l2-v1",
     "cases": [
       {"case": "minimum-phase", "weight": 1.0},
       {"case": "nonminimum-phase", "weight": 1.0}
@@ -59,6 +65,7 @@
     "primary_utility": "negative_regulation_cost_rate",
     "safety_gate": "zero-hard-failure-v1",
     "case_score": "fixed-anchor-v1",
-    "track_aggregation": "weighted-geometric-mean-v1"
+    "track_aggregation": "weighted-geometric-mean-v1",
+    "anchor_id": "quadruple-regulation-anchors-v1"
   }
 }

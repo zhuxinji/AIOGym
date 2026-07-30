@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import json
+from dataclasses import FrozenInstanceError
 
-import gymnasium as gym
 import pytest
 
 import aiogym
@@ -13,75 +13,119 @@ from aiogym.evaluation.artifact import (
     finalize_benchmark_artifacts,
 )
 from aiogym.evaluation.results import compact_result_row
+from aiogym.rewards import get_reward_spec
 
 
 def test_public_vocabulary_is_case_goal_reward_track():
     expected = {
-        "AIOGymEnv",
-        "GoalSpec",
-        "RewardSpec",
-        "TrackSpec",
+        "make_env",
+        "list_scenarios",
         "load_case",
         "list_cases",
         "load_track",
         "list_tracks",
+        "list_controllers",
+        "make_controller",
+        "evaluate_controller",
+        "__version__",
     }
-    assert expected <= set(dir(aiogym))
-    retired = {
-        "AIOGymNativeEnv",
-        "BenchmarkProtocol",
-        "ObjectiveSpec",
-        "load_task_profile",
-        "list_tasks",
-        "load_suite",
-        "list_suites",
-        "load_evaluation_artifact",
+    assert set(aiogym.__all__) == expected
+    assert len(aiogym.__all__) <= 12
+    advanced = {
+        "TrackSpec",
+        "DistributionSpec",
+        "DatasetReader",
+        "RLTrainingConfig",
+        "ObservationContract",
+        "ProjectionSafetyShield",
+        "LagrangianSAC",
+        "builtin_gym_ids",
     }
-    assert retired.isdisjoint(dir(aiogym))
+    assert advanced.isdisjoint(dir(aiogym))
+    assert all(not hasattr(aiogym, name) for name in advanced)
 
 
 @pytest.mark.parametrize("reward_spec", ["regulation-v1", "economic-v1"])
 def test_environment_and_evaluator_follow_canonical_contract(reward_spec):
-    env = aiogym.AIOGymEnv(
-        "cstr",
-        case="default" if "cstr/default" in aiogym.list_cases() else None,
-        reward_spec=reward_spec,
-        episode_steps=2,
-        auto_events=False,
+    env = aiogym.make_env(
+        config={
+            "scenario": "cstr",
+            "case": (
+                "default"
+                if "cstr/default" in aiogym.list_cases()
+                else None
+            ),
+            "reward_spec": reward_spec,
+            "environment": {
+                "episode_steps": 2,
+                "auto_events": False,
+            },
+        }
     )
     try:
         controller = aiogym.make_controller("pid", scenario="cstr")
         result = aiogym.evaluate_controller(controller, env, seed=4)
     finally:
         env.close()
-    assert result["goal"] == aiogym.get_reward_spec(reward_spec).goal
+    assert result["goal"] == get_reward_spec(reward_spec).goal
     assert result["reward_spec_id"] == reward_spec
     assert "scorecard" in result
     assert "objective" not in result
     assert "protocol" not in result
 
 
-def test_gymnasium_registration_uses_canonical_environment():
-    env = gym.make(
-        "AIOGym/CSTR-v0",
-        reward_spec="regulation-v1",
-        episode_steps=1,
-        auto_events=False,
+def test_import_has_no_gymnasium_registration_side_effect():
+    from gymnasium.envs.registration import registry
+
+    assert not any(name.startswith("AIOGym/") for name in registry)
+
+
+def test_environment_factory_has_one_resolved_seedless_contract():
+    from aiogym._environment.spec import ResolvedEnvSpec
+    from aiogym.env import _AIOGymEnv
+
+    env = aiogym.make_env(
+        config={
+            "scenario": "cstr",
+            "reward_spec": "regulation-v1",
+            "environment": {"episode_steps": 1},
+        }
     )
     try:
-        assert isinstance(env.unwrapped, aiogym.AIOGymEnv)
-        observation, _ = env.reset(seed=1)
-        assert observation.shape == env.observation_space.shape
+        assert isinstance(env.env_spec, ResolvedEnvSpec)
+        assert len(env.env_spec.spec_hash) == 64
+        with pytest.raises(FrozenInstanceError):
+            env.env_spec.scenario = "quadruple"
+        with pytest.raises(TypeError):
+            env.env_spec.observation["integral_obs"] = True
     finally:
         env.close()
 
+    with pytest.raises(TypeError, match="seed"):
+        aiogym.make_env("cstr", seed=4)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        aiogym.make_env("cstr", config={"scenario": "cstr"})
+    with pytest.raises(TypeError, match="ResolvedEnvSpec"):
+        _AIOGymEnv("cstr")
+
+
+def test_track_has_no_environment_factory_method():
+    assert not hasattr(
+        aiogym.load_track("quadruple-regulation-generalist-v1"),
+        "make_env",
+    )
+
 
 def test_compact_result_row_has_no_retired_fields():
-    env = aiogym.AIOGymEnv(
-        "cstr",
-        reward_spec="regulation-v1",
-        episode_steps=1,
-        auto_events=False,
+    env = aiogym.make_env(
+        config={
+            "scenario": "cstr",
+            "reward_spec": "regulation-v1",
+            "environment": {
+                "episode_steps": 1,
+                "auto_events": False,
+            },
+        }
     )
     try:
         result = aiogym.evaluate_controller(

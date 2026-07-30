@@ -29,8 +29,9 @@ Explicit scenario/Case runs are specialist diagnostics.
 
 ## API decisions
 
-- The environment class is `AIOGymEnv`.
-- The environment constructor accepts `case` and `reward_spec`.
+- `make_env()` is the only public environment-construction API.
+- The concrete Gymnasium environment class is private.
+- `make_env()` accepts `case` and `reward_spec`.
 - Cases are discovered through `list_cases()` and `load_case()`.
 - Tracks are discovered through `list_tracks()` and `load_track()`.
 - Evaluation accepts an optional `goal_specification`.

@@ -45,12 +45,14 @@ def evaluate_controller(agent, env, episodes: int = 1, seed: int = 0,
                         seed_list: Sequence[int] | None = None,
                         *, goal_specification: GoalSpec | str | None = None,
                         safety_mode: str | None = None,
+                        safety_gate_spec: SafetyGateSpec | None = None,
                         initial_safety_debt: bool | None = None,
                         seed_namespace: str | None = None,
                         worker_index: int = 0,
+                        episode_specs: Sequence | None = None,
                         _rollout_capture: dict | None = None,
                         rollout_steps: int | None = None):
-    """Evaluate any supported controller/policy on an AIOGymEnv.
+    """Evaluate any supported controller/policy on an environment from ``make_env``.
 
     Returns aggregate metrics plus the goal/controller metadata needed to
     reproduce the benchmark.
@@ -64,6 +66,16 @@ def evaluate_controller(agent, env, episodes: int = 1, seed: int = 0,
         seeds = [int(value) for value in seed_list]
         if not seeds:
             raise ValueError("seed_list must contain at least one seed")
+    resolved_episode_specs = (
+        None if episode_specs is None else tuple(episode_specs)
+    )
+    if (
+        resolved_episode_specs is not None
+        and len(resolved_episode_specs) != len(seeds)
+    ):
+        raise ValueError(
+            "episode_specs length must match the evaluation seed count"
+        )
     controller = as_controller(agent, action_mode=getattr(env, "action_mode", "actuator"))
     if goal_specification is not None:
         resolved_goal = resolve_goal(
@@ -79,9 +91,27 @@ def evaluate_controller(agent, env, episodes: int = 1, seed: int = 0,
     if str(getattr(env, "goal", resolved_goal.name)) != resolved_goal.name:
         raise ValueError("goal specification does not match environment RewardSpec")
     evaluation_meta = dict(case_profile.get("evaluation", {}))
+    if safety_gate_spec is not None and not isinstance(
+        safety_gate_spec,
+        SafetyGateSpec,
+    ):
+        raise TypeError("safety_gate_spec must be a SafetyGateSpec")
+    declared_safety_mode = (
+        safety_gate_spec.mode
+        if safety_gate_spec is not None
+        else safety_mode
+    )
+    if (
+        safety_gate_spec is not None
+        and safety_mode is not None
+        and safety_gate_spec.mode != safety_mode
+    ):
+        raise ValueError(
+            "safety_mode conflicts with safety_gate_spec.mode"
+        )
     resolved_safety_mode = str(
-        safety_mode
-        if safety_mode is not None
+        declared_safety_mode
+        if declared_safety_mode is not None
         else evaluation_meta.get(
             "safety_mode",
             "recovery"
@@ -97,21 +127,57 @@ def evaluate_controller(agent, env, episodes: int = 1, seed: int = 0,
             resolved_safety_mode == "recovery",
         )
     )
-    safety_gate_spec = SafetyGateSpec(mode=resolved_safety_mode)
+    resolved_safety_gate_spec = (
+        safety_gate_spec
+        if safety_gate_spec is not None
+        else SafetyGateSpec(mode=resolved_safety_mode)
+    )
     per_episode = []
     episode_schedules = []
     episode_seed_bundles = []
     eval_start = perf_counter()
     for ep, ep_seed in enumerate(seeds):
         episode_start = perf_counter()
-        if seed_namespace is not None:
-            from ...benchmarks import derive_seed_bundle
+        if resolved_episode_specs is not None:
+            episode_spec = resolved_episode_specs[ep]
+            if int(episode_spec.base_seed) != int(ep_seed):
+                raise ValueError(
+                    "evaluation EpisodeSpec base seed does not match seed_list"
+                )
+            obs, reset_info = env.reset(
+                seed=ep_seed,
+                options={"episode_spec": episode_spec},
+            )
+            episode_seed_bundles.append(
+                {
+                    "base_seed": int(ep_seed),
+                    "namespace": seed_namespace,
+                    **dict(episode_spec.component_seeds),
+                    "episode_spec_id": episode_spec.episode_spec_id,
+                    "episode_spec_hash": episode_spec.resolved_hash,
+                }
+            )
+        elif seed_namespace is not None:
+            from ...generation import SeedTree
 
-            seed_bundle = derive_seed_bundle(
+            seed_tree = SeedTree(
                 ep_seed,
                 seed_namespace,
                 worker_index=worker_index,
             )
+            component_seeds = seed_tree.component_seeds
+            seed_bundle = {
+                "base_seed": int(ep_seed),
+                "namespace": seed_namespace,
+                "namespace_hash": seed_tree.namespace_hash,
+                "worker_index": int(worker_index),
+                "episode_index": 0,
+                "initial": component_seeds["initial_state"],
+                "reference": component_seeds["reference"],
+                "disturbance": component_seeds["disturbance"],
+                "noise": component_seeds["sensor"],
+                "plant": component_seeds["plant"],
+            }
             obs, reset_info = env.reset(
                 seed=seed_bundle["initial"],
                 options={"seed_bundle": seed_bundle},
@@ -375,7 +441,7 @@ def evaluate_controller(agent, env, episodes: int = 1, seed: int = 0,
         result["tracking_raw_by_output_std"],
     ) = _aggregate_raw_tracking_metrics(per_episode)
     result["scorecard"] = group_scorecard(result)
-    result = apply_safety_gate(result, safety_gate_spec)
+    result = apply_safety_gate(result, resolved_safety_gate_spec)
     result["execution_status"] = (
         "degraded" if result["controller_status"] == "degraded" else "passed"
     )

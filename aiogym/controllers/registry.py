@@ -74,6 +74,13 @@ def _pid_factory(model=None, scenario=None, config=None, policy=None):
     return agent
 
 
+def _hold_factory(model=None, scenario=None, config=None, policy=None):
+    del scenario, config, policy
+    from .hold import HoldController
+
+    return HoldController(model)
+
+
 def _mpc_factory(model=None, scenario=None, config=None, policy=None):
     from .mpc import MPCAgent
 
@@ -136,6 +143,7 @@ def _onnx_factory(model=None, scenario=None, config=None, policy=None):
     if not path:
         raise ValueError("onnx controller requires a policy path")
     action_mode = params.pop("action_mode", cfg.get("action_mode", "setpoint"))
+    normalized_actions = bool(params.pop("normalized_actions", False))
     params.setdefault("name", cfg.get("name", "ONNX-policy"))
     params.setdefault("control_structure", cfg.get("control_structure", "onnx_policy"))
     expected_action_dim = (
@@ -148,10 +156,12 @@ def _onnx_factory(model=None, scenario=None, config=None, policy=None):
         action_mode=action_mode,
         expected_action_dim=expected_action_dim,
         scenario=scenario or model.scenario,
+        normalized_actions=normalized_actions,
         **params,
     )
 
 
+register_controller("hold", _hold_factory)
 register_controller("pid", _pid_factory)
 register_controller("mpc", _mpc_factory)
 register_controller("oracle", _oracle_factory)

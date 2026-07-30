@@ -1,0 +1,44 @@
+{
+  "schema_version": "aiogym.rl_training_config.v2",
+  "track_id": "quadruple-regulation-generalist-v1",
+  "algorithm_id": "sac",
+  "training_seed": 0,
+  "total_transitions": 10000,
+  "n_envs": 4,
+  "device": "cpu",
+  "algorithm": {
+    "batch_size": 256,
+    "learning_rate": 0.0003,
+    "rollout_vector_steps": 1,
+    "utd_ratio": 1.0,
+    "vector_backend": "subproc"
+  },
+  "replay": {
+    "capacity": 300000,
+    "learning_starts": 1000
+  },
+  "evaluation": {
+    "every_transitions": 5000
+  },
+  "checkpointing": {
+    "every_transitions": 5000
+  },
+  "output": {
+    "directory": "runs",
+    "name": "quadruple-sac-v1",
+    "save_rollout": true
+  },
+  "validation_seeds": [
+    5000,
+    5001,
+    5002,
+    5003,
+    5004
+  ],
+  "resume_mode": "restart_episode",
+  "resume_checkpoint": null,
+  "dataset_id": null,
+  "dataset_path": null,
+  "dataset_hash": null,
+  "curriculum_id": null
+}

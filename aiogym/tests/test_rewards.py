@@ -4,12 +4,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from aiogym.env import AIOGymEnv
+from aiogym import make_env as public_make_env
+from aiogym.tests._env import make_test_env as make_env
 from aiogym.rewards import RewardScaleWrapper, get_reward_spec, list_reward_specs
 
 
-def _env(spec: str) -> AIOGymEnv:
-    return AIOGymEnv(
+def _env(spec: str):
+    return make_env(
         "cstr",
         reward_spec=spec,
         episode_steps=4,
@@ -90,28 +91,12 @@ def test_reward_scale_wrapper_changes_only_returned_scalar():
     assert wrapped_transition[4]["unscaled_reward"] == base_transition[1]
 
 
-def test_custom_stage_reward_marks_transition_noncanonical():
-    env = AIOGymEnv(
-        "cstr",
-        reward_spec="regulation-v1",
-        custom_stage_reward=lambda *_: 3.5,
-        auto_events=False,
-        randomize=False,
-        randomize_setpoints=False,
-    )
-    try:
-        env.reset(seed=0)
-        state = list(env.integ.x)
-        result = env.evaluate_transition(
-            state,
-            np.array([0.5, 0.5], dtype=np.float32),
-            state,
+def test_custom_stage_reward_is_not_in_the_stable_environment_api():
+    with pytest.raises(TypeError, match="custom_stage_reward"):
+        public_make_env(
+            "cstr",
+            custom_stage_reward=lambda *_: 3.5,
         )
-    finally:
-        env.close()
-    assert result.scalar_reward == 3.5
-    assert result.reward_terms == {"custom_stage_reward": 3.5}
-    assert result.info["reward_spec_is_canonical"] is False
 
 
 @pytest.mark.parametrize(
@@ -125,4 +110,4 @@ def test_custom_stage_reward_marks_transition_noncanonical():
 )
 def test_retired_reward_options_are_rejected(kwargs):
     with pytest.raises(TypeError):
-        AIOGymEnv("cstr", **kwargs)
+        public_make_env("cstr", **kwargs)

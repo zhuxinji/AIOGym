@@ -154,6 +154,15 @@ def resolve_environment_options(
             if value is not None
             else profile_defaults.get(name, defaults[name])
         )
+    observation_mode = provided.get("observation_mode")
+    resolved["observation_mode"] = (
+        observation_mode
+        if observation_mode is not None
+        else profile_defaults.get(
+            "observation_mode",
+            defaults["observation_mode"],
+        )
+    )
 
     control_dt = provided.get("control_dt")
     if control_dt is None:
@@ -185,6 +194,13 @@ def resolve_environment_options(
 
     if resolved["action_mode"] not in {"actuator", "setpoint"}:
         raise ValueError("action_mode must be one of: actuator, setpoint")
+    if resolved["observation_mode"] not in {
+        "full_state",
+        "measured_output",
+    }:
+        raise ValueError(
+            "observation_mode must be one of: full_state, measured_output"
+        )
     for name in ENVIRONMENT_BOOLEAN_FIELDS:
         if not isinstance(resolved[name], bool):
             raise TypeError(f"{name} must be a boolean")

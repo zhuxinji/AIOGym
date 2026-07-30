@@ -12,7 +12,7 @@ import math
 import numpy as np
 import pytest
 
-from aiogym.env import AIOGymEnv
+from aiogym.tests._env import make_test_env as make_env
 from aiogym.models import RHO_CP, apply_model_params, load_parameter_profile, make_model
 
 
@@ -327,7 +327,7 @@ def test_actual_energy_rate_respects_heater_interlocks(model, nominal_env):
 
 
 def test_overflow_is_an_unconditional_structured_termination():
-    env = AIOGymEnv(
+    env = make_env(
         "cascade",
         control_dt=0.5,
         auto_events=False,
@@ -345,7 +345,7 @@ def test_overflow_is_an_unconditional_structured_termination():
 
 
 def test_negative_level_is_an_unconditional_structured_termination():
-    env = AIOGymEnv(
+    env = make_env(
         "cascade",
         control_dt=0.5,
         auto_events=False,
@@ -362,7 +362,7 @@ def test_negative_level_is_an_unconditional_structured_termination():
 
 
 def test_temperature_hard_limit_is_an_unconditional_structured_termination():
-    env = AIOGymEnv(
+    env = make_env(
         "cascade",
         control_dt=0.5,
         auto_events=False,

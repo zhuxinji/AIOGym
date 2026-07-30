@@ -75,6 +75,8 @@ def controller_access_level(controller: Any) -> str:
     explicit = getattr(controller, "access_level", None)
     if explicit:
         return str(explicit)
+    if bool(getattr(controller, "allow_environment_context", False)):
+        return "environment-context"
     name = str(
         getattr(controller, "name", None)
         or getattr(controller, "__name__", None)
@@ -109,12 +111,17 @@ def track_provenance(
     custom_overrides: Mapping[str, Any] | None = None,
     eligible: bool = True,
     eligibility_reasons: list[str] | tuple[str, ...] | None = None,
+    include_test_split: bool = True,
 ) -> dict[str, Any]:
     """Build the complete required provenance for a track or track case."""
 
+    splits = (
+        ("training", "validation", "test")
+        if include_test_split
+        else ("training", "validation")
+    )
     namespaces = {
-        split: track.seed_namespace(split)
-        for split in ("training", "validation", "test")
+        split: track.seed_namespace(split) for split in splits
     }
     access_level = (
         controller_access_level(controller)
@@ -122,7 +129,7 @@ def track_provenance(
         else None
     )
     reasons = [str(reason) for reason in (eligibility_reasons or ())]
-    return {
+    provenance = {
         "schema_version": ARTIFACT_PROVENANCE_SCHEMA_VERSION,
         "track_id": track.id,
         "track_hash": track.track_hash,
@@ -139,14 +146,12 @@ def track_provenance(
         ),
         "training_seed_namespace": namespaces["training"],
         "validation_seed_namespace": namespaces["validation"],
-        "test_seed_namespace": namespaces["test"],
         "training_seed_namespace_hash": seed_namespace_hash(
             namespaces["training"]
         ),
         "validation_seed_namespace_hash": seed_namespace_hash(
             namespaces["validation"]
         ),
-        "test_seed_namespace_hash": seed_namespace_hash(namespaces["test"]),
         "controller_access_level": access_level,
         "model_access_level": access_level,
         "code_commit": code_commit(),
@@ -159,6 +164,16 @@ def track_provenance(
         "eligibility_status": "eligible" if eligible else "ineligible",
         "eligibility_reasons": reasons,
     }
+    if include_test_split:
+        provenance.update(
+            {
+                "test_seed_namespace": namespaces["test"],
+                "test_seed_namespace_hash": seed_namespace_hash(
+                    namespaces["test"]
+                ),
+            }
+        )
+    return provenance
 
 
 __all__ = [

@@ -6,7 +6,7 @@ from typing import Any
 
 from aiogym._internal.config import resolve_auto_events
 from aiogym.benchmarks import DEFAULT_BENCHMARK_TRACK_ID, load_track
-from aiogym.env import AIOGymEnv
+from aiogym.env_factory import make_env
 from aiogym.rewards import get_reward_spec
 
 
@@ -71,7 +71,7 @@ def configure_training_track(args, *, official_default: bool = True):
             args,
             {
                 split: track.seed_namespace(split)
-                for split in ("training", "validation", "test")
+                for split in ("training", "validation")
             },
         )
         return args
@@ -93,7 +93,6 @@ def configure_training_track(args, *, official_default: bool = True):
         {
             "training": "custom-training-v1",
             "validation": "custom-validation-v1",
-            "test": "custom-test-v1",
         },
     )
     return args
@@ -115,21 +114,24 @@ def training_env_kwargs(
     action_mode: str | None = None,
     episode_steps_attr: str = "train_episode_steps",
 ) -> dict[str, Any]:
-    data: dict[str, Any] = {
-        "case": getattr(args, "case", None),
-        "reward_spec": args.resolved_reward_spec_id,
+    environment: dict[str, Any] = {
         "action_mode": action_mode or args.action_mode,
     }
     if getattr(args, "control_dt", None) is not None:
-        data["control_dt"] = args.control_dt
+        environment["control_dt"] = args.control_dt
     episode_steps = getattr(args, episode_steps_attr, None)
     if episode_steps is not None:
-        data["episode_steps"] = episode_steps
+        environment["episode_steps"] = episode_steps
     for name in _CASE_ENVIRONMENT_OPTIONS:
         value = getattr(args, name, None)
         if value is not None:
-            data[name] = value
-    return data
+            environment[name] = value
+    return {
+        "scenario": args.scenario,
+        "case": getattr(args, "case", None),
+        "reward_spec": args.resolved_reward_spec_id,
+        "environment": environment,
+    }
 
 
 def configure_training_case(
@@ -140,9 +142,8 @@ def configure_training_case(
 ):
     """Resolve Case-owned defaults through the canonical environment."""
 
-    env = AIOGymEnv(
-        args.scenario,
-        **training_env_kwargs(
+    env = make_env(
+        config=training_env_kwargs(
             args,
             episode_steps_attr=episode_steps_attr,
         ),

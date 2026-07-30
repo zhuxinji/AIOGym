@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 import aiogym
+from aiogym.tests._env import make_test_env
 from aiogym.controllers import build_context
 from aiogym.models import Integrator, apply_model_params, make_model
 
@@ -75,7 +76,7 @@ def test_rk4_solution_is_step_converged():
 
 
 def test_minimum_phase_case_applies_schedule():
-    env = aiogym.AIOGymEnv(
+    env = make_test_env(
         "quadruple",
         case="minimum-phase",
         reward_spec="regulation-v1",
@@ -94,7 +95,7 @@ def test_minimum_phase_case_applies_schedule():
 
 
 def test_randomized_case_schedule_is_seeded():
-    env = aiogym.AIOGymEnv(
+    env = make_test_env(
         "quadruple",
         case="nonminimum-phase",
         reward_spec="regulation-v1",
@@ -114,7 +115,7 @@ def test_randomized_case_schedule_is_seeded():
 
 
 def test_nonminimum_case_uses_shifted_plant_and_cross_pid():
-    env = aiogym.AIOGymEnv(
+    env = make_test_env(
         "quadruple",
         case="nonminimum-phase",
         reward_spec="regulation-v1",
@@ -144,7 +145,7 @@ def test_nonminimum_case_uses_shifted_plant_and_cross_pid():
 
 
 def test_zero_boundary_case_places_transmission_zero_at_origin():
-    env = aiogym.AIOGymEnv(
+    env = make_test_env(
         "quadruple",
         case="zero-boundary-stress",
         reward_spec="regulation-v1",
@@ -158,7 +159,7 @@ def test_zero_boundary_case_places_transmission_zero_at_origin():
 
 def test_disturbance_case_is_reproducible():
     def rollout(seed):
-        env = aiogym.AIOGymEnv(
+        env = make_test_env(
             "quadruple",
             case="disturbance-rejection",
             reward_spec="regulation-v1",

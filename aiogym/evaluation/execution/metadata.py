@@ -16,9 +16,21 @@ def _env_metadata(env):
         "control_dt", "episode_steps",
         "auto_events", "randomize", "randomize_setpoints", "randomize_plant",
         "plant_drift", "integral_obs", "terminate_on_runaway",
-        "noise", "noise_pct",
+        "noise", "noise_pct", "observation_mode",
+        "_active_sensor_model", "_active_actuator_model",
     )
-    return {key: getattr(env, key) for key in keys if hasattr(env, key)}
+    metadata = {
+        key.lstrip("_"): getattr(env, key)
+        for key in keys
+        if hasattr(env, key)
+    }
+    observation_contract = getattr(env, "observation_contract", None)
+    if observation_contract is not None:
+        metadata["observation_contract"] = observation_contract.as_dict()
+    shield = getattr(env, "shield", None)
+    if shield is not None:
+        metadata["safety_shield"] = shield.metadata()
+    return _jsonable(metadata)
 
 def _controller_diagnostics(controller):
     targets = [controller, getattr(controller, "agent", None), getattr(controller, "policy", None)]

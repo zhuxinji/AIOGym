@@ -9,6 +9,7 @@ def test_top_level_import_keeps_optional_feature_groups_lazy():
     code = """
 import sys
 import aiogym
+from gymnasium.envs.registration import registry
 
 unexpected = {
     "aiogym.controllers",
@@ -21,7 +22,8 @@ unexpected = {
     "torch",
 }.intersection(sys.modules)
 assert not unexpected, sorted(unexpected)
-assert aiogym.builtin_gym_ids()
+assert len(aiogym.__all__) <= 12
+assert not any(name.startswith("AIOGym/") for name in registry)
 """
     subprocess.run([sys.executable, "-c", code], check=True)
 
@@ -70,15 +72,107 @@ def test_model_metadata_has_a_single_current_module():
     assert metadata.MODEL_METADATA_SCHEMA_VERSION == "aiogym.model_metadata.v1"
 
 
+def test_generation_public_api_exposes_episode_contracts():
+    import aiogym.generation as public
+    from aiogym.generation import adapters, samplers, seed_tree, specs
+
+    assert public.DistributionSpec is specs.DistributionSpec
+    assert public.EpisodeSpec is specs.EpisodeSpec
+    assert public.SeedTree is seed_tree.SeedTree
+    assert (
+        public.distribution_spec_from_case
+        is adapters.distribution_spec_from_case
+    )
+    assert (
+        public.FixedCaseEpisodeSampler
+        is samplers.FixedCaseEpisodeSampler
+    )
+
+
+def test_dataset_public_api_exposes_persistent_v2_backend():
+    import aiogym.datasets as public
+    from aiogym.datasets import reader, schema, writer
+
+    assert public.DatasetEpisode is schema.DatasetEpisode
+    assert public.DatasetReader is reader.DatasetReader
+    assert public.DatasetWriter is writer.DatasetWriter
+    assert public.DATASET_SCHEMA_VERSION == "aiogym.dataset.v2"
+
+
+def test_rl_public_api_is_limited_to_config_runner_checkpoint_discovery():
+    import aiogym.rl as public
+    from aiogym.rl import checkpoints, config, runner
+
+    assert public.RLTrainingConfig is config.RLTrainingConfig
+    assert public.RunResult is runner.RunResult
+    assert public.run_experiment is runner.run_experiment
+    assert public.CheckpointManager is checkpoints.CheckpointManager
+    assert public.list_algorithms is config.list_algorithms
+    assert public.list_algorithms() == ("bc", "ppo", "rlpd", "sac", "td3")
+    assert {
+        "EpisodeCoordinator",
+        "NormalizedActionWrapper",
+        "UTDController",
+        "DatasetReplay",
+        "CompleteValidationCallback",
+        "FinalTestLock",
+    }.isdisjoint(dir(public))
+
+
+def test_rl_hybrid_contracts_require_explicit_modules():
+    import aiogym.rl as public
+    from aiogym.rl import behavior_cloning, dataset_replay, hybrid_replay
+
+    assert not hasattr(public, "DatasetReplay")
+    assert dataset_replay.DatasetReplay
+    assert behavior_cloning.BehaviorCloningTrainer
+    assert hybrid_replay.RLPDBatchSampler
+
+
+def test_validation_contracts_require_explicit_modules():
+    import aiogym.evaluation as evaluation
+    import aiogym.rl as public
+    from aiogym.evaluation import statistics
+    from aiogym.rl import final_test, validation
+
+    assert not hasattr(public, "CompleteValidationCallback")
+    assert validation.CompleteValidationCallback
+    assert final_test.FinalTestLock
+    assert (
+        evaluation.build_final_statistical_report
+        is statistics.build_final_statistical_report
+    )
+
+
+def test_research_rl_api_is_explicitly_experimental():
+    import aiogym.evaluation as evaluation
+    import aiogym.experimental.rl as experimental
+    import aiogym.rl as public
+    from aiogym.evaluation import statistics
+    from aiogym.rl import constrained, observations, safety
+
+    assert not hasattr(public, "ObservationContract")
+    assert experimental.ObservationContract is observations.ObservationContract
+    assert (
+        experimental.ProjectionSafetyShield
+        is safety.ProjectionSafetyShield
+    )
+    assert experimental.LagrangianSAC is constrained.LagrangianSAC
+    assert (
+        evaluation.build_intervention_report
+        is statistics.build_intervention_report
+    )
+
+
 def test_environment_class_composes_focused_runtime_mixins():
     from aiogym._environment.disturbances import DisturbanceRuntimeMixin
     from aiogym._environment.observations import ObservationRuntimeMixin
     from aiogym._environment.transitions import TransitionRuntimeMixin
-    from aiogym.env import AIOGymEnv
+    from aiogym.env import _AIOGymEnv
 
-    assert AIOGymEnv._env is DisturbanceRuntimeMixin._env
-    assert AIOGymEnv._obs is ObservationRuntimeMixin._obs
-    assert AIOGymEnv.evaluate_transition is TransitionRuntimeMixin.evaluate_transition
+    assert _AIOGymEnv._env is DisturbanceRuntimeMixin._env
+    assert _AIOGymEnv._obs is ObservationRuntimeMixin._obs
+    assert _AIOGymEnv.evaluate_transition is TransitionRuntimeMixin.evaluate_transition
 
 
 def test_unified_benchmark_cli_uses_track_modules():
@@ -129,5 +223,14 @@ def test_removed_evaluation_modules_are_absent():
         "aiogym.evaluation.protocols",
         "aiogym.evaluation.objective_specs",
         "aiogym.evaluation.suite",
+    ):
+        assert importlib.util.find_spec(module) is None
+
+
+def test_superseded_environment_and_rl_modules_are_absent():
+    for module in (
+        "aiogym.benchmarks.sampler",
+        "aiogym.rl.transitions",
+        "aiogym.rl.environment_factory",
     ):
         assert importlib.util.find_spec(module) is None
