@@ -54,18 +54,17 @@ jobs:
         run: python -m pytest -q aiogym/tests
       - name: Run benchmark smoke test
         run: >-
-          aiogym benchmark cstr
-          --goal regulation
-          --reward-spec regulation-v1
+          aiogym benchmark
+          quadruple-regulation-generalist-v1
           --controllers pid,mpc
-          --episodes 1
-          --episode-steps 2
+          --seeds 5000
           --output /tmp/aiogym_benchmark_smoke.json
       - name: Validate benchmark output
         run: >-
           python -c "import json;
           payload = json.load(open('/tmp/aiogym_benchmark_smoke.json'));
-          assert payload['benchmark'] == 'case';
+          assert payload['schema_version'] == 'aiogym.benchmark_result.v1';
+          assert payload['split'] == 'validation';
           assert set(payload['results']) == {'pid', 'mpc'}"
       - name: Check patch whitespace
         run: git diff --check

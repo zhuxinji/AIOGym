@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from aiogym.datasets import DatasetReader
+from aiogym.datasets.reader import DatasetReader
 from aiogym.datasets.writer import manifest_with_hash
 
 

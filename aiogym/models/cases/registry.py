@@ -116,7 +116,7 @@ def case_controller_config(
     profile: Mapping[str, Any] | None,
     controller: str,
 ) -> dict[str, Any]:
-    """Return specialist controller metadata retained during migration."""
+    """Return Case-specific metadata for a specialist controller."""
 
     if profile is None:
         return {}

@@ -48,7 +48,8 @@ class TrainingCheckpoint:
             raise ValueError("checkpoint counters must be non-negative")
         if not isinstance(self.config, RLTrainingConfig):
             raise TypeError("checkpoint config must be RLTrainingConfig")
-        validate_resume_mode(self.resume_mode, self.vector_backend)
+        if self.resume_mode != "restart_episode":
+            raise ValueError("resume_mode must be 'restart_episode'")
         if self.partial_episodes_discarded < 0:
             raise ValueError(
                 "partial_episodes_discarded must be non-negative"
@@ -109,7 +110,7 @@ def capture_rng_state() -> dict[str, Any]:
 
     state: dict[str, Any] = {
         "python": random.getstate(),
-        "numpy_legacy": np.random.get_state(),
+        "numpy_global": np.random.get_state(),
     }
     try:
         import torch
@@ -123,7 +124,7 @@ def capture_rng_state() -> dict[str, Any]:
 
 def restore_rng_state(state: Mapping[str, Any]) -> None:
     random.setstate(state["python"])
-    np.random.set_state(state["numpy_legacy"])
+    np.random.set_state(state["numpy_global"])
     if "torch_cpu" not in state:
         return
     try:
@@ -195,21 +196,6 @@ class CheckpointManager:
         return checkpoint
 
 
-def validate_resume_mode(resume_mode: str, vector_backend: str) -> None:
-    if resume_mode == "restart_episode":
-        return
-    if resume_mode == "exact_single_process":
-        if vector_backend != "stateful_single_process":
-            raise ValueError(
-                "exact_single_process resume requires a backend with "
-                "complete environment state_dict support"
-            )
-        return
-    raise ValueError(
-        "resume_mode must be restart_episode or exact_single_process"
-    )
-
-
 def validate_resume_config(
     previous: RLTrainingConfig,
     current: RLTrainingConfig,
@@ -218,7 +204,12 @@ def validate_resume_config(
 
     old = previous.as_dict()
     new = current.as_dict()
-    for field in ("n_envs", "total_transitions", "device"):
+    for field in (
+        "n_envs",
+        "total_transitions",
+        "device",
+        "resume_checkpoint",
+    ):
         old.pop(field, None)
         new.pop(field, None)
     for payload in (old, new):
@@ -239,5 +230,4 @@ __all__ = [
     "capture_rng_state",
     "restore_rng_state",
     "validate_resume_config",
-    "validate_resume_mode",
 ]

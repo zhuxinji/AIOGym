@@ -6,12 +6,12 @@ import math
 import numpy as np
 
 from aiogym.benchmarks import load_track
-from aiogym.generation import (
+from aiogym.generation import load_distribution
+from aiogym.generation.cascade_recirculating import (
     CascadeRecirculatingTrainingSampler,
-    load_distribution,
     validate_cascade_recirculating_episode,
 )
-from aiogym.models import apply_model_params, make_model
+from aiogym.models.registry import apply_model_params, make_model
 from aiogym.rl.episode_env import make_track_training_base_env
 
 

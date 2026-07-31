@@ -12,9 +12,10 @@ from typing import Any
 
 from aiogym._internal.config import load_config, resolve_auto_events
 from aiogym._internal.identifiers import canonical_scenario_id
-from aiogym.models import make_model
+from aiogym.models.registry import make_model
 from aiogym.models.cases import resolve_environment_options
-from aiogym.rewards import RewardSpec, resolve_reward_spec
+from aiogym.rewards.registry import resolve_reward_spec
+from aiogym.rewards.specs import RewardSpec
 
 from .config import DIRECT_ENV_DEFAULTS
 

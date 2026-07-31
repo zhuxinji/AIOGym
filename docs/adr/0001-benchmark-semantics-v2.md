@@ -38,9 +38,8 @@ Explicit scenario/Case runs are specialist diagnostics.
 - Live result/artifact fields use `case`, `goal`, `reward_spec_id`,
   `scorecard`, `official_score`, and Track provenance.
 
-The former compatibility entry points are removed. Historical artifact parsing
-is confined to `aiogym.evaluation.legacy_artifacts` and is not imported by live
-execution or artifact writing.
+The former compatibility entry points are removed. Historical beta artifacts
+must be regenerated with the current evaluation schema.
 
 ## Invariants
 

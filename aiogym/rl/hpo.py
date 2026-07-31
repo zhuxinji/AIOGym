@@ -7,7 +7,8 @@ from typing import Any
 
 import numpy as np
 
-from aiogym.benchmarks import TrackSpec, load_track
+from aiogym.benchmarks.tracks.registry import load_track
+from aiogym.benchmarks.tracks.schema import TrackSpec
 
 from .config import RLTrainingConfig
 from .validation import ValidationEpisodePlan

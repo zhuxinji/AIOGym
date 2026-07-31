@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import numpy as np
+
 from aiogym.datasets import DatasetCollectionConfig, DatasetReader
 from aiogym.datasets.collect import collect_dataset
 from aiogym.rl.dataset_replay import DatasetReplay
@@ -40,6 +42,17 @@ def test_config_collection_budget_manifest_and_resume(tmp_path):
     assert [
         row["episode_index"] for row in reader.metadata_records()
     ] == list(range(len(reader)))
+    for episode in reader.iter_episodes():
+        metadata = episode.metadata
+        assert np.array_equal(
+            np.asarray(
+                metadata["initial_state"],
+                dtype=episode.array("true_state").dtype,
+            ),
+            episode.array("true_state")[0],
+        )
+        assert "requested_initial_state" in metadata
+        assert "reset_state_delta_linf" in metadata
 
     second = collect_dataset(config, resume=True)
     assert second["episodes"] == first["episodes"]
@@ -71,6 +84,9 @@ def test_reader_checksum_mode_is_cached_and_optional(tmp_path, monkeypatch):
     checked.load_episode(0)
     checked.load_episode(0)
     assert len(calls) == initial_calls
+    assert "requested_initial_state" in (
+        checked.load_episode(0).metadata
+    )
 
 
 def test_replay_precomputes_sampling_tables_and_batches_by_episode(

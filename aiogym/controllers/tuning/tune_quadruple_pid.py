@@ -9,7 +9,7 @@ import random
 from datetime import datetime, timezone
 from pathlib import Path
 
-from aiogym.controllers import load_controller_config
+from aiogym.controllers.configs import load_controller_config
 from aiogym.controllers.tuning.evaluation import evaluate_specialist
 
 

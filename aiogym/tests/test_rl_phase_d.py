@@ -8,7 +8,7 @@ import pytest
 import gymnasium as gym
 
 from aiogym.tests._env import make_test_env as make_env
-from aiogym.rl.algorithm_registry import list_algorithm_adapters
+from aiogym.rl.backends.sb3_algorithms import list_algorithm_adapters
 from aiogym.rl.checkpoints import (
     CheckpointManager,
     TrainingCheckpoint,

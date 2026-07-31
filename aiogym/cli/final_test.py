@@ -9,9 +9,12 @@ import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 
-from aiogym.benchmarks import load_track
-from aiogym.controllers import make_controller
-from aiogym.datasets.writer import file_sha256
+from aiogym.benchmarks.tracks.registry import load_track
+from aiogym.controllers.checkpoints import (
+    SUPPORTED_POLICY_ALGORITHMS,
+    learned_policy_spec_for_track,
+    load_policy_checkpoint,
+)
 from aiogym.rl.final_test import FinalTestLock
 
 
@@ -48,24 +51,14 @@ def main(argv=None, prog: str | None = None) -> int:
     for name, checkpoint in sorted(
         declaration["checkpoints"].items()
     ):
-        path = Path(checkpoint["path"])
-        actual_hash = file_sha256(path)
-        if actual_hash != checkpoint["sha256"]:
-            raise ValueError(
-                f"checkpoint SHA256 mismatch for {name!r}: "
-                f"expected {checkpoint['sha256']}, got {actual_hash}"
-            )
-        checkpoint_ids[name] = actual_hash
-        controllers[name] = make_controller(
-            "sb3",
-            scenario=track.scenario,
-            config={
-                "path": str(path),
-                "algo": checkpoint["algorithm_id"],
-                "action_mode": track.policy_contract["action_mode"],
-                "normalized_actions": True,
-            },
+        policy_spec = learned_policy_spec_for_track(
+            checkpoint["path"],
+            checkpoint["algorithm_id"],
+            checkpoint["sha256"],
+            track,
         )
+        controllers[name] = load_policy_checkpoint(policy_spec)
+        checkpoint_ids[name] = policy_spec.sha256
     config_hash = _stable_hash(declaration)
     lock = FinalTestLock(
         declaration["lock_path"],
@@ -156,7 +149,7 @@ def _load_config(path: str | Path) -> dict:
         if not path.is_file():
             raise FileNotFoundError(f"checkpoint not found: {path}")
         algorithm = str(row["algorithm_id"]).lower()
-        if algorithm not in {"sac", "td3", "ppo"}:
+        if algorithm not in SUPPORTED_POLICY_ALGORITHMS:
             raise ValueError(
                 f"checkpoint {name!r} has unsupported algorithm_id"
             )

@@ -8,11 +8,8 @@ from typing import Any
 
 import numpy as np
 
-from aiogym.models import (
-    apply_model_params,
-    load_parameter_profile,
-    make_model,
-)
+from aiogym.models.parameter_profiles import load_parameter_profile
+from aiogym.models.registry import apply_model_params, make_model
 
 from .curriculum import (
     QUADRUPLE_CURRICULUM_V1,
@@ -225,7 +222,7 @@ class QuadrupleTrainingSampler:
 
         if shift_component != "disturbance":
             raise ValueError(
-                "Phase-B paired sampling currently supports only "
+                "paired quadruple sampling currently supports only "
                 "shift_component='disturbance'"
             )
         tree = SeedTree.for_split(

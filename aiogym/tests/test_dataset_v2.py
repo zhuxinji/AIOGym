@@ -5,23 +5,22 @@ import json
 import numpy as np
 import pytest
 
-from aiogym.datasets import (
-    DATASET_SCHEMA_VERSION,
-    DatasetEpisode,
-    DatasetReader,
-    DatasetWriter,
-    build_quality_report,
-    collect_episode,
+from aiogym.datasets.collector import collect_episode, list_collectors
+from aiogym.datasets.minari_adapter import (
     episode_from_minari_dict,
     episode_to_minari_dict,
-    list_collectors,
-    migrate_transition_dataset,
-    validate_dataset,
-    write_quality_report,
 )
+from aiogym.datasets.quality import build_quality_report, write_quality_report
+from aiogym.datasets.reader import DatasetReader, validate_dataset
+from aiogym.datasets.schema import DATASET_SCHEMA_VERSION, DatasetEpisode
+from aiogym.datasets.writer import DatasetWriter
 from aiogym.tests._env import make_test_env as make_env
-from aiogym.generation import QuadrupleTrainingSampler
-from aiogym.compat.transitions import Transition, TransitionDataset
+from aiogym.benchmarks import load_track
+from aiogym.generation.cascade import CascadeTrainingSampler
+from aiogym.generation.quadruple import (
+    QuadrupleTrainingSampler,
+)
+from aiogym.rl.episode_env import make_track_training_base_env
 
 
 def test_dataset_episode_captures_v2_action_and_bootstrap_semantics():
@@ -40,6 +39,99 @@ def test_dataset_episode_captures_v2_action_and_bootstrap_semantics():
     assert episode.array("bootstrap_mask")[-1] == 1.0
     assert episode.reward_term_names
     assert episode.cost_channel_names
+    _assert_reset_state_metadata(episode)
+
+
+def test_cascade_temperature_initial_state_uses_recorded_reset_snapshot():
+    track = load_track("cascade-regulation-generalist-v1")
+    sampler = CascadeTrainingSampler(track.training_distribution())
+    episode_spec = sampler.sample(408)
+    env = make_track_training_base_env(track, sampler=sampler)
+    try:
+        episode = collect_episode(
+            env,
+            episode_spec,
+            collector_id="safe_excitation",
+            track_id=track.id,
+            max_steps=1,
+        )
+    finally:
+        env.close()
+
+    _assert_reset_state_metadata(episode)
+    metadata = episode.metadata
+    requested = np.asarray(
+        metadata["requested_initial_state"],
+        dtype=np.float64,
+    )
+    recorded = np.asarray(
+        metadata["initial_state"],
+        dtype=np.float64,
+    )
+    assert metadata["reset_state_delta_linf"] > 1e-6
+    assert int(np.argmax(np.abs(requested - recorded))) in {1, 3, 5}
+
+
+def test_dataset_v2_allows_omitting_optional_reset_diagnostics():
+    source = _collected_episode(16)
+    metadata = source.metadata
+    metadata.pop("requested_initial_state")
+    metadata.pop("reset_state_delta_linf")
+
+    without_diagnostics = _rebuild(source, metadata=metadata)
+    restored = DatasetEpisode.from_storage(
+        without_diagnostics.storage_metadata(),
+        without_diagnostics.arrays(),
+    )
+
+    assert restored.metadata == metadata
+    assert restored.content_hash == without_diagnostics.content_hash
+    assert without_diagnostics.storage_metadata()["schema_version"] == (
+        "aiogym.dataset.episode.v2"
+    )
+    assert np.array_equal(
+        np.asarray(
+            without_diagnostics.metadata["initial_state"],
+            dtype=without_diagnostics.array("true_state").dtype,
+        ),
+        without_diagnostics.array("true_state")[0],
+    )
+
+
+def test_dataset_v2_rejects_real_initial_state_mismatch():
+    source = _collected_episode(17)
+    metadata = source.metadata
+    metadata["initial_state"][0] += 1e-3
+    metadata["reset_state_delta_linf"] = float(
+        np.max(
+            np.abs(
+                np.asarray(
+                    metadata["requested_initial_state"],
+                    dtype=np.float64,
+                )
+                - np.asarray(metadata["initial_state"], dtype=np.float64)
+            )
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="metadata initial_state must match the first true_state",
+    ):
+        _rebuild(source, metadata=metadata)
+
+
+def test_dataset_v2_validates_optional_reset_diagnostics_as_a_pair():
+    source = _collected_episode(18)
+    metadata = source.metadata
+    metadata.pop("reset_state_delta_linf")
+    with pytest.raises(ValueError, match="must be provided together"):
+        _rebuild(source, metadata=metadata)
+
+    metadata = source.metadata
+    metadata["reset_state_delta_linf"] += 1.0
+    with pytest.raises(ValueError, match="does not match"):
+        _rebuild(source, metadata=metadata)
 
 
 def test_dataset_round_trip_preserves_episode(tmp_path):
@@ -243,43 +335,12 @@ def test_minari_sidecar_round_trip_preserves_boundaries_and_actions():
         restored.array("action_policy_normalized"),
         episode.array("action_policy_normalized"),
     )
+    assert (
+        restored.metadata["reset_state_delta_linf"]
+        == episode.metadata["reset_state_delta_linf"]
+    )
 
 
-def test_v1_transition_rows_migrate_through_explicit_compat_layer():
-    transitions = TransitionDataset(
-        [
-            Transition(
-                obs=[float(step), 0.0],
-                state=[float(step)],
-                action=[0.25],
-                reward=1.0,
-                next_obs=[float(step + 1), 0.0],
-                next_state=[float(step + 1)],
-                terminated=False,
-                truncated=step == 2,
-                setpoint=[1.0],
-                disturbance={"load": 0.0},
-                episode=0,
-                step=step,
-            )
-            for step in range(3)
-        ]
-    )
-    migrated = migrate_transition_dataset(
-        transitions,
-        dataset_id="legacy-v2",
-        track_id="legacy-track",
-        scenario="cstr",
-    )
-    assert len(migrated) == 1
-    episode = migrated[0]
-    assert episode.metadata["migration"]["legacy_action_alias"] == (
-        "action_commanded_physical"
-    )
-    assert np.array_equal(
-        episode.array("action_commanded_physical"),
-        np.full((3, 1), 0.25, dtype=np.float32),
-    )
 def test_collector_registry_has_mixed_policy_sources():
     assert {
         "nominal_pid",
@@ -348,4 +409,25 @@ def _rebuild(source, *, metadata, **overrides):
         bootstrap_mask=arrays["bootstrap_mask"],
         step_index=arrays["step_index"],
         physical_time=arrays["physical_time"],
+    )
+
+
+def _assert_reset_state_metadata(episode):
+    metadata = episode.metadata
+    true_state = episode.array("true_state")
+    recorded = np.asarray(
+        metadata["initial_state"],
+        dtype=true_state.dtype,
+    )
+    requested = np.asarray(
+        metadata["requested_initial_state"],
+        dtype=np.float64,
+    )
+    assert np.array_equal(recorded, true_state[0])
+    assert metadata["reset_state_delta_linf"] == float(
+        np.max(
+            np.abs(
+                requested - recorded.astype(np.float64)
+            )
+        )
     )

@@ -1,154 +1,91 @@
 # AIO-Gym
 
-AIO-Gym is a native Gymnasium backend for process-control research. It provides
-eight process models, versioned operating Cases, canonical RewardSpecs,
-goal-based evaluation, reproducible benchmark Tracks, classical controllers,
-and RL training entry points.
+AIO-Gym is a native Gymnasium toolkit for reproducible process-control
+research. Its stable v1 product surface covers versioned Cases, RewardSpecs,
+training distributions, Dataset v2, classical controllers, learned-policy
+checkpoints, and official benchmark Tracks.
+
+Supported in v1:
+
+- eight process scenarios, with official benchmark coverage for Quadruple Tank
+  and Cascade;
+- PID, MPC, SAC, TD3, PPO, BC, and RLPD;
+- validation selection, immutable ranking anchors, and one-shot final testing.
+
+Real-device deployment, arbitrary Gym registration IDs, legacy Dataset v1
+migration, and backend-specific command-line interfaces are not supported.
 
 ## Install
 
 ```bash
-pip install -e .
+pip install .
+pip install 'aiogym[rl]'      # Torch and Stable-Baselines3
+pip install 'aiogym[onnx]'    # ONNX export and runtime
+pip install 'aiogym[oracle]'  # CasADi oracle controller
+pip install 'aiogym[hpo]'     # Optuna tuning
 ```
 
-Optional controller and RL dependencies are exposed through the project extras
-defined in `pyproject.toml`.
+The core package requires only Gymnasium and NumPy. Importing `aiogym` or
+creating an environment does not import optional dependencies.
 
-## Core vocabulary
-
-- **Scenario**: process dynamics, physical parameters, inputs, outputs,
-  constraints, and economic declarations.
-- **Case**: one scenario-bound experiment: initialization, timing, references,
-  disturbances, operating conditions, and optional acceptance thresholds.
-- **RewardSpec**: the scalar training signal returned by `env.step()`.
-- **Goal**: evaluation intent and primary ranking metric. Supported values are
-  `regulation` and `economic`.
-- **Scorecard**: reward-independent regulation, economics, safety, service,
-  robustness, and controller measurements.
-- **Track**: an official benchmark contract combining one scenario, a Case
-  distribution, Goal, RewardSpec, policy interface, seed namespaces, ranking,
-  and safety rules.
-
-Cases deliberately do not select rewards or ranking. RewardSpecs deliberately
-do not define the benchmark population. Tracks join those independent pieces.
-
-## Environment use
+## Create an environment
 
 ```python
 import aiogym
 
-env = aiogym.make_env("quadruple", case="minimum-phase")
-observation, info = env.reset(seed=7)
-observation, reward, terminated, truncated, info = env.step(env.action_space.sample())
-env.close()
+env = aiogym.make_env("quadruple", case="minimum-phase",
+                      reward_spec="regulation-v1")
+obs, info = env.reset(seed=0)
+obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
 ```
 
-Advanced timing, observation, and realism settings use mutually exclusive
-config mode:
+`aiogym.make_env(...)` is the only public construction path. Set randomness
+only with `env.reset(seed=...)`.
 
-```python
-env = aiogym.make_env(
-    config={
-        "scenario": "cascade",
-        "case": "continuous-benchmark",
-        "reward_spec": "economic-v1",
-        "environment": {"episode_steps": 400, "control_dt": 0.5},
-    }
-)
-```
+## Five workflows
 
-`make_env()` is the only public environment-construction API. The concrete
-Gymnasium environment class consumes an immutable resolved spec and is an
-implementation detail. Seed only through `env.reset(seed=...)`.
+The paths below refer to the checked-in examples in a source checkout. They
+also ship in the source distribution, but not in the wheel; wheel users should
+copy `configs/quickstart/` from the source distribution or repository before
+running these commands.
 
-## Discovery
-
-```python
-aiogym.list_scenarios()
-aiogym.list_cases()
-aiogym.list_cases("quadruple")
-aiogym.list_tracks()
-aiogym.list_controllers()
-```
-
-Advanced registries are explicit submodule APIs, for example
-`from aiogym.rewards import list_reward_specs`.
-
-CLI equivalents:
+Collect a Dataset v2 bundle:
 
 ```bash
-aiogym list scenarios
-aiogym list cases
-aiogym list cases --scenario quadruple
-aiogym list tracks
-aiogym list controllers
+aiogym collect --config configs/quickstart/quadruple/collect.json
 ```
 
-## Evaluation
-
-```python
-controller = aiogym.make_controller("pid", scenario="cstr")
-env = aiogym.make_env(
-    config={
-        "scenario": "cstr",
-        "reward_spec": "regulation-v1",
-        "environment": {"episode_steps": 100},
-    }
-)
-
-result = aiogym.evaluate_controller(
-    controller,
-    env,
-    episodes=3,
-    seed=100,
-)
-
-print(result["goal"])
-print(result["metric"], result[result["metric"]])
-print(result["scorecard"])
-env.close()
-```
-
-`return` is comparable only when `reward_spec_id` matches. Official ranking uses
-the Track Goal utility, a committed fixed-anchor manifest, the declared
-cross-case aggregation, and the Track-owned safety gate—not raw training
-return. Any gate failure has official score `0`.
-
-## Benchmarks
-
-Run an official Track:
+Train the algorithm declared by one immutable configuration:
 
 ```bash
-aiogym benchmark \
-  --config configs/benchmark/quadruple-validation-v1.json
+aiogym train --config configs/quickstart/quadruple/sac.json
 ```
 
-Run one explicit specialist Case:
+Evaluate a frozen checkpoint on validation:
 
 ```bash
-aiogym benchmark quadruple \
-  minimum-phase \
-  --goal regulation \
-  --reward-spec regulation-v1 \
-  --controllers pid
+aiogym evaluate \
+  --checkpoint runs/quickstart/quadruple/sac.zip \
+  --algorithm sac \
+  --track quadruple-regulation-generalist-v1
 ```
 
-Use `--output FILE` to write the JSON result. Official Tracks validate their
-policy contract before evaluation and record Track/Case hashes and seed
-namespaces for provenance.
-
-Anchor updates are an explicit review workflow. Calibration writes a candidate;
-official evaluation never recalculates anchors:
+Compare PID, MPC, and optionally one learned checkpoint on an official Track:
 
 ```bash
-aiogym benchmark calibrate-anchors \
-  --track quadruple-regulation-generalist-v1 \
-  --bad-controller hold \
-  --reference-controller pid \
-  --output /tmp/quadruple-anchors-candidate.json
+aiogym benchmark --config configs/quickstart/quadruple/benchmark.json
 ```
 
-Bundled Tracks:
+Consume a locked test split exactly once:
+
+```bash
+aiogym final-test --config FILE
+```
+
+The same collect, SAC, BC, RLPD, and benchmark quickstarts are provided under
+`configs/quickstart/cascade/`.
+
+## Official Tracks
 
 - `quadruple-regulation-generalist-v1`
 - `cascade-regulation-generalist-v1`
@@ -157,49 +94,17 @@ Bundled Tracks:
 - `cascade-recirculating-regulation-generalist-v1`
 - `cascade-recirculating-recovery-diagnostic-v1`
 
-## RL training
+Cases define operating conditions; RewardSpecs define the scalar training
+signal; Tracks bind the evaluation goal, split, cases, weights, safety gate,
+fixed anchors, and ranking formula. Training and tuning can access only
+training and validation. `final-test` is the sole ordinary command allowed to
+consume a test split, and its lock cannot be reused.
 
-```bash
-aiogym train --config configs/train/quadruple-sac-v1.json
-aiogym train --config configs/train/quadruple-sac-v1.json --seeds 0,1,2
-aiogym tune --config configs/tune/quadruple-sac-v1.json
-```
+Every Dataset, resolved training configuration, checkpoint, Track, Case, and
+anchor carries a reproducible identity or checksum. A learned checkpoint is
+loaded through one canonical loader that verifies its SHA-256 digest before
+backend deserialization and applies action normalization exactly once.
 
-The config selects SAC, TD3, PPO, RLPD, or BC. Training resolves the Track and
-fixed validation plan before constructing environments; formal test remains
-available only through `aiogym final-test`.
-
-## Artifacts
-
-Current benchmark artifacts use `case`, `goal`, `reward_spec_id`, `track_id`,
-`official_score`, and `scorecard`. Validate or render them with:
-
-```bash
-aiogym artifacts check RUN_DIR
-aiogym artifacts report RUN_DIR
-```
-
-Archived pre-redesign files can be read only through the explicit offline
-migration module:
-
-```python
-from aiogym.evaluation.legacy_artifacts import (
-    load_legacy_evaluation_artifact,
-)
-```
-
-That module is not imported by environment, evaluation, Track, artifact writer,
-or RL execution paths.
-
-## Development
-
-```bash
-python3 -m pytest -q
-python3 -m compileall -q aiogym
-```
-
-See [Concepts](docs/concepts.md), [Public API](docs/public_api.md),
-[Architecture](docs/architecture.md), and
-[Benchmark semantics ADR](docs/adr/0001-benchmark-semantics-v2.md).
-Breaking migrations are summarized in
+Advanced material is in [Documentation](docs/index.md),
+[Public API](docs/public_api.md), [Architecture](docs/architecture.md), and
 [API compatibility](docs/api_compatibility.md).

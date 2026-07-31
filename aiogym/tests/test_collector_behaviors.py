@@ -3,9 +3,11 @@ from __future__ import annotations
 import hashlib
 
 import numpy as np
+import pytest
 
 from aiogym.benchmarks import load_track
-from aiogym.datasets import collect_episode, make_collector_behavior
+from aiogym.datasets.collector import collect_episode
+from aiogym.datasets.collector_adapters import make_collector_behavior
 from aiogym.datasets.writer import file_sha256
 from aiogym.rl.episode_env import (
     make_track_episode_sampler,
@@ -71,6 +73,34 @@ def test_pid_collector_behaviors_are_seeded_and_semantically_distinct():
     assert "action_clip_statistics" in noise
 
 
+@pytest.mark.parametrize(
+    "collector_id",
+    ("nominal_pid", "noisy_pid", "safe_excitation"),
+)
+def test_collectors_record_exact_reset_state_and_requested_diagnostics(
+    collector_id,
+):
+    episode = _collect(collector_id, max_steps=4)
+    metadata = episode.metadata
+    true_state = episode.array("true_state")
+    recorded = np.asarray(
+        metadata["initial_state"],
+        dtype=true_state.dtype,
+    )
+    requested = np.asarray(
+        metadata["requested_initial_state"],
+        dtype=np.float64,
+    )
+    assert np.array_equal(recorded, true_state[0])
+    assert metadata["reset_state_delta_linf"] == float(
+        np.max(
+            np.abs(
+                requested - recorded.astype(np.float64)
+            )
+        )
+    )
+
+
 def test_safe_excitation_is_projected_through_declared_shield():
     episode = _collect(
         "safe_excitation",
@@ -100,17 +130,36 @@ def test_checkpoint_collector_verifies_and_records_sha256(
 
     class FakePolicy:
         name = "fake-checkpoint"
+        action_mode = "actuator"
+        control_structure = "fake"
+        controller_api_version = "aiogym.controller.v1"
 
-        def predict(self, observation, deterministic=True):
-            del deterministic
-            return np.full(2, 0.5, dtype=np.float32), None
+        def reset(self, seed=None):
+            del seed
+
+        def act(self, observation, context):
+            del observation, context
+            return np.full(2, 0.5, dtype=np.float32)
 
         def metadata(self):
-            return {"name": self.name, "kind": "fake"}
+            return {
+                "name": self.name,
+                "kind": "fake",
+                "checkpoint": dict(self.checkpoint_metadata),
+            }
+
+    def load_policy(spec):
+        policy = FakePolicy()
+        policy.checkpoint_metadata = {
+            "path": str(spec.path),
+            "algorithm_id": spec.algorithm_id,
+            "sha256": spec.sha256,
+        }
+        return policy
 
     monkeypatch.setattr(
-        "aiogym.controllers.adapters.SB3PolicyController.load",
-        lambda *args, **kwargs: FakePolicy(),
+        "aiogym.datasets.collector_adapters.load_policy_checkpoint",
+        load_policy,
     )
     episode = _collect(
         "checkpoint",
@@ -131,6 +180,64 @@ def test_checkpoint_collector_verifies_and_records_sha256(
         episode.metadata["collector_behavior"]["checkpoint"]["sha256"]
         == digest
     )
+
+
+def test_bc_checkpoint_collector_scales_native_action_once(tmp_path):
+    torch = pytest.importorskip("torch")
+    from aiogym.rl.behavior_cloning import BehaviorCloningPolicy
+    from aiogym.rl.policy_spec import behavior_cloning_policy_spec
+
+    track = load_track(TRACK_ID)
+    sampler = make_track_episode_sampler(track)
+    env = make_track_training_base_env(track, sampler=sampler)
+    try:
+        observation_dim = int(env.observation_space.shape[0])
+        action_dim = int(env.action_space.shape[0])
+    finally:
+        env.close()
+    policy = BehaviorCloningPolicy(
+        observation_dim,
+        action_dim,
+        hidden=4,
+    )
+    with torch.no_grad():
+        for parameter in policy.model.parameters():
+            parameter.zero_()
+        policy.model[-2].bias.fill_(float(np.arctanh(0.5)))
+    checkpoint = tmp_path / "bc.pt"
+    torch.save(
+        {
+            "policy_spec": behavior_cloning_policy_spec(
+                observation_dim,
+                action_dim,
+                4,
+                scenario="quadruple",
+                action_mode="actuator",
+            ),
+            "policy_state_dict": policy.model.state_dict(),
+        },
+        checkpoint,
+    )
+    digest = file_sha256(checkpoint)
+
+    episode = _collect(
+        "checkpoint",
+        options={
+            "checkpoints": [
+                {
+                    "path": str(checkpoint),
+                    "algorithm_id": "bc",
+                    "sha256": digest,
+                }
+            ]
+        },
+        max_steps=3,
+    )
+
+    assert episode.array("action_policy_normalized") == pytest.approx(
+        0.5
+    )
+    assert episode.metadata["checkpoint_hash"] == digest
 
 
 def test_recovery_collector_requires_and_records_recovery_episode():

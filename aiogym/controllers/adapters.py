@@ -10,6 +10,7 @@ from .contracts import (
     Controller,
     ControllerContext,
     controller_metadata,
+    normalized_to_environment_action,
 )
 
 
@@ -68,7 +69,7 @@ class PolicyController:
     def _environment_action(self, action: np.ndarray) -> np.ndarray:
         if not self.normalized_actions:
             return action
-        return np.clip(0.5 * (action + 1.0), 0.0, 1.0).astype(np.float32)
+        return normalized_to_environment_action(action)
 
     def metadata(self) -> dict[str, Any]:
         data = controller_metadata(self.policy)
@@ -116,19 +117,20 @@ class SB3PolicyController(PolicyController):
     @classmethod
     def load(cls, path: str, algo: str = "sac", **kw):
         algo_key = algo.lower()
+        device = kw.pop("device", "auto")
         try:
             if algo_key == "sac":
                 from stable_baselines3 import SAC
 
-                policy = SAC.load(path)
+                policy = SAC.load(path, device=device)
             elif algo_key == "ppo":
                 from stable_baselines3 import PPO
 
-                policy = PPO.load(path)
+                policy = PPO.load(path, device=device)
             elif algo_key == "td3":
                 from stable_baselines3 import TD3
 
-                policy = TD3.load(path)
+                policy = TD3.load(path, device=device)
             else:
                 raise ValueError(f"unsupported SB3 algorithm: {algo}")
         except ModuleNotFoundError as ex:

@@ -7,10 +7,8 @@ from types import SimpleNamespace
 import gymnasium as gym
 
 from aiogym._environment.builder import build_track_case_environment
-from aiogym.generation import (
-    FixedCaseEpisodeSampler,
-    make_episode_sampler,
-)
+from aiogym.generation.factory import make_episode_sampler
+from aiogym.generation.samplers import FixedCaseEpisodeSampler
 
 from .coordinator import EpisodeCoordinator
 

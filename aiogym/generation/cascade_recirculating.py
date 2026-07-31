@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from aiogym.models import apply_model_params, make_model
+from aiogym.models.registry import apply_model_params, make_model
 from aiogym.models.core import RHO_CP
 
 from .feasibility import (

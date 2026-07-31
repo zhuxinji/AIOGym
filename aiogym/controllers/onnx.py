@@ -5,7 +5,11 @@ from pathlib import Path
 
 import numpy as np
 
-from .contracts import CONTROLLER_API_VERSION, ControllerContext
+from .contracts import (
+    CONTROLLER_API_VERSION,
+    ControllerContext,
+    normalized_to_environment_action,
+)
 
 
 class ONNXPolicyController:
@@ -23,6 +27,7 @@ class ONNXPolicyController:
         control_structure: str = "onnx_policy",
         input_name: str | None = None,
         output_name: str | None = None,
+        expected_observation_dim: int | None = None,
         expected_action_dim: int | None = None,
         scenario: str | None = None,
         normalized_actions: bool = False,
@@ -43,6 +48,17 @@ class ONNXPolicyController:
             session.get_outputs(), output_name, "output"
         )
         self.expected_obs_dim = _fixed_last_dim(self.input_shape)
+        if (
+            expected_observation_dim is not None
+            and self.expected_obs_dim is not None
+            and self.expected_obs_dim != expected_observation_dim
+        ):
+            raise ValueError(
+                f"ONNX policy expects {self.expected_obs_dim} observations, "
+                f"expected {expected_observation_dim}"
+            )
+        if self.expected_obs_dim is None:
+            self.expected_obs_dim = expected_observation_dim
         self.expected_action_dim = expected_action_dim
         output_dim = _fixed_last_dim(self.output_shape)
         if expected_action_dim is not None and output_dim is not None and output_dim != expected_action_dim:
@@ -89,7 +105,7 @@ class ONNXPolicyController:
         if not np.all(np.isfinite(action)):
             raise ValueError("ONNX policy produced a non-finite action")
         if self.normalized_actions:
-            action = np.clip(0.5 * (action + 1.0), 0.0, 1.0)
+            action = normalized_to_environment_action(action)
         return action
 
     def metadata(self):

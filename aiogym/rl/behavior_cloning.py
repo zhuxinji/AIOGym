@@ -6,6 +6,7 @@ import copy
 import numpy as np
 
 from .dataset_replay import DatasetReplay
+from .policy_spec import behavior_cloning_policy_spec
 
 
 class BehaviorCloningPolicy:
@@ -14,12 +15,17 @@ class BehaviorCloningPolicy:
     def __init__(self, observation_dim: int, action_dim: int, *, hidden: int = 64):
         import torch.nn as nn
 
+        self.observation_dim = int(observation_dim)
+        self.action_dim = int(action_dim)
+        self.hidden = int(hidden)
+        if min(self.observation_dim, self.action_dim, self.hidden) <= 0:
+            raise ValueError("policy dimensions must be positive")
         self.model = nn.Sequential(
-            nn.Linear(observation_dim, hidden),
+            nn.Linear(self.observation_dim, self.hidden),
             nn.ReLU(),
-            nn.Linear(hidden, hidden),
+            nn.Linear(self.hidden, self.hidden),
             nn.ReLU(),
-            nn.Linear(hidden, action_dim),
+            nn.Linear(self.hidden, self.action_dim),
             nn.Tanh(),
         )
 
@@ -68,6 +74,9 @@ class BehaviorCloningTrainer:
             self.policy.model.parameters(),
             lr=float(learning_rate),
         )
+        first_metadata = dataset.reader.load_episode(0).metadata
+        self.scenario = str(first_metadata["scenario"])
+        self.action_mode = str(first_metadata["action_mode"])
         self.steps = 0
 
     def fit(self, *, steps: int, batch_size: int = 256) -> dict[str, float | int]:
@@ -128,6 +137,31 @@ class BehaviorCloningTrainer:
             "optimizer": self.optimizer.state_dict(),
             "steps": self.steps,
             "dataset": self.dataset.state_dict(),
+        }
+
+    def policy_spec(self) -> dict:
+        return behavior_cloning_policy_spec(
+            self.policy.observation_dim,
+            self.policy.action_dim,
+            self.policy.hidden,
+            scenario=self.scenario,
+            action_mode=self.action_mode,
+        )
+
+    def inference_checkpoint(self) -> dict:
+        return {
+            "policy_spec": self.policy_spec(),
+            "policy_state_dict": {
+                name: value.detach().cpu().clone()
+                for name, value in self.policy.model.state_dict().items()
+            },
+        }
+
+    def checkpoint_payload(self, report) -> dict:
+        return {
+            **self.inference_checkpoint(),
+            "trainer": self.state_dict(),
+            "report": copy.deepcopy(report),
         }
 
     def load_state_dict(self, state) -> None:

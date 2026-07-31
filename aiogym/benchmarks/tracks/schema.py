@@ -15,7 +15,7 @@ from aiogym.models.cases import (
     case_profile_hash,
     load_case,
 )
-from aiogym.rewards import get_reward_spec
+from aiogym.rewards.registry import get_reward_spec
 
 
 BENCHMARK_TRACK_SCHEMA_VERSION = "aiogym.benchmark_track.v1"
@@ -225,7 +225,7 @@ class TrackSpec:
             raise ValueError(
                 f"benchmark track {self.id!r} has no training distribution"
             )
-        from aiogym.generation import load_distribution
+        from aiogym.generation.registry import load_distribution
 
         distribution = load_distribution(distribution_id)
         if distribution.scenario_id != self.scenario:

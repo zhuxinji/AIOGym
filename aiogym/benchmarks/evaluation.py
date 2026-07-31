@@ -1,4 +1,4 @@
-"""Evaluate one policy checkpoint on every case in a track split."""
+"""Evaluate one policy checkpoint on an official Track."""
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -6,7 +6,7 @@ from typing import Any
 
 import numpy as np
 
-from aiogym.evaluation import evaluate_controller
+from aiogym.evaluation.execution import evaluate_controller
 from aiogym.evaluation.provenance import track_provenance
 from aiogym.evaluation.results import build_evaluation_report
 
@@ -18,7 +18,6 @@ def evaluate_policy_on_track(
     controller,
     track: TrackSpec | str | Mapping[str, Any],
     *,
-    split: str = "test",
     base_seeds: Sequence[int] = (9000,),
     include_episodes: bool = True,
     env_factory=None,
@@ -26,7 +25,39 @@ def evaluate_policy_on_track(
     episode_plan=None,
     safety_gate_spec=None,
 ) -> dict[str, Any]:
-    """Evaluate the same controller instance on all declared split cases."""
+    """Evaluate a controller on the official validation split only."""
+
+    return _evaluate_policy_on_track_split(
+        controller,
+        track,
+        split="validation",
+        base_seeds=base_seeds,
+        include_episodes=include_episodes,
+        env_factory=env_factory,
+        evaluate_fn=evaluate_fn,
+        episode_plan=episode_plan,
+        safety_gate_spec=safety_gate_spec,
+    )
+
+
+def _evaluate_policy_on_track_split(
+    controller,
+    track: TrackSpec | str | Mapping[str, Any],
+    *,
+    split: str,
+    base_seeds: Sequence[int],
+    include_episodes: bool,
+    env_factory=None,
+    evaluate_fn=None,
+    episode_plan=None,
+    safety_gate_spec=None,
+) -> dict[str, Any]:
+    """Evaluate a Track split for internal benchmark protocols."""
+
+    if split not in {"validation", "test"}:
+        raise ValueError(
+            "Track evaluation split must be 'validation' or 'test'"
+        )
 
     resolved_track = (
         track

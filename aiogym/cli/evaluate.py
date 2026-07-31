@@ -5,8 +5,14 @@ import argparse
 import json
 from pathlib import Path
 
-from aiogym.benchmarks import evaluate_policy_on_track, load_track
-from aiogym.controllers import make_controller
+from aiogym.benchmarks.evaluation import evaluate_policy_on_track
+from aiogym.benchmarks.tracks.registry import load_track
+from aiogym.controllers.checkpoints import (
+    SUPPORTED_POLICY_ALGORITHMS,
+    checkpoint_sha256,
+    learned_policy_spec_for_track,
+    load_policy_checkpoint,
+)
 
 
 def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
@@ -17,15 +23,20 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--track", required=True)
     parser.add_argument(
-        "--split",
-        choices=("validation",),
-        default="validation",
-    )
-    parser.add_argument(
         "--algorithm",
-        choices=("ppo", "sac", "td3"),
+        choices=SUPPORTED_POLICY_ALGORITHMS,
         required=True,
     )
+    parser.add_argument(
+        "--sha256",
+        dest="checkpoint_sha256",
+        default=None,
+        help=(
+            "expected lowercase checkpoint digest; when omitted, pin the "
+            "file's current digest"
+        ),
+    )
+    parser.add_argument("--device", default="cpu")
     parser.add_argument("--seeds", default="5000")
     parser.add_argument("--output", default=None)
     return parser
@@ -37,15 +48,16 @@ def main(argv=None, prog: str | None = None) -> int:
     if not checkpoint.is_file():
         raise FileNotFoundError(checkpoint)
     track = load_track(args.track)
-    controller = make_controller(
-        "sb3",
-        scenario=track.scenario,
-        config={
-            "path": str(checkpoint),
-            "algo": args.algorithm,
-            "action_mode": track.policy_contract["action_mode"],
-            "normalized_actions": True,
-        },
+    digest = args.checkpoint_sha256 or checkpoint_sha256(checkpoint)
+    policy_spec = learned_policy_spec_for_track(
+        checkpoint,
+        args.algorithm,
+        digest,
+        track,
+    )
+    controller = load_policy_checkpoint(
+        policy_spec,
+        device=args.device,
     )
     seeds = tuple(
         int(part.strip())
@@ -57,7 +69,6 @@ def main(argv=None, prog: str | None = None) -> int:
     result = evaluate_policy_on_track(
         controller,
         track,
-        split="validation",
         base_seeds=seeds,
         include_episodes=True,
     )
@@ -78,6 +89,7 @@ def main(argv=None, prog: str | None = None) -> int:
                 "base_seeds": result["base_seeds"],
                 "case_count": result["case_count"],
                 "aggregate": result["aggregate"],
+                "checkpoint_sha256": digest,
                 "output": args.output,
                 "next_command": "aiogym final-test --config FILE",
             },

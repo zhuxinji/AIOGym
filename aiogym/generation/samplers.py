@@ -1,4 +1,4 @@
-"""Deterministic Phase-A episode resolvers."""
+"""Deterministic episode resolvers for fixed Cases and distributions."""
 from __future__ import annotations
 
 from collections.abc import Mapping

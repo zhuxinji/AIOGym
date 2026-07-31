@@ -7,7 +7,7 @@ import json
 import sys
 from pathlib import Path
 
-from aiogym.evaluation import (
+from aiogym.evaluation.artifact import (
     check_benchmark_artifacts,
     compact_benchmark_artifacts,
     render_benchmark_report,

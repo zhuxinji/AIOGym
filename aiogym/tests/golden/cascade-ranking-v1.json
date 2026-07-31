@@ -1,0 +1,19 @@
+{
+  "track_id": "cascade-regulation-generalist-v1",
+  "track_hash": "850950e3fc49445bbee431cfdd5f6d35f151388aa05ac02d003788ffb9c95b5c",
+  "inputs": [
+    {"track_split": "validation", "case_id": "commissioning", "resolved_case_hash": "e8211e8e80570ace73da7e194083642ede96e0e47bcbe1da112da4d14a41b6e3", "case_horizon_seconds": 100.0, "regulation_cost": 2.0607958687360193, "ranking_eligible": true},
+    {"track_split": "validation", "case_id": "temperature-step", "resolved_case_hash": "6e7feef7605eae0f976c3249990933277513d67db0106b06815f6bad0a393412", "case_horizon_seconds": 100.0, "regulation_cost": 0.06582146235448001, "ranking_eligible": true}
+  ],
+  "expected": {
+    "ranking_spec_id": "cascade-regulation-ranking-v1",
+    "case_score_rule": "fixed-anchor-v1",
+    "track_aggregation": "weighted-geometric-mean-v1",
+    "case_scores": [50.0, 49.999999999999986],
+    "case_weights": [1.0, 1.0],
+    "official_score": 49.99999999999999,
+    "ranking_eligible": true,
+    "anchor_id": "cascade-regulation-anchors-v1",
+    "anchor_artifact_hash": "f002199f2e6eb7aaabc1caa0e8cb641e221a1f6cec42005d2c8627edbe6a7e1c"
+  }
+}

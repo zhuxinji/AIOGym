@@ -12,6 +12,7 @@ tmp/
 # Node / OS
 node_modules/
 .DS_Store
+__MACOSX/
 
 # Trained policies (build artifacts)
 *.onnx

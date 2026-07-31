@@ -9,7 +9,7 @@ from typing import Any, Mapping
 
 from ..._internal.identifiers import canonicalize_artifact_ids
 from ..._internal.serialization import write_json as _write_json
-from ...models import collect_model_metadata
+from ...models.metadata import collect_model_metadata
 from .paths import resolve_artifact_path
 from .tables import (
     _artifact_scenarios,

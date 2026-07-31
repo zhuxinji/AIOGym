@@ -5,7 +5,7 @@ import copy
 from collections.abc import Mapping
 from typing import Any
 
-from aiogym.models import apply_model_params, make_model
+from aiogym.models.registry import apply_model_params, make_model
 from aiogym.models.cases import (
     case_profile_hash,
     configure_model_for_case,

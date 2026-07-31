@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import itertools
 
-from aiogym.controllers import make_controller
-from aiogym.env_factory import make_env
-from aiogym.evaluation import evaluate_controller
+from aiogym.controllers.registry import make_controller
+from aiogym import make_env
+from aiogym.evaluation.execution import evaluate_controller
 
 
 def make_tuning_env(episode_steps: int = 400):

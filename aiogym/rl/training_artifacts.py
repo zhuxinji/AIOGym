@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from aiogym._internal.serialization import jsonable as _jsonable
-from aiogym.evaluation import build_evaluation_report
+from aiogym.evaluation.results import build_evaluation_report
 from aiogym.evaluation.artifact import finalize_benchmark_artifacts
 from aiogym.evaluation.results import compact_result_row
 from aiogym.evaluation.provenance import track_provenance
@@ -121,7 +121,7 @@ def rl_payload(kind: str, scenario: str, goal: str, action_mode: str,
             payload[name] = training[name]
     track_id = training.get("track_id")
     if track_id:
-        from aiogym.benchmarks import load_track
+        from aiogym.benchmarks.tracks.registry import load_track
 
         track = load_track(
             str(track_id),
@@ -178,7 +178,12 @@ def rl_payload(kind: str, scenario: str, goal: str, action_mode: str,
     return _jsonable(payload)
 
 
-def write_rl_artifacts(artifact_dir: str | Path, payload: Mapping[str, Any]) -> dict[str, Any]:
+def write_rl_artifacts(
+    artifact_dir: str | Path,
+    payload: Mapping[str, Any],
+    *,
+    replace_existing: bool = False,
+) -> dict[str, Any]:
     """Write benchmark.json, standard children, figures, and Markdown report."""
 
     payload = dict(_jsonable(payload))
@@ -188,4 +193,5 @@ def write_rl_artifacts(artifact_dir: str | Path, payload: Mapping[str, Any]) -> 
         payload,
         create_plots=True,
         markdown_report=True,
+        replace_existing=replace_existing,
     )

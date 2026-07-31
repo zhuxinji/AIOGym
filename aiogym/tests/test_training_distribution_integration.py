@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from types import SimpleNamespace
 
 import numpy as np
 
@@ -16,11 +15,25 @@ from aiogym.rl.episode_env import (
 )
 from aiogym.rl.online_collection import VectorOnlineCollector
 from aiogym.rl.replay import ReplayBuffer
-from aiogym.rl.train_rlpd import make_training_env as make_rlpd_env
-from aiogym.rl.train_sb3 import make_training_env as make_sb3_env
+from aiogym.rl.backends.rlpd import make_training_env as make_rlpd_env
+from aiogym.rl.backends.sb3 import make_training_env as make_sb3_env
+from aiogym.rl.config import RLTrainingConfig
+from aiogym.rl.plan import resolve_training_plan
 
 
 TRACK_ID = "quadruple-regulation-generalist-v1"
+
+
+def _training_plan(n_envs=2):
+    return resolve_training_plan(
+        RLTrainingConfig(
+            track_id=TRACK_ID,
+            algorithm_id="sac",
+            training_seed=5,
+            total_transitions=1,
+            n_envs=n_envs,
+        )
+    )
 
 
 def test_track_distribution_changes_and_replays_episode_sequence():
@@ -97,19 +110,10 @@ def test_first_episode_identity_set_is_invariant_to_env_count():
 
 
 def test_sb3_and_rlpd_builders_use_episode_sampling_env():
-    track = load_track(TRACK_ID)
-    args = SimpleNamespace(
-        track_spec=track,
-        seed=5,
-        n_envs=2,
-    )
-    sb3 = make_sb3_env(args, rank=1)()
-    rlpd = make_rlpd_env(
-        track,
-        base_seed=5,
-        worker_index=1,
-        n_envs=2,
-    )
+    plan = _training_plan()
+    track = plan.track
+    sb3 = make_sb3_env(plan, rank=1)()
+    rlpd = make_rlpd_env(plan, worker_index=1)
     try:
         assert _find_wrapper(sb3, _EpisodeSamplingEnv) is not None
         assert _find_wrapper(rlpd, _EpisodeSamplingEnv) is not None
@@ -154,14 +158,9 @@ def test_online_collector_injects_sampler_episode_specs():
 def test_sb3_vector_autoreset_advances_partitioned_global_indexes():
     from stable_baselines3.common.vec_env import DummyVecEnv
 
-    track = load_track(TRACK_ID)
-    args = SimpleNamespace(
-        track_spec=track,
-        seed=5,
-        n_envs=2,
-    )
+    plan = _training_plan()
     vector_env = DummyVecEnv(
-        [make_sb3_env(args, rank=rank) for rank in range(2)]
+        [make_sb3_env(plan, rank=rank) for rank in range(2)]
     )
     try:
         vector_env.reset()

@@ -21,7 +21,7 @@ def test_checkpoint_selection_never_reads_test():
     visited = []
 
     def evaluate(controller, resolved_track, **kwargs):
-        visited.append(kwargs["split"])
+        visited.append("split" not in kwargs)
         assert kwargs["episode_plan"].plan_hash
         return _validation_evaluation(
             track,
@@ -35,7 +35,7 @@ def test_checkpoint_selection_never_reads_test():
         evaluate_fn=evaluate,
     )
     callback.evaluate(object(), checkpoint_id="checkpoint-1", step=100)
-    assert visited == ["validation"]
+    assert visited == [True]
     with pytest.raises(ValueError, match="validation results only"):
         callback.selector.consider(
             "illegal",
@@ -170,14 +170,14 @@ def test_final_test_lock_is_consumed_once(tmp_path):
     output = lock.run(
         {"sac": object()},
         bootstrap_repetitions=20,
-        evaluate_fn=evaluate,
+        _evaluate_test_fn=evaluate,
     )
     assert output["lock"]["status"] == "complete"
     with pytest.raises(RuntimeError, match="already consumed"):
         lock.run(
             {"sac": object()},
             bootstrap_repetitions=20,
-            evaluate_fn=evaluate,
+            _evaluate_test_fn=evaluate,
         )
 
 

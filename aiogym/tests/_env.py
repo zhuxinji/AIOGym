@@ -6,7 +6,7 @@ readable while exercising config mode.
 """
 from __future__ import annotations
 
-from aiogym.env_factory import make_env as public_make_env
+from aiogym import make_env as public_make_env
 
 
 def make_test_env(

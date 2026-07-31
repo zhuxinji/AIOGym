@@ -274,7 +274,7 @@ def validate_case_profile(
     if controller_fields:
         raise ValueError(
             "case profiles must not bind controller defaults; "
-            "use specialist_metadata for historical specialist configurations"
+            "use specialist_metadata for Case-specific controller settings"
         )
     if "summary" in profile and (
         not isinstance(profile["summary"], str) or not profile["summary"]

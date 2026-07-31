@@ -1,68 +1,21 @@
-"""Persistent episode datasets for offline and hybrid reinforcement learning."""
-from .schema import (
-    DATASET_SCHEMA_VERSION,
-    EPISODE_DATA_SCHEMA_VERSION,
-    DatasetEpisode,
-)
-from .reader import DatasetReader, validate_dataset
-from .writer import DatasetWriter
-from .collector import (
-    CollectorSpec,
-    SmoothExcitationPolicy,
-    collect_episode,
-    get_collector,
-    list_collectors,
-    register_collector,
-    unregister_collector,
-)
-from .collector_adapters import (
-    CollectorBehavior,
-    get_collector_adapter,
-    make_collector_behavior,
-    register_collector_adapter,
-)
-from .config import (
-    COLLECTION_CONFIG_SCHEMA_VERSION,
-    CollectorAllocation,
-    DatasetCollectionConfig,
-)
-from .quality import (
-    QUALITY_REPORT_SCHEMA_VERSION,
-    build_quality_report,
-    write_quality_report,
-)
-from .migration import migrate_transition_dataset
-from .minari_adapter import (
-    episode_from_minari_dict,
-    episode_to_minari_dict,
-)
+"""Stable Dataset v2 collection, reading, and validation facade."""
+from __future__ import annotations
+
+from aiogym._internal.lazy import exported_dir, resolve_export
 
 
-__all__ = [
-    "DATASET_SCHEMA_VERSION",
-    "EPISODE_DATA_SCHEMA_VERSION",
-    "DatasetEpisode",
-    "DatasetReader",
-    "DatasetWriter",
-    "CollectorSpec",
-    "CollectorAllocation",
-    "CollectorBehavior",
-    "COLLECTION_CONFIG_SCHEMA_VERSION",
-    "DatasetCollectionConfig",
-    "SmoothExcitationPolicy",
-    "QUALITY_REPORT_SCHEMA_VERSION",
-    "build_quality_report",
-    "collect_episode",
-    "get_collector",
-    "get_collector_adapter",
-    "list_collectors",
-    "migrate_transition_dataset",
-    "make_collector_behavior",
-    "episode_from_minari_dict",
-    "episode_to_minari_dict",
-    "register_collector",
-    "register_collector_adapter",
-    "unregister_collector",
-    "validate_dataset",
-    "write_quality_report",
-]
+_EXPORTS = {
+    "DatasetReader": ".reader",
+    "validate_dataset": ".reader",
+    "list_collectors": ".collector",
+    "DatasetCollectionConfig": ".config",
+}
+__all__ = sorted(_EXPORTS)
+
+
+def __getattr__(name):
+    return resolve_export(globals(), __name__, _EXPORTS, name)
+
+
+def __dir__():
+    return exported_dir(globals(), _EXPORTS)

@@ -31,6 +31,9 @@ def test_public_vocabulary_is_case_goal_reward_track():
     }
     assert set(aiogym.__all__) == expected
     assert len(aiogym.__all__) <= 12
+    assert {
+        name for name in dir(aiogym) if not name.startswith("_")
+    } == expected - {"__version__"}
     advanced = {
         "TrackSpec",
         "DistributionSpec",
@@ -43,6 +46,15 @@ def test_public_vocabulary_is_case_goal_reward_track():
     }
     assert advanced.isdisjoint(dir(aiogym))
     assert all(not hasattr(aiogym, name) for name in advanced)
+
+
+def test_models_do_not_expose_retired_gym_id_helpers():
+    import aiogym.models as models
+
+    assert "builtin_gym_ids" not in models.__all__
+    assert "gym_id_name" not in models.__all__
+    assert not hasattr(models, "builtin_gym_ids")
+    assert not hasattr(models, "gym_id_name")
 
 
 @pytest.mark.parametrize("reward_spec", ["regulation-v1", "economic-v1"])
@@ -81,8 +93,29 @@ def test_import_has_no_gymnasium_registration_side_effect():
 
 
 def test_environment_factory_has_one_resolved_seedless_contract():
-    from aiogym._environment.spec import ResolvedEnvSpec
-    from aiogym.env import _AIOGymEnv
+    from aiogym._environment.spec import ResolvedEnvSpec, resolve_env_spec
+    from aiogym._environment.runtime import _AIOGymEnv
+
+    direct = resolve_env_spec(
+        "quadruple",
+        case="minimum-phase",
+        reward_spec="regulation-v1",
+    )
+    configured = resolve_env_spec(
+        config={
+            "scenario": "quadruple",
+            "case": "minimum-phase",
+            "reward_spec": "regulation-v1",
+            "environment": {},
+        }
+    )
+    assert direct.spec_hash == configured.spec_hash
+    detached = direct.runtime()
+    detached["observation"]["integral_obs"] = not (
+        detached["observation"]["integral_obs"]
+    )
+    assert direct.spec_hash == configured.spec_hash
+    assert direct.runtime() != detached
 
     env = aiogym.make_env(
         config={

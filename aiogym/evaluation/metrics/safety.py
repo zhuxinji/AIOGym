@@ -66,7 +66,7 @@ def safety_step_metrics(info, bound_metrics, dt: float):
         "runaway_count": 1.0 if runaway else 0.0,
         "runaway_duration": dt if runaway else 0.0,
         "safety_margin_min": -float(worst) if worst > 0.0 else 0.0,
-        # v4 compatibility aliases.
+        # Stable aggregate names used by Track gates and artifact reports.
         "constraint_violation_count": 1.0 if state_violated else 0.0,
         "constraint_violation_duration": dt if state_violated else 0.0,
         "constraint_violation_severity": state_severity,

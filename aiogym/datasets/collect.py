@@ -7,8 +7,8 @@ import json
 import math
 from concurrent.futures import ProcessPoolExecutor
 
-from aiogym.benchmarks import load_track
-from aiogym.generation import make_episode_sampler
+from aiogym.benchmarks.tracks.registry import load_track
+from aiogym.generation.factory import make_episode_sampler
 from aiogym.rl.episode_env import (
     make_track_episode_sampler,
     make_track_training_base_env,

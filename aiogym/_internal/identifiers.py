@@ -40,7 +40,7 @@ def require_canonical_scenario_id(value: str) -> str:
 
 
 def scenario_catalog_text(values: Sequence[str]) -> str:
-    """Render canonical IDs and their accepted aliases for error messages."""
+    """Render canonical scenario IDs for error messages."""
 
     rows = []
     for internal in sorted(values, key=canonical_scenario_id):

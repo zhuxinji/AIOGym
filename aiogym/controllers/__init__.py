@@ -5,18 +5,7 @@ from aiogym._internal.lazy import exported_dir, resolve_export
 
 
 _EXPORTS = {
-    "PolicyController": ".adapters",
-    "SB3PolicyController": ".adapters",
-    "as_controller": ".adapters",
-    "load_controller_config": ".configs",
-    "CONTROLLER_API_VERSION": ".contracts",
     "Controller": ".contracts",
-    "ControllerContext": ".contracts",
-    "build_context": ".contracts",
-    "make_meas": ".contracts",
-    "validate_action": ".contracts",
-    "BUILTIN_CONTROLLERS": ".registry",
-    "ControllerFactory": ".registry",
     "make_controller": ".registry",
     "register_controller": ".registry",
     "unregister_controller": ".registry",

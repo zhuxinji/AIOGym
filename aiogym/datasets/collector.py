@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from aiogym.generation import EpisodeSpec
+from aiogym.generation.specs import EpisodeSpec
 
 from .schema import DatasetEpisode
 
@@ -119,12 +119,8 @@ def collect_episode(
     if getattr(env, "action_mode", None) != "actuator":
         raise ValueError("Dataset v2 collection currently requires actuator mode")
     collector = get_collector(collector_id)
-    from aiogym.controllers import (
-        PolicyController,
-        as_controller,
-        build_context,
-        validate_action,
-    )
+    from aiogym.controllers.adapters import PolicyController, as_controller
+    from aiogym.controllers.contracts import build_context, validate_action
 
     if policy is None and collector_id == "safe_excitation":
         policy = SmoothExcitationPolicy()
@@ -142,6 +138,22 @@ def collect_episode(
         )
     observation, reset_info = env.reset(
         options={"episode_spec": episode_spec}
+    )
+    recorded_initial_state = np.asarray(
+        env.integ.x,
+        dtype=np.float32,
+    ).copy()
+    requested_initial_state = np.asarray(
+        episode_spec.initial_state,
+        dtype=np.float64,
+    ).reshape(-1)
+    reset_state_delta_linf = float(
+        np.max(
+            np.abs(
+                requested_initial_state
+                - recorded_initial_state.astype(np.float64)
+            )
+        )
     )
     env.action_space.seed(episode_spec.component_seeds["exploration"])
     if controller is not None:
@@ -170,7 +182,11 @@ def collect_episode(
     done = False
     step = 0
     while not done and (max_steps is None or step < int(max_steps)):
-        state = np.asarray(env.integ.x, dtype=np.float32).copy()
+        state = (
+            recorded_initial_state.copy()
+            if step == 0
+            else np.asarray(env.integ.x, dtype=np.float32).copy()
+        )
         reference = np.asarray(env.y_sp, dtype=np.float32).copy()
         disturbance = (
             np.asarray(
@@ -290,7 +306,9 @@ def collect_episode(
         "collector_quality_tag": collector.quality_tag,
         "collector_behavior": behavior_metadata,
         "plant_parameters": episode_spec.plant_parameters,
-        "initial_state": list(episode_spec.initial_state),
+        "initial_state": recorded_initial_state.tolist(),
+        "requested_initial_state": requested_initial_state.tolist(),
+        "reset_state_delta_linf": reset_state_delta_linf,
         "reference_schedule": [
             copy.deepcopy(event)
             for event in episode_spec.reference_schedule

@@ -5,17 +5,21 @@ from copy import deepcopy
 import numpy as np
 import pytest
 
-from aiogym.generation import (
+from aiogym.generation.adapters import distribution_spec_from_case
+from aiogym.generation.samplers import (
+    FixedCaseEpisodeSampler,
+    episode_spec_from_case,
+)
+from aiogym.generation.seed_tree import (
+    SEED_COMPONENTS,
+    SeedTree,
+    seed_namespace,
+)
+from aiogym.generation.specs import (
     DISTRIBUTION_SCHEMA_VERSION,
     EPISODE_SPEC_SCHEMA_VERSION,
-    SEED_COMPONENTS,
     DistributionSpec,
     EpisodeSpec,
-    FixedCaseEpisodeSampler,
-    SeedTree,
-    distribution_spec_from_case,
-    episode_spec_from_case,
-    seed_namespace,
 )
 from aiogym.tests._env import make_test_env as make_env
 

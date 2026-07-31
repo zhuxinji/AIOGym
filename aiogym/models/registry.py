@@ -34,18 +34,6 @@ MODELS = {
 BUILTIN_MODELS = dict(MODELS)
 
 
-def gym_id_name(scenario, model_factory=None):
-    factory = model_factory if model_factory is not None else MODELS[scenario]
-    explicit = getattr(factory, "gym_id", None)
-    if explicit:
-        return explicit
-    return "".join(part.capitalize() for part in scenario.split("_"))
-
-
-def builtin_gym_ids():
-    return {scenario: gym_id_name(scenario, factory) for scenario, factory in BUILTIN_MODELS.items()}
-
-
 def validate_model_contract(model):
     required_methods = (
         "action_dim", "initial_state", "action_vector",

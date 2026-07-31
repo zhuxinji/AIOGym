@@ -13,7 +13,9 @@ import numpy as np
 import pytest
 
 from aiogym.tests._env import make_test_env as make_env
-from aiogym.models import RHO_CP, apply_model_params, load_parameter_profile, make_model
+from aiogym.models.core import RHO_CP
+from aiogym.models.parameter_profiles import load_parameter_profile
+from aiogym.models.registry import apply_model_params, make_model
 
 
 @pytest.fixture

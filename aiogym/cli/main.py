@@ -10,7 +10,7 @@ from aiogym.catalog import (
     list_controllers,
     list_scenarios,
 )
-from aiogym.benchmarks import list_tracks
+from aiogym.benchmarks.tracks.registry import list_tracks
 
 
 def _benchmark(argv):
@@ -89,21 +89,34 @@ def _list_controllers(_args):
 
 
 def _list_algorithms(_args):
-    from aiogym.rl import list_algorithms
+    from aiogym.rl.config import list_algorithms
 
     _print_items(list_algorithms())
 
 
-def _add_delegate(subparsers, name, help_text, handler):
-    parser = subparsers.add_parser(
-        name,
-        help=help_text,
-        description=f"Pass options through to the {help_text} command.",
-        add_help=False,
-    )
-    parser.add_argument("arguments", nargs=argparse.REMAINDER)
-    parser.set_defaults(handler=lambda args: handler(args.arguments))
-    return parser
+_COMMANDS = {
+    "benchmark": _benchmark,
+    "collect": _collect,
+    "evaluate": _evaluate,
+    "final-test": _final_test,
+    "train": _train,
+    "tune": _tune,
+}
+
+_ARTIFACT_COMMANDS = {
+    "check": _artifact_check,
+    "compact": _artifact_compact,
+    "report": _artifact_report,
+}
+
+_COMMAND_HELP = {
+    "benchmark": "run an official Track benchmark",
+    "collect": "collect a Dataset v2 bundle",
+    "evaluate": "evaluate one checkpoint on validation seeds",
+    "final-test": "run a locked one-shot final test",
+    "train": "train from one resolved configuration",
+    "tune": "tune on validation seeds",
+}
 
 
 def build_parser():
@@ -137,71 +150,43 @@ def build_parser():
     )
     algorithms.set_defaults(handler=_list_algorithms, selected_parser=algorithms)
 
-    benchmark = commands.add_parser("benchmark", help="run benchmarks")
-    benchmark.set_defaults(selected_parser=benchmark)
-    _add_delegate(
-        commands,
-        "collect",
-        "Dataset v2 collector",
-        _collect,
-    )
-    _add_delegate(
-        commands,
-        "final-test",
-        "locked one-shot final test",
-        _final_test,
-    )
-    _add_delegate(
-        commands,
-        "evaluate",
-        "validation-only checkpoint evaluation",
-        _evaluate,
-    )
-    _add_delegate(
-        commands,
-        "tune",
-        "validation-only hyperparameter tuning",
-        _tune,
-    )
-
-    _add_delegate(
-        commands,
-        "train",
-        "config-first reinforcement-learning training",
-        _train,
-    )
+    for name, help_text in _COMMAND_HELP.items():
+        delegated = commands.add_parser(name, help=help_text, add_help=False)
+        delegated.set_defaults(selected_parser=delegated)
 
     artifacts = commands.add_parser("artifacts", help="inspect benchmark artifacts")
     artifacts.set_defaults(selected_parser=artifacts)
     artifact_commands = artifacts.add_subparsers(dest="artifact_command", metavar="COMMAND")
-    _add_delegate(artifact_commands, "report", "artifact report", _artifact_report)
-    _add_delegate(artifact_commands, "check", "artifact validator", _artifact_check)
-    _add_delegate(
-        artifact_commands,
-        "compact",
-        "artifact compactor",
-        _artifact_compact,
-    )
+    for name in _ARTIFACT_COMMANDS:
+        delegated = artifact_commands.add_parser(name, add_help=False)
+        delegated.set_defaults(selected_parser=delegated)
 
     return parser
 
 
+def _dispatch(raw_args):
+    if not raw_args:
+        return None
+    if raw_args[0] in _COMMANDS:
+        return _COMMANDS[raw_args[0]](raw_args[1:])
+    if raw_args[0] == "artifacts" and len(raw_args) > 1:
+        handler = _ARTIFACT_COMMANDS.get(raw_args[1])
+        if handler is not None:
+            return handler(raw_args[2:])
+    return None
+
+
 def main(argv=None):
     raw_args = list(sys.argv[1:] if argv is None else argv)
-    delegated_commands = {
-        ("benchmark",): _benchmark,
-        ("train",): _train,
-        ("evaluate",): _evaluate,
-        ("tune",): _tune,
-        ("collect",): _collect,
-        ("final-test",): _final_test,
-        ("artifacts", "report"): _artifact_report,
-        ("artifacts", "check"): _artifact_check,
-        ("artifacts", "compact"): _artifact_compact,
-    }
-    for route, handler in delegated_commands.items():
-        if tuple(raw_args[:len(route)]) == route:
-            return handler(raw_args[len(route):])
+    if raw_args and (
+        raw_args[0] in _COMMANDS
+        or (
+            raw_args[0] == "artifacts"
+            and len(raw_args) > 1
+            and raw_args[1] in _ARTIFACT_COMMANDS
+        )
+    ):
+        return _dispatch(raw_args)
 
     parser = build_parser()
     args = parser.parse_args(raw_args)

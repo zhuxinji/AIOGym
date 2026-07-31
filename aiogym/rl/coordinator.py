@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from aiogym.generation import SeedTree
+from aiogym.generation.seed_tree import SeedTree
 
 
 @dataclass(frozen=True)

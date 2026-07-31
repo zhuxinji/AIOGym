@@ -9,7 +9,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from aiogym.benchmarks import TrackSpec, evaluate_policy_on_track, load_track
+from aiogym.benchmarks.evaluation import _evaluate_policy_on_track_split
+from aiogym.benchmarks.tracks.registry import load_track
+from aiogym.benchmarks.tracks.schema import TrackSpec
 from aiogym.evaluation.statistics import build_final_statistical_report
 
 
@@ -63,7 +65,7 @@ class FinalTestLock:
         *,
         baseline: str | None = None,
         bootstrap_repetitions: int = 2000,
-        evaluate_fn=evaluate_policy_on_track,
+        _evaluate_test_fn=None,
     ) -> dict[str, Any]:
         state = self._read()
         self._validate_identity(state)
@@ -90,8 +92,13 @@ class FinalTestLock:
         )
         self._write(state)
         try:
+            evaluate_test = (
+                _evaluate_policy_on_track_split
+                if _evaluate_test_fn is None
+                else _evaluate_test_fn
+            )
             evaluations = {
-                algorithm: evaluate_fn(
+                algorithm: evaluate_test(
                     controller,
                     self.track,
                     split="test",

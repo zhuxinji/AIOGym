@@ -1,13 +1,7 @@
-"""Internal builders consuming resolved environment specifications."""
+"""Internal Track/Case builders consuming resolved specifications."""
 from __future__ import annotations
 
-from aiogym._environment.spec import ResolvedEnvSpec, resolve_env_spec
-
-
-def build_environment(spec: ResolvedEnvSpec):
-    from aiogym.env import _AIOGymEnv
-
-    return _AIOGymEnv(spec)
+from aiogym._environment.factory import make_env
 
 
 def build_case_environment(
@@ -17,16 +11,14 @@ def build_case_environment(
     *,
     info_level: str = "full",
 ):
-    return build_environment(
-        resolve_env_spec(
-            config={
-                "scenario": scenario,
-                "case": case.profile,
-                "reward_spec": reward_spec,
-                "info_level": info_level,
-                "environment": {},
-            }
-        )
+    return make_env(
+        config={
+            "scenario": scenario,
+            "case": case.profile,
+            "reward_spec": reward_spec,
+            "info_level": info_level,
+            "environment": {},
+        }
     )
 
 
@@ -53,7 +45,7 @@ def build_track_case_environment(
     }
     if profile_timing:
         environment["profile_timing"] = True
-    spec = resolve_env_spec(
+    env = make_env(
         config={
             "scenario": track.scenario,
             "case": case.profile,
@@ -62,7 +54,6 @@ def build_track_case_environment(
             "environment": environment,
         }
     )
-    env = build_environment(spec)
     from aiogym.rl.observations import (
         ObservationContract,
         wrap_observation_contract,
@@ -86,6 +77,5 @@ def build_track_case_environment(
 
 __all__ = [
     "build_case_environment",
-    "build_environment",
     "build_track_case_environment",
 ]

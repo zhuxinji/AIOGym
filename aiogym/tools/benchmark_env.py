@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from aiogym.benchmarks import load_track
+from aiogym.benchmarks.tracks.registry import load_track
 from aiogym.rl.episode_env import make_track_training_env
 from aiogym.rl.profiler import profile_environments
 

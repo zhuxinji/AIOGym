@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as dataclass_replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -12,12 +12,195 @@ from typing import Any
 
 RL_TRAINING_CONFIG_SCHEMA_VERSION = "aiogym.rl_training_config.v2"
 _ALGORITHMS = frozenset({"bc", "ppo", "rlpd", "sac", "td3"})
+_ALGORITHM_FIELDS = {
+    "bc": frozenset({"batch_size", "hidden", "learning_rate"}),
+    "sac": frozenset(
+        {
+            "batch_size",
+            "gamma",
+            "learning_rate",
+            "policy",
+            "rollout_vector_steps",
+            "subproc_start_method",
+            "tau",
+            "tensorboard_log",
+            "torch_threads",
+            "utd_ratio",
+            "vector_backend",
+            "verbose",
+        }
+    ),
+    "td3": frozenset(
+        {
+            "batch_size",
+            "gamma",
+            "learning_rate",
+            "policy",
+            "rollout_vector_steps",
+            "subproc_start_method",
+            "tau",
+            "tensorboard_log",
+            "torch_threads",
+            "utd_ratio",
+            "vector_backend",
+            "verbose",
+        }
+    ),
+    "ppo": frozenset(
+        {
+            "batch_size",
+            "gamma",
+            "learning_rate",
+            "n_steps",
+            "policy",
+            "subproc_start_method",
+            "tensorboard_log",
+            "torch_threads",
+            "vector_backend",
+            "verbose",
+        }
+    ),
+    "rlpd": frozenset(
+        {
+            "batch_size",
+            "bc_steps",
+            "n_critics",
+            "offline_fraction",
+            "pretrain_updates",
+            "utd_ratio",
+        }
+    ),
+}
+_REPLAY_FIELDS = {
+    "bc": frozenset(),
+    "ppo": frozenset(),
+    "rlpd": frozenset({"capacity", "schema"}),
+    "sac": frozenset({"capacity", "learning_starts", "schema"}),
+    "td3": frozenset({"capacity", "learning_starts", "schema"}),
+}
+_WORKFLOW_FIELDS = {
+    "evaluation": frozenset({"every_transitions"}),
+    "checkpointing": frozenset({"every_transitions"}),
+    "output": frozenset(
+        {
+            "artifact_dir",
+            "directory",
+            "name",
+            "onnx",
+            "rollout_steps",
+            "save_rollout",
+        }
+    ),
+}
+_ALGORITHM_DEFAULTS = {
+    "bc": {
+        "batch_size": 256,
+        "hidden": 64,
+        "learning_rate": 1e-3,
+    },
+    "sac": {
+        "batch_size": 256,
+        "gamma": 0.99,
+        "learning_rate": 3e-4,
+        "policy": "MlpPolicy",
+        "rollout_vector_steps": 1,
+        "subproc_start_method": "fork",
+        "tau": 0.005,
+        "tensorboard_log": None,
+        "torch_threads": 2,
+        "utd_ratio": 1.0,
+        "vector_backend": "subproc",
+        "verbose": 1,
+    },
+    "td3": {
+        "batch_size": 256,
+        "gamma": 0.99,
+        "learning_rate": 3e-4,
+        "policy": "MlpPolicy",
+        "rollout_vector_steps": 1,
+        "subproc_start_method": "fork",
+        "tau": 0.005,
+        "tensorboard_log": None,
+        "torch_threads": 2,
+        "utd_ratio": 1.0,
+        "vector_backend": "subproc",
+        "verbose": 1,
+    },
+    "ppo": {
+        "batch_size": 256,
+        "gamma": 0.99,
+        "learning_rate": 3e-4,
+        "n_steps": 2048,
+        "policy": "MlpPolicy",
+        "subproc_start_method": "fork",
+        "tensorboard_log": None,
+        "torch_threads": 2,
+        "vector_backend": "subproc",
+        "verbose": 1,
+    },
+    "rlpd": {
+        "batch_size": 256,
+        "bc_steps": 4000,
+        "n_critics": 5,
+        "offline_fraction": 0.5,
+        "pretrain_updates": 5000,
+        "utd_ratio": 5.0,
+    },
+}
+_REPLAY_DEFAULTS = {
+    "bc": {},
+    "ppo": {},
+    "rlpd": {"capacity": 1_000_000},
+    "sac": {"capacity": 300_000, "learning_starts": 100},
+    "td3": {"capacity": 300_000, "learning_starts": 100},
+}
+_EVALUATION_DEFAULTS = {
+    "bc": {},
+    "ppo": {"every_transitions": 10_000},
+    "rlpd": {"every_transitions": 2_500},
+    "sac": {"every_transitions": 10_000},
+    "td3": {"every_transitions": 10_000},
+}
+_OUTPUT_DEFAULTS = {
+    "bc": {},
+    "ppo": {"onnx": False, "rollout_steps": None, "save_rollout": True},
+    "rlpd": {"onnx": False, "rollout_steps": None, "save_rollout": False},
+    "sac": {"onnx": False, "rollout_steps": None, "save_rollout": True},
+    "td3": {"onnx": False, "rollout_steps": None, "save_rollout": True},
+}
 
 
 def list_algorithms() -> tuple[str, ...]:
     """Return algorithms supported by the stable config-first runner."""
 
     return tuple(sorted(_ALGORITHMS))
+
+
+def resolve_training_defaults(config: "RLTrainingConfig") -> "RLTrainingConfig":
+    """Materialize backend defaults before hashing or execution."""
+
+    if not isinstance(config, RLTrainingConfig):
+        raise TypeError("config must be an RLTrainingConfig")
+    algorithm_id = config.algorithm_id
+    return dataclass_replace(
+        config,
+        algorithm={
+            **_ALGORITHM_DEFAULTS[algorithm_id],
+            **dict(config.algorithm),
+        },
+        replay={
+            **_REPLAY_DEFAULTS[algorithm_id],
+            **dict(config.replay),
+        },
+        evaluation={
+            **_EVALUATION_DEFAULTS[algorithm_id],
+            **dict(config.evaluation),
+        },
+        output={
+            **_OUTPUT_DEFAULTS[algorithm_id],
+            **dict(config.output),
+        },
+    )
 
 
 @dataclass(frozen=True)
@@ -81,6 +264,29 @@ class RLTrainingConfig:
                 raise TypeError(f"{name} must be a mapping")
             plain = _json_mapping(name, value)
             object.__setattr__(self, name, _freeze_json(plain))
+        _reject_unknown_mapping_fields(
+            f"algorithm for {algorithm_id}",
+            self.algorithm,
+            _ALGORITHM_FIELDS[algorithm_id],
+        )
+        _reject_unknown_mapping_fields(
+            f"replay for {algorithm_id}",
+            self.replay,
+            _REPLAY_FIELDS[algorithm_id],
+        )
+        for name, allowed in _WORKFLOW_FIELDS.items():
+            _reject_unknown_mapping_fields(
+                name,
+                getattr(self, name),
+                allowed,
+            )
+        utd_ratio = self.utd_ratio
+        if self.algorithm_id == "rlpd" and (
+            utd_ratio <= 0.0 or not utd_ratio.is_integer()
+        ):
+            raise ValueError(
+                "RLPD algorithm.utd_ratio must be a positive integer"
+            )
         seeds = tuple(self.validation_seeds)
         if (
             not seeds
@@ -96,17 +302,8 @@ class RLTrainingConfig:
                 "validation_seeds must be unique non-negative integers"
             )
         object.__setattr__(self, "validation_seeds", seeds)
-        if self.resume_mode not in {
-            "restart_episode",
-            "exact_single_process",
-        }:
-            raise ValueError(
-                "resume_mode must be restart_episode or exact_single_process"
-            )
-        if self.resume_mode == "exact_single_process" and self.n_envs != 1:
-            raise ValueError(
-                "exact_single_process resume requires n_envs=1"
-            )
+        if self.resume_mode != "restart_episode":
+            raise ValueError("resume_mode must be 'restart_episode'")
         for name in (
             "resume_checkpoint",
             "dataset_id",
@@ -139,7 +336,12 @@ class RLTrainingConfig:
             if self.algorithm_id == "rlpd"
             else 1.0
         )
-        value = float(self.algorithm.get("utd_ratio", default))
+        raw_value = self.algorithm.get("utd_ratio", default)
+        if isinstance(raw_value, bool) or not isinstance(
+            raw_value, (int, float)
+        ):
+            raise TypeError("algorithm.utd_ratio must be a number")
+        value = float(raw_value)
         if value < 0.0:
             raise ValueError("algorithm.utd_ratio must be non-negative")
         if self.algorithm_id in {"bc", "ppo"} and value != 0.0:
@@ -238,6 +440,18 @@ def _json_mapping(name: str, value: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(plain, dict):
         raise TypeError(f"{name} must be a mapping")
     return plain
+
+
+def _reject_unknown_mapping_fields(
+    name: str,
+    value: Mapping[str, Any],
+    allowed: frozenset[str],
+) -> None:
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise ValueError(
+            f"unknown {name} field(s): " + ", ".join(unknown)
+        )
 
 
 def _freeze_json(value):

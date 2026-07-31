@@ -8,12 +8,13 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Sequence
 
-from .adapters import build_training_adapter
+from .backends import run_backend, validate_backend_result
 from .config import RLTrainingConfig
+from .lifecycle import finalize_training_lifecycle
 from .plan import ResolvedTrainingPlan, resolve_training_plan
 
 
-RUN_RESULT_SCHEMA_VERSION = "aiogym.run_result.v1"
+RUN_RESULT_SCHEMA_VERSION = "aiogym.run_result.v3"
 
 
 @dataclass(frozen=True)
@@ -28,8 +29,10 @@ class RunResult:
     artifact_dir: str
     resolved_config_path: str
     validation_plan_hash: str
-    adapter_state: dict[str, Any]
+    policy_sha256: str
+    backend: dict[str, Any]
     validation: dict[str, Any] = field(default_factory=dict)
+    artifact_check: dict[str, Any] = field(default_factory=dict)
     distribution_id: str | None = None
     schema_version: str = RUN_RESULT_SCHEMA_VERSION
 
@@ -46,8 +49,12 @@ class RunResult:
             "artifact_dir": self.artifact_dir,
             "resolved_config_path": self.resolved_config_path,
             "validation_plan_hash": self.validation_plan_hash,
-            "adapter_state": dict(self.adapter_state),
+            "policy_sha256": self.policy_sha256,
+            "backend": dict(self.backend),
             "validation": _compact_validation(self.validation),
+            "artifact_check": _compact_artifact_check(
+                self.artifact_check
+            ),
             "distribution_id": self.distribution_id,
         }
 
@@ -56,7 +63,8 @@ def run_experiment(
     config: RLTrainingConfig,
     *,
     validation_plan=None,
-    adapter_factory=build_training_adapter,
+    backend_runner=run_backend,
+    lifecycle_finalizer=finalize_training_lifecycle,
 ) -> RunResult:
     """Resolve, execute, and report one complete training lifecycle."""
 
@@ -67,11 +75,9 @@ def run_experiment(
     plan.output_dir.mkdir(parents=True, exist_ok=True)
     plan.artifact_dir.mkdir(parents=True, exist_ok=True)
     _atomic_json(plan.resolved_config_path, plan.config.as_dict())
-    adapter = adapter_factory(plan)
-    adapter.build(plan)
-    adapter.train_chunk(plan.config.total_transitions)
-    adapter.save_policy(plan.policy_path)
-    validation = _load_validation_artifact(plan.artifact_dir)
+    backend_result = backend_runner(plan)
+    validate_backend_result(plan, backend_result)
+    lifecycle = lifecycle_finalizer(plan, backend_result)
     result = RunResult(
         config_hash=plan.config.config_hash,
         track_id=plan.track.id,
@@ -83,8 +89,10 @@ def run_experiment(
         artifact_dir=str(plan.artifact_dir),
         resolved_config_path=str(plan.resolved_config_path),
         validation_plan_hash=plan.validation_plan.plan_hash,
-        adapter_state=adapter.state_dict(),
-        validation=validation,
+        policy_sha256=lifecycle.policy_sha256,
+        backend=backend_result.compact_summary(),
+        validation=lifecycle.validation,
+        artifact_check=lifecycle.artifact_check,
         distribution_id=plan.track.train_distribution_id,
     )
     _atomic_json(
@@ -149,16 +157,6 @@ def _validate_external_plan(plan: ResolvedTrainingPlan, validation_plan) -> None
         raise ValueError("validation plan seeds do not match config")
 
 
-def _load_validation_artifact(artifact_dir: Path) -> dict[str, Any]:
-    path = artifact_dir / "benchmark.json"
-    if not path.is_file():
-        return {}
-    with path.open(encoding="utf-8") as stream:
-        payload = json.load(stream)
-    evaluation = payload.get("track_evaluation")
-    return dict(evaluation) if isinstance(evaluation, dict) else {}
-
-
 def _summarize_validations(results) -> dict[str, Any]:
     evaluations = [
         result.validation
@@ -199,6 +197,16 @@ def _compact_validation(evaluation) -> dict[str, Any]:
         "episode_plan_hash": evaluation.get("episode_plan_hash"),
         "case_count": evaluation.get("case_count"),
         "aggregate": aggregate,
+    }
+
+
+def _compact_artifact_check(check) -> dict[str, Any]:
+    if not check:
+        return {}
+    return {
+        "schema_version": check.get("schema_version"),
+        "ok": bool(check.get("ok")),
+        "failed": list(check.get("failed") or ()),
     }
 
 

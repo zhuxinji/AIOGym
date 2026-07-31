@@ -25,7 +25,6 @@ oracle = [
 rl = [
   "stable-baselines3>=2.3",
   "torch>=2.2",
-  "onnx>=1.16",
 ]
 onnx = [
   "onnx>=1.16",
@@ -76,7 +75,6 @@ packages = [
   "aiogym._environment",
   "aiogym._internal",
   "aiogym.cli",
-  "aiogym.compat",
   "aiogym.benchmarks",
   "aiogym.benchmarks.anchors",
   "aiogym.benchmarks.tracks",
@@ -94,7 +92,7 @@ packages = [
   "aiogym.models.cases",
   "aiogym.rewards",
   "aiogym.rl",
-  "aiogym.rl.adapters",
+  "aiogym.rl.backends",
   "aiogym.tools",
 ]
 

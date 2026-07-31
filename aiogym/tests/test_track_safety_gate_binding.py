@@ -34,7 +34,6 @@ def test_builtin_track_binds_declared_gate():
     output = evaluate_policy_on_track(
         object(),
         track,
-        split="validation",
         base_seeds=[10],
         env_factory=FakeEnv,
         evaluate_fn=evaluate,
@@ -50,7 +49,6 @@ def test_builtin_track_rejects_gate_override():
         evaluate_policy_on_track(
             object(),
             track,
-            split="validation",
             safety_gate_spec=SafetyGateSpec(mode="recovery"),
         )
 

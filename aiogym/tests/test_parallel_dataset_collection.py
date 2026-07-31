@@ -27,7 +27,7 @@ def test_worker_count_does_not_change_episode_or_collector_identities(
     tmp_path,
 ):
     serial = _config(tmp_path / "serial", 1)
-    parallel = _config(tmp_path / "parallel", 4)
+    parallel = _config(tmp_path / "parallel", 2)
     collect_dataset(serial)
     collect_dataset(parallel)
 
@@ -46,6 +46,10 @@ def test_worker_count_does_not_change_episode_or_collector_identities(
     assert identities(serial.output) == identities(parallel.output)
     parallel_records = DatasetReader(parallel.output).metadata_records()
     assert [row["episode_index"] for row in parallel_records] == [0, 1]
+    for record in parallel_records:
+        metadata = record["episode"]["metadata"]
+        assert "requested_initial_state" in metadata
+        assert "reset_state_delta_linf" in metadata
 
 
 def test_resume_continues_after_max_committed_episode_index(tmp_path):

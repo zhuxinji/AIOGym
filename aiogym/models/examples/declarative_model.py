@@ -10,7 +10,7 @@ if __package__ is None or __package__ == "":
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
-from aiogym.env_factory import make_env
+from aiogym import make_env
 from aiogym.models import define_model, register_model, unregister_model
 
 

@@ -23,7 +23,7 @@ import math
 import numpy as np
 
 from .._internal.validation import nonnegative_float, positive_float, positive_int
-from ..rewards import get_reward_spec
+from ..rewards.registry import get_reward_spec
 
 try:
     import casadi as ca
@@ -31,7 +31,7 @@ try:
 except (ImportError, OSError):          # pragma: no cover
     _HAVE_CASADI = False
 
-from ..models import make_model
+from ..models.registry import make_model
 
 
 def copy_economic_config(model):

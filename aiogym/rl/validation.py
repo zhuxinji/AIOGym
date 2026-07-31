@@ -8,8 +8,10 @@ from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 
-from aiogym.benchmarks import TrackSpec, evaluate_policy_on_track, load_track
-from aiogym.generation import episode_spec_from_case
+from aiogym.benchmarks.evaluation import evaluate_policy_on_track
+from aiogym.benchmarks.tracks.registry import load_track
+from aiogym.benchmarks.tracks.schema import TrackSpec
+from aiogym.generation.samplers import episode_spec_from_case
 
 
 VALIDATION_PLAN_SCHEMA_VERSION = "aiogym.validation_plan.v1"
@@ -288,7 +290,6 @@ def evaluate_validation_policy(
     evaluation = evaluate_fn(
         controller,
         plan.track,
-        split="validation",
         base_seeds=plan.base_seeds,
         include_episodes=include_episodes,
         episode_plan=plan,

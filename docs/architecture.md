@@ -25,17 +25,18 @@ population.
 
 ```text
 aiogym/
-├── env_factory.py              sole public environment constructor
-├── env.py                      private Gymnasium environment composition
-├── _environment/               resolved spec, builder, runtime mixins
+├── _environment/               private environment implementation
+│   ├── factory.py              implementation behind public make_env()
 │   ├── spec.py                 immutable ResolvedEnvSpec + resolver
-│   ├── builder.py              sole _AIOGymEnv construction site
+│   ├── runtime.py              sole concrete Gymnasium environment
+│   ├── builder.py              Track-specific resolved-spec builders
 │   └── realism.py              EpisodeSpec sensor/actuator execution
 ├── models/
 │   ├── core.py                 process-model contract
 │   ├── integration.py          numerical integration
 │   ├── scenarios/              built-in process models
-│   ├── parameter_profiles/     model parameter provenance
+│   ├── parameter_profiles.py   parameter-profile loading and validation
+│   ├── parameters/             built-in parameter provenance JSON
 │   └── cases/                  Case schema, registry, built-in JSON
 ├── rewards/
 │   ├── specs.py                RewardSpec declarations
@@ -51,7 +52,6 @@ aiogym/
 │   ├── statistics.py           IQM, bootstrap, final score matrices
 │   ├── execution/              evaluator and rollout recorder
 │   ├── artifact/               current writers, plots, checks, reports
-│   └── legacy_artifacts.py     isolated offline historical reader
 ├── benchmarks/
 │   └── tracks/                 Track schema, registry, built-in JSON
 ├── generation/                 distributions, episodes, seeds, resolvers
@@ -60,11 +60,10 @@ aiogym/
 │   └── registry.py             versioned distribution IDs
 ├── datasets/                   episode schema, atomic shards, readers
 │   ├── collector.py            collector provenance and v2 collection
-│   ├── migration.py            Transition v1 to Dataset v2
 │   ├── quality.py              bounded-memory coverage reports
 │   └── minari_adapter.py       optional lossless sidecar conversion
 ├── rl/                         unified config, preprocessing, replay, trainers
-│   ├── algorithm_registry.py   SAC/TD3/PPO adapters
+│   ├── backends/               direct BC, SB3, and RLPD training kernels
 │   ├── coordinator.py          global episode assignment
 │   ├── checkpoints.py          atomic restart-episode resume contract
 │   ├── dataset_replay.py       immutable Dataset v2 prior replay
@@ -72,6 +71,7 @@ aiogym/
 │   ├── behavior_cloning.py     offline data-alignment sanity check
 │   ├── online_collection.py    batched normalized-action collection
 │   ├── validation.py           fixed plans and eligible checkpoint selection
+│   ├── lifecycle.py            shared validation/artifact finalization
 │   ├── hpo.py                  benchmark-immutable Optuna studies
 │   ├── final_test.py           one-shot locked test evaluation
 │   ├── observations.py         history and recurrent policy contracts
@@ -105,6 +105,12 @@ aiogym/
   binds the prior dataset ID and manifest hash.
 - Validation checkpoint selection cannot accept test results. Algorithms share
   one resolved EpisodeSpec plan; only eligible checkpoints can become best.
+- The runner's resolved config is the unique training identity consumed by
+  private backend kernels. A backend returns only a serializable selected
+  checkpoint result; it does not write final benchmark artifacts or return a
+  live controller. The shared lifecycle verifies the checkpoint digest, loads
+  it through the canonical policy loader, runs fixed validation, and is the
+  sole writer of standard artifacts.
 - Final test evaluation is one-shot and emits robust per-seed/per-case
   statistics through `evaluation.statistics`.
 - Sensor bias, noise, drift, delay, dropout, and quantization and actuator
@@ -119,7 +125,8 @@ aiogym/
   cost channels; it never rewrites the scalar benchmark reward.
 - Artifact writers consume current result dictionaries and never normalize old
   schemas.
-- The historical reader is leaf-only and is not imported by live execution.
+- Live execution accepts current schemas only; legacy compatibility readers are
+  not shipped.
 
 ## Extension points
 

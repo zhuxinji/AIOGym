@@ -4,7 +4,7 @@ import math
 
 import pytest
 
-from aiogym.benchmarks import (
+from aiogym.benchmarks.ranking import (
     fixed_anchor_score,
     weighted_geometric_mean,
 )

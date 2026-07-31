@@ -4,14 +4,24 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from aiogym.datasets import DatasetEpisode, DatasetWriter
-from aiogym.rl.behavior_cloning import BehaviorCloningTrainer
+from aiogym.datasets.schema import DatasetEpisode
+from aiogym.datasets.writer import DatasetWriter
+from aiogym.rl.behavior_cloning import (
+    BehaviorCloningPolicy,
+    BehaviorCloningTrainer,
+)
 from aiogym.rl.config import RLTrainingConfig
 from aiogym.rl.dataset_replay import DatasetReplay
 from aiogym.rl.hybrid_replay import RLPDBatchSampler
 from aiogym.rl.replay import ReplayBuffer
-from aiogym.rl.rlpd import RLPD
+from aiogym.rl.policy_spec import (
+    POLICY_SPEC_SCHEMA_VERSION,
+    validate_policy_spec,
+)
+from aiogym.rl.rlpd import Actor, RLPD
 from aiogym.rl.training_artifacts import rl_payload
+from aiogym.rl.backends.bc import run_bc
+from aiogym.rl.plan import resolve_training_plan
 from aiogym.rl.online_collection import VectorOnlineCollector
 from aiogym.tests._env import make_test_env as make_env
 
@@ -36,6 +46,168 @@ def test_bc_reproduces_collector_on_tiny_dataset(tmp_path):
     target = episode.array("action_policy_normalized")
     assert np.mean((prediction - target) ** 2) < 1e-3
     assert report["final_mse"] < report["initial_mse"]
+
+
+def test_bc_checkpoint_is_self_describing_and_resume_compatible(
+    tmp_path,
+):
+    dataset_path = _dataset(
+        tmp_path,
+        episode_count=1,
+        constant_action=0.25,
+    )
+    trainer = BehaviorCloningTrainer(
+        DatasetReplay(dataset_path, seed=3),
+        hidden=16,
+        learning_rate=1e-2,
+        seed=4,
+    )
+    report = trainer.fit(steps=2, batch_size=8)
+    checkpoint = trainer.checkpoint_payload(report)
+    path = tmp_path / "bc.pt"
+    torch.save(checkpoint, path)
+    restored_payload = torch.load(
+        path,
+        map_location="cpu",
+        weights_only=False,
+    )
+
+    assert set(restored_payload) == {
+        "policy_spec",
+        "policy_state_dict",
+        "trainer",
+        "report",
+    }
+    spec = validate_policy_spec(restored_payload["policy_spec"])
+    assert spec["schema_version"] == POLICY_SPEC_SCHEMA_VERSION
+    assert spec["algorithm_id"] == "bc"
+    assert spec["network"]["hidden_sizes"] == [16, 16]
+    assert spec["action_contract"]["native"] == "normalized[-1,1]"
+    assert "optimizer" not in restored_payload["policy_state_dict"]
+    assert "dataset" not in restored_payload["policy_state_dict"]
+
+    policy = BehaviorCloningPolicy(
+        spec["observation_dim"],
+        spec["action_dim"],
+        hidden=spec["network"]["hidden_sizes"][0],
+    )
+    policy.model.load_state_dict(
+        restored_payload[spec["state_dict_key"]]
+    )
+    observation = np.asarray([[0.2, -0.3]], dtype=np.float32)
+    assert policy.normalized_action(observation) == pytest.approx(
+        trainer.policy.normalized_action(observation)
+    )
+
+    resumed = BehaviorCloningTrainer(
+        DatasetReplay(dataset_path, seed=999),
+        hidden=16,
+        learning_rate=1e-2,
+        seed=999,
+    )
+    resumed.load_state_dict(restored_payload["trainer"])
+    assert resumed.steps == trainer.steps
+    assert resumed.policy.normalized_action(
+        observation
+    ) == pytest.approx(trainer.policy.normalized_action(observation))
+
+
+def test_bc_backend_writes_policy_spec_and_policy_only_state(
+    tmp_path,
+):
+    dataset_path = _dataset(tmp_path, episode_count=1)
+    checkpoint_path = tmp_path / "bc-backend.pt"
+    config = RLTrainingConfig(
+        track_id="quadruple-regulation-generalist-v1",
+        algorithm_id="bc",
+        training_seed=0,
+        total_transitions=1,
+        n_envs=1,
+        algorithm={"hidden": 16},
+        output={
+            "directory": str(tmp_path),
+            "name": "bc-backend",
+        },
+        dataset_id="phase-e-prior-v2",
+        dataset_path=str(dataset_path),
+    )
+
+    plan = resolve_training_plan(config)
+    assert plan.policy_path == checkpoint_path
+    result = run_bc(plan)
+
+    assert result.policy_path == checkpoint_path
+    assert result.final_step == 1
+    assert result.checkpoint_selection == "final-fixed-dataset"
+    assert result.training_metadata["optimizer_steps"] == 1
+    checkpoint = torch.load(
+        checkpoint_path,
+        map_location="cpu",
+        weights_only=False,
+    )
+    assert checkpoint["policy_spec"]["algorithm_id"] == "bc"
+    assert checkpoint["policy_spec"]["network"]["hidden_sizes"] == [
+        16,
+        16,
+    ]
+    assert set(checkpoint["policy_state_dict"]) == set(
+        checkpoint["trainer"]["policy"]
+    )
+
+
+def test_rlpd_actor_only_checkpoint_excludes_training_state(tmp_path):
+    agent = RLPD(
+        2,
+        1,
+        hidden=16,
+        n_critics=2,
+        subset=1,
+        batch=4,
+        scenario="quadruple",
+        action_mode="actuator",
+        seed=11,
+    )
+    checkpoint = agent.inference_checkpoint()
+    path = tmp_path / "rlpd-actor.pt"
+    torch.save(checkpoint, path)
+    restored_payload = torch.load(
+        path,
+        map_location="cpu",
+        weights_only=False,
+    )
+
+    assert set(restored_payload) == {
+        "policy_spec",
+        "policy_state_dict",
+    }
+    assert {
+        "critics",
+        "targets",
+        "actor_optimizer",
+        "critic_optimizer",
+        "alpha_optimizer",
+        "online_replay",
+        "offline_replay",
+    }.isdisjoint(restored_payload)
+    spec = validate_policy_spec(restored_payload["policy_spec"])
+    actor = Actor(
+        spec["observation_dim"],
+        spec["action_dim"],
+        hidden=spec["network"]["hidden_sizes"][0],
+    )
+    actor.load_state_dict(restored_payload[spec["state_dict_key"]])
+    observation = torch.as_tensor(
+        [[0.2, -0.3]],
+        dtype=torch.float32,
+    )
+    with torch.no_grad():
+        mu, _ = actor(observation)
+        reconstructed = torch.tanh(mu).numpy()
+    expected = agent.policy_action_batch(
+        observation.numpy(),
+        deterministic=True,
+    )
+    assert reconstructed == pytest.approx(expected)
 
 
 def test_rlpd_batch_is_half_offline_half_online_in_canonical_mode(tmp_path):
@@ -99,6 +271,10 @@ def test_rlpd_resume_restores_buffers_and_rng(tmp_path):
         )
     agent.update()
     state = agent.state_dict()
+    assert state["policy_spec"]["algorithm_id"] == "rlpd"
+    assert set(state["policy_state_dict"]) == set(
+        agent.actor.state_dict()
+    )
     expected_batch = agent.sample_batch()
     expected_action = agent.policy_action_batch(
         np.asarray([[0.2, -0.3]], dtype=np.float32)
@@ -130,6 +306,21 @@ def test_rlpd_resume_restores_buffers_and_rng(tmp_path):
     assert actual_action == pytest.approx(expected_action)
     assert len(restored.online) == len(agent.online)
     assert restored.gradient_updates == agent.gradient_updates
+
+    incompatible = dict(state)
+    incompatible["schema_version"] = "aiogym.rlpd_state.v2"
+    rejected = RLPD(
+        2,
+        1,
+        hidden=16,
+        n_critics=2,
+        subset=1,
+        batch=4,
+        online_capacity=32,
+        seed=1000,
+    )
+    with pytest.raises(ValueError, match="unsupported RLPD checkpoint"):
+        rejected.load_state_dict(incompatible)
 
 
 def test_dataset_id_and_hash_enter_artifact(tmp_path):

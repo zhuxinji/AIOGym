@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..rewards import stage_reward
+from ..rewards.engine import stage_reward
 
 
 class TransitionRuntimeMixin:

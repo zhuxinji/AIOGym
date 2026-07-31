@@ -4,16 +4,17 @@ from __future__ import annotations
 import copy
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from aiogym.controllers import make_controller
+from aiogym.controllers.checkpoints import (
+    learned_policy_spec_for_environment,
+    load_policy_checkpoint,
+)
+from aiogym.controllers.registry import make_controller
 from aiogym.controllers.pid import PIDAgent
 from aiogym.rl.safety import ProjectionSafetyShield, SafetyShieldWrapper
-
-from .writer import file_sha256
 
 
 @dataclass(frozen=True)
@@ -349,44 +350,23 @@ def _checkpoint(env, episode_spec, options):
     weights /= np.sum(weights)
     rng = np.random.default_rng(episode_spec.component_seeds["policy"])
     selected = checkpoints[int(rng.choice(len(checkpoints), p=weights))]
-    path = Path(str(selected.get("path", "")))
+    path = str(selected.get("path", ""))
     expected_hash = str(selected.get("sha256", ""))
     algorithm_id = str(selected.get("algorithm_id", ""))
-    if not path.is_file():
-        raise FileNotFoundError(f"checkpoint not found: {path}")
-    actual_hash = file_sha256(path)
-    if expected_hash != actual_hash:
-        raise ValueError(
-            f"checkpoint SHA256 mismatch for {path}: "
-            f"expected {expected_hash}, got {actual_hash}"
-        )
-    from aiogym.controllers.adapters import SB3PolicyController
-
-    policy = SB3PolicyController.load(
-        str(path),
-        algo=algorithm_id,
-        action_mode="actuator",
-        normalized_actions=False,
+    policy_spec = learned_policy_spec_for_environment(
+        path,
+        algorithm_id,
+        expected_hash,
+        env,
     )
-    policy.checkpoint_metadata = {
-        "path": str(path),
-        "algorithm_id": algorithm_id,
-        "sha256": actual_hash,
-        "mixture_weight": float(selected.get("weight", 1.0)),
-    }
-    original_metadata = policy.metadata
-
-    def metadata():
-        return {
-            **original_metadata(),
-            "checkpoint": copy.deepcopy(policy.checkpoint_metadata),
-        }
-
-    policy.metadata = metadata
+    policy = load_policy_checkpoint(policy_spec)
+    policy.checkpoint_metadata["mixture_weight"] = float(
+        selected.get("weight", 1.0)
+    )
     return CollectorBehavior(
         env=env,
         policy=policy,
-        checkpoint_hash=actual_hash,
+        checkpoint_hash=policy_spec.sha256,
     )
 
 

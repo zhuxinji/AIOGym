@@ -7,14 +7,15 @@ import numpy as np
 import pytest
 
 import aiogym
-from aiogym.controllers import PolicyController
-from aiogym.evaluation import (
+from aiogym.controllers.adapters import PolicyController
+from aiogym.evaluation.execution import evaluate_controller
+from aiogym.evaluation.safety_gate import (
     SafetyGateSpec,
-    build_intervention_report,
-    evaluate_controller,
     evaluate_safety_gate,
 )
-from aiogym.generation import EpisodeSpec, episode_spec_from_case
+from aiogym.evaluation.statistics import build_intervention_report
+from aiogym.generation.samplers import episode_spec_from_case
+from aiogym.generation.specs import EpisodeSpec
 from aiogym.experimental.rl import (
     LagrangeMultiplier,
     LagrangianSAC,

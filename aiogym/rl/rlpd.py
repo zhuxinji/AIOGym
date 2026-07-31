@@ -9,13 +9,18 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as functional
 
+from aiogym.controllers.contracts import (
+    normalized_to_environment_action,
+)
+
 from .dataset_replay import DatasetReplay
 from .hybrid_replay import RLPDBatchSampler
+from .policy_spec import rlpd_policy_spec, validate_policy_spec
 from .replay import ReplayBuffer as _ReplayBuffer
 
 
 LOG_STD_MIN, LOG_STD_MAX = -5.0, 2.0
-RLPD_STATE_SCHEMA_VERSION = "aiogym.rlpd_state.v2"
+RLPD_STATE_SCHEMA_VERSION = "aiogym.rlpd_state.v3"
 
 
 def mlp(sizes, layernorm=False):
@@ -97,10 +102,23 @@ class RLPD:
         offline_fraction=0.5,
         canonical=True,
         seed=0,
+        scenario=None,
+        action_mode="actuator",
     ):
         self.device = torch.device(device)
         self.obs_dim = int(obs_dim)
         self.act_dim = int(act_dim)
+        self.hidden = int(hidden)
+        self.scenario = scenario
+        self.action_mode = str(action_mode)
+        if min(self.obs_dim, self.act_dim, self.hidden) <= 0:
+            raise ValueError("RLPD policy dimensions must be positive")
+        if self.scenario is not None and (
+            not isinstance(self.scenario, str) or not self.scenario
+        ):
+            raise ValueError("scenario must be null or non-empty")
+        if self.action_mode not in {"actuator", "setpoint"}:
+            raise ValueError("action_mode must be actuator or setpoint")
         self.gamma = float(gamma)
         self.tau = float(tau)
         self.batch = int(batch)
@@ -119,16 +137,20 @@ class RLPD:
 
         torch.manual_seed(self.seed)
         self._rng = np.random.default_rng(self.seed)
-        self.actor = Actor(obs_dim, act_dim, hidden).to(self.device)
+        self.actor = Actor(
+            self.obs_dim,
+            self.act_dim,
+            self.hidden,
+        ).to(self.device)
         self.critics = nn.ModuleList(
             [
-                Critic(obs_dim, act_dim, hidden)
+                Critic(self.obs_dim, self.act_dim, self.hidden)
                 for _ in range(self.n_critics)
             ]
         ).to(self.device)
         self.targets = nn.ModuleList(
             [
-                Critic(obs_dim, act_dim, hidden)
+                Critic(self.obs_dim, self.act_dim, self.hidden)
                 for _ in range(self.n_critics)
             ]
         ).to(self.device)
@@ -151,14 +173,6 @@ class RLPD:
         self.actor_updates = 0
         self.offline_samples = 0
         self.online_samples = 0
-
-    @staticmethod
-    def to_env(normalized_action):
-        return (np.asarray(normalized_action) + 1.0) * 0.5
-
-    @staticmethod
-    def to_sac(physical_action):
-        return np.asarray(physical_action) * 2.0 - 1.0
 
     def load_dataset(
         self,
@@ -229,15 +243,6 @@ class RLPD:
         )
         self.environment_transitions += 1
 
-    def push_physical(self, observation, action, reward, next_observation, done):
-        self.push(
-            observation,
-            self.to_sac(action),
-            reward,
-            next_observation,
-            done,
-        )
-
     @torch.no_grad()
     def policy_action_batch(self, observations, deterministic=False):
         value = torch.as_tensor(
@@ -261,7 +266,7 @@ class RLPD:
         """Controller-facing physical action for unwrapped evaluation envs."""
 
         normalized = self.policy_action(obs, deterministic=deterministic)
-        return np.clip(self.to_env(normalized), 0.0, 1.0).astype(np.float32)
+        return normalized_to_environment_action(normalized)
 
     def sample_batch(self) -> dict[str, np.ndarray]:
         batch = self._sample_numpy(self.batch)
@@ -418,6 +423,25 @@ class RLPD:
                 **export_options,
             )
 
+    def policy_spec(self) -> dict:
+        return rlpd_policy_spec(
+            self.obs_dim,
+            self.act_dim,
+            self.hidden,
+            scenario=self.scenario,
+            action_mode=self.action_mode,
+            log_std_bounds=(LOG_STD_MIN, LOG_STD_MAX),
+        )
+
+    def inference_checkpoint(self) -> dict:
+        return {
+            "policy_spec": self.policy_spec(),
+            "policy_state_dict": {
+                name: value.detach().cpu().clone()
+                for name, value in self.actor.state_dict().items()
+            },
+        }
+
     def state_dict(self):
         offline_state = None
         if isinstance(self.offline, DatasetReplay):
@@ -427,12 +451,12 @@ class RLPD:
             }
         return {
             "schema_version": RLPD_STATE_SCHEMA_VERSION,
+            **self.inference_checkpoint(),
             "dimensions": {
                 "observation": self.obs_dim,
                 "action": self.act_dim,
                 "critics": self.n_critics,
             },
-            "actor": self.actor.state_dict(),
             "critics": self.critics.state_dict(),
             "targets": self.targets.state_dict(),
             "actor_optimizer": self.a_opt.state_dict(),
@@ -453,8 +477,10 @@ class RLPD:
 
     def load_state_dict(self, state):
         if state.get("schema_version") != RLPD_STATE_SCHEMA_VERSION:
-            self._load_legacy_state_dict(state)
-            return
+            raise ValueError(
+                "unsupported RLPD checkpoint schema; expected "
+                f"{RLPD_STATE_SCHEMA_VERSION!r}"
+            )
         dimensions = state["dimensions"]
         if (
             int(dimensions["observation"]) != self.obs_dim
@@ -462,7 +488,23 @@ class RLPD:
             or int(dimensions["critics"]) != self.n_critics
         ):
             raise ValueError("RLPD checkpoint dimensions do not match")
-        self.actor.load_state_dict(state["actor"])
+        validated_spec = validate_policy_spec(state["policy_spec"])
+        if (
+            validated_spec["algorithm_id"] != "rlpd"
+            or validated_spec["observation_dim"] != self.obs_dim
+            or validated_spec["action_dim"] != self.act_dim
+            or validated_spec["network"]["hidden_sizes"]
+            != [self.hidden, self.hidden]
+            or validated_spec["action_mode"] != self.action_mode
+            or (
+                self.scenario is not None
+                and validated_spec["scenario"] != self.scenario
+            )
+        ):
+            raise ValueError(
+                "RLPD policy_spec does not match constructed agent"
+            )
+        self.actor.load_state_dict(state["policy_state_dict"])
         self.critics.load_state_dict(state["critics"])
         self.targets.load_state_dict(state["targets"])
         self.a_opt.load_state_dict(state["actor_optimizer"])
@@ -535,14 +577,6 @@ class RLPD:
             tensor("next_observation"),
             tensor("bootstrap_mask"),
         )
-
-    def _load_legacy_state_dict(self, state):
-        self.actor.load_state_dict(state["actor"])
-        self.critics.load_state_dict(state["critics"])
-        self.targets.load_state_dict(state["targets"])
-        with torch.no_grad():
-            self.log_alpha.copy_(state["log_alpha"])
-
 
 __all__ = [
     "RLPD_STATE_SCHEMA_VERSION",

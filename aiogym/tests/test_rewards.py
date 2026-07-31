@@ -6,7 +6,8 @@ import pytest
 
 from aiogym import make_env as public_make_env
 from aiogym.tests._env import make_test_env as make_env
-from aiogym.rewards import RewardScaleWrapper, get_reward_spec, list_reward_specs
+from aiogym.rewards import get_reward_spec, list_reward_specs
+from aiogym.rewards.scalarizers import RewardScaleWrapper
 
 
 def _env(spec: str):

@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from ..._internal.serialization import jsonable as _jsonable
-from ...controllers import as_controller, build_context, validate_action
+from ...controllers.adapters import as_controller
+from ...controllers.contracts import build_context, validate_action
 from ..results import result_schema
 from .metadata import _env_disturbances, _env_metadata
 

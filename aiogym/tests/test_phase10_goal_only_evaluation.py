@@ -8,7 +8,7 @@ import pytest
 import aiogym
 from aiogym.tests._env import make_test_env
 from aiogym.controllers import make_controller
-from aiogym.evaluation import evaluate_controller, rollout_controller
+from aiogym.evaluation.execution import evaluate_controller, rollout_controller
 
 
 @pytest.mark.parametrize(

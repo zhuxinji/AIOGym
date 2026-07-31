@@ -1,0 +1,27 @@
+{
+  "schema_version": "aiogym.rl_training_config.v2",
+  "track_id": "quadruple-regulation-generalist-v1",
+  "algorithm_id": "sac",
+  "training_seed": 0,
+  "total_transitions": 1000,
+  "n_envs": 1,
+  "algorithm": {
+    "batch_size": 64,
+    "torch_threads": 1,
+    "vector_backend": "dummy",
+    "verbose": 0
+  },
+  "replay": {
+    "capacity": 10000
+  },
+  "evaluation": {
+    "every_transitions": 500
+  },
+  "output": {
+    "directory": "runs/quickstart/quadruple",
+    "name": "sac"
+  },
+  "validation_seeds": [
+    5000
+  ]
+}

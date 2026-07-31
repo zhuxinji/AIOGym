@@ -4,11 +4,12 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from aiogym.benchmarks import TrackSpec, load_track
+from aiogym.benchmarks.tracks.registry import load_track
+from aiogym.benchmarks.tracks.schema import TrackSpec
 from aiogym.datasets.writer import manifest_with_hash
 from aiogym.datasets.writer import load_manifest
 
-from .config import RLTrainingConfig
+from .config import RLTrainingConfig, resolve_training_defaults
 from .validation import ValidationEpisodePlan
 
 
@@ -35,6 +36,7 @@ def resolve_training_plan(
 ) -> ResolvedTrainingPlan:
     if not isinstance(config, RLTrainingConfig):
         raise TypeError("config must be an RLTrainingConfig")
+    config = resolve_training_defaults(config)
     track = load_track(config.track_id)
     validation_plan = ValidationEpisodePlan(
         track,
@@ -96,6 +98,12 @@ def resolve_training_plan(
         ),
         dataset_id=dataset_id,
         dataset_hash=dataset_hash,
+        output={
+            **dict(config.output),
+            "directory": str(output_dir),
+            "name": run_name,
+            "artifact_dir": str(artifact_dir),
+        },
     )
     return ResolvedTrainingPlan(
         config=resolved_config,

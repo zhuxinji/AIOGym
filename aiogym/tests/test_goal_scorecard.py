@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import copy
-import json
-
 import pytest
 
 import aiogym
 from aiogym.tests._env import make_test_env
-from aiogym.evaluation import goal_spec
+from aiogym.evaluation.goal_specs import goal_spec
 from aiogym.evaluation.metric_catalog import (
     EVALUATION_SCHEMA_VERSION,
     METRIC_DEFINITIONS,
@@ -78,33 +75,3 @@ def test_metric_catalog_is_grouped_not_objective_filtered():
         "controller",
     }
     assert metric_definitions() == dict(METRIC_DEFINITIONS)
-
-
-def test_legacy_artifact_reader_still_loads_v4(tmp_path):
-    legacy = {
-        "schema_version": "aiogym.evaluation.v4",
-        "controller_name": "legacy-controller",
-        "objective": "tracking",
-        "metric": "normalized_score",
-        "normalized_score": 91.0,
-        "normalized_score_std": 1.0,
-        "objective_status": "met",
-        "objective_acceptance": {"status": "met", "checks": []},
-        "return": -2.0,
-    }
-    source = copy.deepcopy(legacy)
-    path = tmp_path / "evaluation-v4.json"
-    path.write_text(json.dumps(source), encoding="utf-8")
-    from aiogym.evaluation.legacy_artifacts import (
-        load_legacy_evaluation_artifact,
-    )
-
-    migrated = load_legacy_evaluation_artifact(path)
-
-    assert source == legacy
-    assert migrated["schema_version"] == "aiogym.evaluation.v4"
-    assert migrated["metric"] == "normalized_score"
-    assert migrated["normalized_score"] == 91.0
-    assert migrated["acceptance_status"] == "met"
-    assert migrated["goal"] == "regulation"
-    assert "objective_status" not in migrated

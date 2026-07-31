@@ -12,12 +12,14 @@ import aiogym
 from gymnasium.envs.registration import registry
 
 unexpected = {
+    "aiogym.compat",
     "aiogym.controllers",
     "aiogym.evaluation",
     "aiogym.rl",
     "casadi",
     "onnx",
     "onnxruntime",
+    "optuna",
     "stable_baselines3",
     "torch",
 }.intersection(sys.modules)
@@ -28,38 +30,39 @@ assert not any(name.startswith("AIOGym/") for name in registry)
     subprocess.run([sys.executable, "-c", code], check=True)
 
 
-def test_controller_public_api_exposes_current_implementations():
+def test_controller_facade_exposes_only_stable_construction_contract():
     import aiogym.controllers as facade
-    from aiogym.controllers import adapters, configs, contracts, registry
+    from aiogym.controllers import contracts, registry
 
-    assert facade.ControllerContext is contracts.ControllerContext
+    assert set(facade.__all__) == {
+        "Controller",
+        "make_controller",
+        "register_controller",
+        "unregister_controller",
+    }
     assert facade.Controller is contracts.Controller
-    assert facade.PolicyController is adapters.PolicyController
-    assert facade.SB3PolicyController is adapters.SB3PolicyController
-    assert facade.as_controller is adapters.as_controller
-    assert facade.load_controller_config is configs.load_controller_config
     assert facade.make_controller is registry.make_controller
-    assert not hasattr(facade, "registered_controllers")
+    assert not hasattr(facade, "LearnedPolicySpec")
+    assert not hasattr(facade, "PolicyController")
 
 
-def test_evaluation_public_api_exposes_current_implementations():
+def test_evaluation_facade_exposes_only_happy_path_workflows():
     import aiogym.evaluation as public
-    from aiogym.evaluation import execution, goal_specs, scorecard
+    from aiogym.evaluation import execution
 
+    assert len(public.__all__) == 4
     assert public.evaluate_controller is execution.evaluate_controller
-    assert public.rollout_controller is execution.rollout_controller
-    assert public.GoalSpec is goal_specs.GoalSpec
-    assert public.ScorecardAccumulator is scorecard.ScorecardAccumulator
+    assert not hasattr(public, "rollout_controller")
+    assert not hasattr(public, "GoalSpec")
+    assert not hasattr(public, "ScorecardAccumulator")
     assert importlib.util.find_spec("aiogym.evaluation.core") is None
 
 
 def test_model_core_uses_backend_and_integrator_implementations():
-    import aiogym.models as public
     import aiogym.models.core as core
     from aiogym.models import backends, integration
 
     assert core.Integrator is integration.Integrator
-    assert public.Integrator is integration.Integrator
     assert core._NUMERIC_OPS is backends._NUMERIC_OPS
     assert core._casadi_ops is backends._casadi_ops
     assert core._maxv is backends._maxv
@@ -74,39 +77,35 @@ def test_model_metadata_has_a_single_current_module():
 
 def test_generation_public_api_exposes_episode_contracts():
     import aiogym.generation as public
-    from aiogym.generation import adapters, samplers, seed_tree, specs
+    from aiogym.generation import specs
 
+    assert len(public.__all__) == 5
     assert public.DistributionSpec is specs.DistributionSpec
     assert public.EpisodeSpec is specs.EpisodeSpec
-    assert public.SeedTree is seed_tree.SeedTree
-    assert (
-        public.distribution_spec_from_case
-        is adapters.distribution_spec_from_case
-    )
-    assert (
-        public.FixedCaseEpisodeSampler
-        is samplers.FixedCaseEpisodeSampler
-    )
+    assert not hasattr(public, "SeedTree")
+    assert not hasattr(public, "FixedCaseEpisodeSampler")
 
 
 def test_dataset_public_api_exposes_persistent_v2_backend():
     import aiogym.datasets as public
-    from aiogym.datasets import reader, schema, writer
+    from aiogym.datasets import reader
 
-    assert public.DatasetEpisode is schema.DatasetEpisode
+    assert len(public.__all__) == 4
     assert public.DatasetReader is reader.DatasetReader
-    assert public.DatasetWriter is writer.DatasetWriter
-    assert public.DATASET_SCHEMA_VERSION == "aiogym.dataset.v2"
+    assert not hasattr(public, "DatasetEpisode")
+    assert not hasattr(public, "DatasetWriter")
 
 
-def test_rl_public_api_is_limited_to_config_runner_checkpoint_discovery():
+def test_rl_public_api_is_limited_to_config_and_runner():
     import aiogym.rl as public
-    from aiogym.rl import checkpoints, config, runner
+    from aiogym.rl import config, runner
 
+    assert len(public.__all__) == 5
     assert public.RLTrainingConfig is config.RLTrainingConfig
     assert public.RunResult is runner.RunResult
     assert public.run_experiment is runner.run_experiment
-    assert public.CheckpointManager is checkpoints.CheckpointManager
+    assert not hasattr(public, "BackendResult")
+    assert not hasattr(public, "CheckpointManager")
     assert public.list_algorithms is config.list_algorithms
     assert public.list_algorithms() == ("bc", "ppo", "rlpd", "sac", "td3")
     assert {
@@ -117,6 +116,7 @@ def test_rl_public_api_is_limited_to_config_runner_checkpoint_discovery():
         "CompleteValidationCallback",
         "FinalTestLock",
     }.isdisjoint(dir(public))
+    assert importlib.util.find_spec("aiogym.rl.adapters") is None
 
 
 def test_rl_hybrid_contracts_require_explicit_modules():
@@ -158,17 +158,15 @@ def test_research_rl_api_is_explicitly_experimental():
         is safety.ProjectionSafetyShield
     )
     assert experimental.LagrangianSAC is constrained.LagrangianSAC
-    assert (
-        evaluation.build_intervention_report
-        is statistics.build_intervention_report
-    )
+    assert not hasattr(evaluation, "build_intervention_report")
+    assert statistics.build_intervention_report
 
 
 def test_environment_class_composes_focused_runtime_mixins():
     from aiogym._environment.disturbances import DisturbanceRuntimeMixin
     from aiogym._environment.observations import ObservationRuntimeMixin
     from aiogym._environment.transitions import TransitionRuntimeMixin
-    from aiogym.env import _AIOGymEnv
+    from aiogym._environment.runtime import _AIOGymEnv
 
     assert _AIOGymEnv._env is DisturbanceRuntimeMixin._env
     assert _AIOGymEnv._obs is ObservationRuntimeMixin._obs
@@ -208,6 +206,7 @@ def test_removed_evaluation_modules_are_absent():
         "aiogym.evaluation.artifacts",
         "aiogym.evaluation.benchmark",
         "aiogym.evaluation.evaluator",
+        "aiogym.evaluation.legacy_artifacts",
         "aiogym.evaluation.metadata",
         "aiogym.evaluation.plots",
         "aiogym.evaluation.report_rendering",
@@ -230,7 +229,19 @@ def test_removed_evaluation_modules_are_absent():
 def test_superseded_environment_and_rl_modules_are_absent():
     for module in (
         "aiogym.benchmarks.sampler",
+        "aiogym.generation.protocols",
         "aiogym.rl.transitions",
         "aiogym.rl.environment_factory",
     ):
         assert importlib.util.find_spec(module) is None
+
+
+def test_live_execution_does_not_import_offline_migration_modules():
+    code = """
+import sys
+from aiogym.rl import RLTrainingConfig, run_experiment
+from aiogym.evaluation import evaluate_controller
+assert "aiogym.compat" not in sys.modules
+assert "aiogym.evaluation.legacy_artifacts" not in sys.modules
+"""
+    subprocess.run([sys.executable, "-c", code], check=True)

@@ -7,12 +7,10 @@ import numpy as np
 import pytest
 
 import aiogym
-from aiogym.models import (
-    Integrator,
-    load_parameter_profile,
-    make_model,
-    validate_model_readiness,
-)
+from aiogym.models.integration import Integrator
+from aiogym.models.parameter_profiles import load_parameter_profile
+from aiogym.models.registry import make_model
+from aiogym.models.validation import validate_model_readiness
 from aiogym.tests._env import make_test_env
 
 

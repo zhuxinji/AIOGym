@@ -8,7 +8,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Mapping
 
-from aiogym.rewards import get_reward_spec
+from aiogym.rewards.registry import get_reward_spec
 
 
 ARTIFACT_PROVENANCE_SCHEMA_VERSION = "aiogym.artifact_provenance.v1"

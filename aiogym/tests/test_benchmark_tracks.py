@@ -10,12 +10,12 @@ from aiogym.benchmarks import (
     evaluate_policy_on_track,
     load_track,
 )
-from aiogym.rl.train_sb3 import run_name_for
+from aiogym.rl.config import RLTrainingConfig
+from aiogym.rl.plan import resolve_training_plan
 from aiogym.rl.training_artifacts import (
     RL_ARTIFACT_SCHEMA_VERSION,
     rl_payload,
 )
-from aiogym.rl.training_config import configure_training_track
 
 
 def test_track_has_no_objective_cartesian_expansion():
@@ -65,7 +65,7 @@ def test_track_rejects_observation_contract_mismatch():
         track.validate_policy_contract()
 
 
-def test_one_checkpoint_is_evaluated_on_all_track_cases():
+def test_public_evaluator_uses_all_validation_track_cases():
     track = load_track(
         "quadruple-regulation-generalist-v1"
     )
@@ -94,49 +94,50 @@ def test_one_checkpoint_is_evaluated_on_all_track_cases():
     evaluation = evaluate_policy_on_track(
         checkpoint,
         track,
-        split="test",
         base_seeds=[11],
         env_factory=FakeEnv,
         evaluate_fn=fake_evaluate,
     )
     expected = [
-        case.case_id for case in track.resolved_cases("test")
+        case.case_id for case in track.resolved_cases("validation")
     ]
     assert visited == expected
+    assert evaluation["split"] == "validation"
     assert evaluation["case_count"] == len(expected)
     assert len(evaluation["results"]) == len(expected)
 
 
-def test_specialist_run_is_labeled():
-    args = SimpleNamespace(
-        name=None,
-        algo="sac",
-        track=None,
-        scenario="quadruple",
-        case="minimum-phase",
-        policy_scope="specialist",
-        seed=3,
-    )
-    name = run_name_for(args, run_id="fixed")
-    assert "specialist" in name
-    assert "training-seed3" in name
-    assert "regulation" not in name
-
-
 def test_official_track_rejects_conflicting_cli_overrides():
-    args = _training_args(track="quadruple-regulation-generalist-v1")
-    args.goal = "economic"
-    with pytest.raises(ValueError, match="conflicts with --track"):
-        configure_training_track(args)
+    declaration = RLTrainingConfig(
+        track_id="quadruple-regulation-generalist-v1",
+        algorithm_id="sac",
+        training_seed=1,
+        total_transitions=1,
+        n_envs=1,
+    ).as_dict()
+    declaration["goal"] = "economic"
+    with pytest.raises(ValueError, match="unknown RL training config"):
+        RLTrainingConfig.from_mapping(declaration)
 
 
-def test_no_custom_selectors_uses_default_official_track():
-    args = _training_args()
-    configure_training_track(args)
-    assert args.track == "quadruple-regulation-generalist-v1"
-    assert args.policy_scope == "generalist"
-    assert args.goal == "regulation"
-    assert args.reward_spec == "regulation-v1"
+def test_training_requires_an_explicit_official_track():
+    with pytest.raises(TypeError, match="track_id"):
+        RLTrainingConfig(
+            algorithm_id="sac",
+            training_seed=1,
+            total_transitions=1,
+            n_envs=1,
+        )
+    plan = resolve_training_plan(
+        RLTrainingConfig(
+            track_id="quadruple-regulation-generalist-v1",
+            algorithm_id="sac",
+            training_seed=1,
+            total_transitions=1,
+            n_envs=1,
+        )
+    )
+    assert plan.track.id == "quadruple-regulation-generalist-v1"
 
 
 def test_track_training_artifact_records_split_provenance():

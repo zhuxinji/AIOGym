@@ -7,13 +7,13 @@ training dependencies.
 """
 from __future__ import annotations
 
-from ._internal.lazy import exported_dir, resolve_export
+from ._internal.lazy import resolve_export as _resolve_export
 
 
 __version__ = "0.1.0"
 
 _EXPORTS = {
-    "make_env": ".env_factory",
+    "make_env": "._environment.factory",
     "list_scenarios": ".catalog",
     "list_cases": ".catalog",
     "list_tracks": ".benchmarks",
@@ -27,8 +27,8 @@ __all__ = sorted((*_EXPORTS, "__version__"))
 
 
 def __getattr__(name):
-    return resolve_export(globals(), __name__, _EXPORTS, name)
+    return _resolve_export(globals(), __name__, _EXPORTS, name)
 
 
 def __dir__():
-    return exported_dir(globals(), _EXPORTS | {"__version__": ""})
+    return sorted((*_EXPORTS, "__version__"))

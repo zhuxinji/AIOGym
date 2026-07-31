@@ -209,22 +209,25 @@ class DatasetEpisode:
             raise ValueError("step_index must be contiguous and start at zero")
         if np.any(np.diff(arrays["physical_time"]) <= 0.0):
             raise ValueError("physical_time must be strictly increasing")
+        true_state_dtype = arrays["true_state"].dtype
         initial_state = np.asarray(
             normalized_metadata["initial_state"],
-            dtype=np.float64,
+            dtype=true_state_dtype,
         ).reshape(-1)
         if (
             initial_state.shape[0] != arrays["true_state"].shape[1]
-            or not np.allclose(
+            or not np.array_equal(
                 initial_state,
                 arrays["true_state"][0],
-                rtol=0.0,
-                atol=1e-6,
             )
         ):
             raise ValueError(
                 "metadata initial_state must match the first true_state"
             )
+        _validate_reset_state_diagnostics(
+            normalized_metadata,
+            initial_state=initial_state,
+        )
 
         reward_names, reward_matrix = _channels(
             "reward_terms",
@@ -438,6 +441,70 @@ def _validated_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
             raise TypeError(f"episode metadata {name} must be a sequence")
     _canonical_json(data)
     return data
+
+
+def _validate_reset_state_diagnostics(
+    metadata: Mapping[str, Any],
+    *,
+    initial_state: np.ndarray,
+) -> None:
+    has_requested = "requested_initial_state" in metadata
+    has_delta = "reset_state_delta_linf" in metadata
+    if has_requested != has_delta:
+        raise ValueError(
+            "requested_initial_state and reset_state_delta_linf "
+            "must be provided together"
+        )
+    if not has_requested:
+        return
+    requested_value = metadata["requested_initial_state"]
+    if (
+        isinstance(requested_value, (str, bytes))
+        or not isinstance(requested_value, Sequence)
+    ):
+        raise TypeError(
+            "episode metadata requested_initial_state must be a sequence"
+        )
+    try:
+        requested = np.asarray(
+            requested_value,
+            dtype=np.float64,
+        ).reshape(-1)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "episode metadata requested_initial_state must be numeric"
+        ) from exc
+    if (
+        requested.shape != initial_state.shape
+        or not np.all(np.isfinite(requested))
+    ):
+        raise ValueError(
+            "episode metadata requested_initial_state must be a finite "
+            "vector matching initial_state"
+        )
+    declared_delta = metadata["reset_state_delta_linf"]
+    if (
+        isinstance(declared_delta, bool)
+        or not isinstance(declared_delta, (int, float, np.number))
+        or not math.isfinite(float(declared_delta))
+        or float(declared_delta) < 0.0
+    ):
+        raise ValueError(
+            "episode metadata reset_state_delta_linf must be a finite "
+            "non-negative number"
+        )
+    actual_delta = float(
+        np.max(
+            np.abs(
+                requested - initial_state.astype(np.float64)
+            )
+        )
+    )
+    if float(declared_delta) != actual_delta:
+        raise ValueError(
+            "episode metadata reset_state_delta_linf does not match "
+            "requested_initial_state and initial_state"
+        )
 
 
 def _matrix(

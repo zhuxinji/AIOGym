@@ -1,0 +1,8 @@
+{
+  "schema_version": "aiogym.benchmark_run.v1",
+  "track_id": "cascade-regulation-generalist-v1",
+  "seeds": [
+    5000
+  ],
+  "output": "runs/quickstart/cascade/benchmark.json"
+}

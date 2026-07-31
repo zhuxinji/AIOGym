@@ -13,9 +13,9 @@ Cases are immutable experiment declarations under
 - optional initialization, setpoints, disturbances, constraints, operation,
   model parameters, acceptance, and evaluation hints.
 
-Cases cannot bind Goal, RewardSpec, or official controller defaults. Historical
-specialist tuning metadata may be recorded under `specialist_metadata` but is
-not part of a generalist Track policy contract.
+Cases cannot bind Goal, RewardSpec, or official controller defaults.
+Case-specific specialist tuning metadata may be recorded under
+`specialist_metadata` but is not part of a generalist Track policy contract.
 
 `CaseSpec` stores a canonical JSON snapshot and exposes a stable SHA-256 hash.
 `apply_case_overrides()` accepts only Case-owned sections, validates the result,

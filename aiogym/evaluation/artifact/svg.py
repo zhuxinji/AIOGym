@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from aiogym.models import make_model
+from aiogym.models.registry import make_model
 from .tables import TRACKING_COMPARISON_METRICS
 
 

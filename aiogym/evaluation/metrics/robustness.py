@@ -1,4 +1,4 @@
-"""Paired robustness evaluation and compatibility extrema."""
+"""Paired robustness evaluation and per-case extrema."""
 from __future__ import annotations
 
 import math
@@ -153,7 +153,7 @@ def degradation_statistics(
 
 
 def robustness_extrema(episode_metrics, metric_keys, metric_directions=None):
-    """Compatibility best/worst aggregation for unpaired v4 artifacts."""
+    """Return best/worst aggregation for an unpaired case summary."""
 
     directions = dict(metric_directions or {})
     summary = {}

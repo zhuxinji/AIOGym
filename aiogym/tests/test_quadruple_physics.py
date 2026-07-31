@@ -6,8 +6,9 @@ import pytest
 
 import aiogym
 from aiogym.tests._env import make_test_env
-from aiogym.controllers import build_context
-from aiogym.models import Integrator, apply_model_params, make_model
+from aiogym.controllers.contracts import build_context
+from aiogym.models.integration import Integrator
+from aiogym.models.registry import apply_model_params, make_model
 
 
 def test_reference_parameters_and_phase_configuration():

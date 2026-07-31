@@ -54,7 +54,7 @@ def main(argv=None, prog: str | None = None) -> int:
         "next_command": (
             "aiogym evaluate "
             f"--checkpoint {result.policy_path} "
-            f"--track {result.track_id} --split validation "
+            f"--track {result.track_id} "
             f"--algorithm {result.algorithm_id}"
         ),
     }

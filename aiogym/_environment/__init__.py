@@ -1,1 +1,1 @@
-"""Internal runtime helpers for :mod:`aiogym.env`."""
+"""Private environment resolution and runtime implementation."""

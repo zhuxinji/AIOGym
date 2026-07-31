@@ -72,7 +72,7 @@ def main(argv=None, prog: str | None = None) -> int:
             )
             if not result.validation:
                 raise ValueError(
-                    "training adapter did not produce validation artifacts"
+                    "training lifecycle did not produce validation artifacts"
                 )
             evaluations.append(result.validation)
         return evaluations

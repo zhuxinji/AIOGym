@@ -8,7 +8,8 @@ from typing import Sequence
 import numpy as np
 
 from ..._internal.serialization import jsonable as _jsonable
-from ...controllers import as_controller, build_context, validate_action
+from ...controllers.adapters import as_controller
+from ...controllers.contracts import build_context, validate_action
 from ..results import _aggregate_metric_keys, evaluate_case_acceptance, result_schema
 from .metadata import (
     _aggregate_controller_diagnostics,
@@ -158,7 +159,7 @@ def evaluate_controller(agent, env, episodes: int = 1, seed: int = 0,
                 }
             )
         elif seed_namespace is not None:
-            from ...generation import SeedTree
+            from aiogym.generation.seed_tree import SeedTree
 
             seed_tree = SeedTree(
                 ep_seed,

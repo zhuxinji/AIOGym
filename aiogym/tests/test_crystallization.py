@@ -5,7 +5,7 @@ import numpy as np
 
 from aiogym.controllers import make_controller
 from aiogym.tests._env import make_test_env as make_env
-from aiogym.evaluation import evaluate_controller, rollout_controller
+from aiogym.evaluation.execution import evaluate_controller, rollout_controller
 from aiogym import list_scenarios
 from aiogym.models import make_model
 

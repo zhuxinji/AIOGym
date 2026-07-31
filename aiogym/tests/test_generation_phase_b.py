@@ -4,19 +4,21 @@ import numpy as np
 import pytest
 
 from aiogym.tests._env import make_test_env as make_env
-from aiogym.generation import (
+from aiogym.generation import load_distribution
+from aiogym.generation.curriculum import (
     CURRICULUM_LEVELS,
     QUADRUPLE_CURRICULUM_V1,
+)
+from aiogym.generation.quadruple import (
     QuadrupleCurriculumSampler,
     QuadrupleDisturbanceGenerator,
     QuadrupleReferenceGenerator,
     QuadrupleTrainingSampler,
-    load_distribution,
     quadruple_training_distribution,
     validate_quadruple_episode,
     validate_quadruple_parameters,
 )
-from aiogym.models import apply_model_params, make_model
+from aiogym.models.registry import apply_model_params, make_model
 from aiogym.benchmarks import load_track
 
 

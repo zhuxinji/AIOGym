@@ -114,7 +114,7 @@ class PIDAgent:
 
 
 def _default_pid_config(model):
-    from . import load_controller_config
+    from .configs import load_controller_config
 
     params = dict(load_controller_config("pid", model.scenario).get("parameters", {}))
     if not params.get("loops"):

@@ -75,6 +75,15 @@ def validate_action(action: Any, env, controller_name: str) -> np.ndarray:
     return out
 
 
+def normalized_to_environment_action(action: Any) -> np.ndarray:
+    """Apply the canonical native ``[-1, 1]`` to command conversion."""
+
+    values = np.asarray(action, dtype=np.float32)
+    if not np.all(np.isfinite(values)):
+        raise ValueError("normalized policy produced a non-finite action")
+    return np.clip(0.5 * (values + 1.0), 0.0, 1.0).astype(np.float32)
+
+
 def controller_metadata(obj) -> dict[str, Any]:
     if hasattr(obj, "metadata"):
         return dict(obj.metadata())

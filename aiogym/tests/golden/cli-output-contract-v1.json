@@ -1,0 +1,30 @@
+{
+  "schema_version": "aiogym.cli_output_contract.v1",
+  "workflow_commands": [
+    "collect",
+    "train",
+    "evaluate",
+    "benchmark",
+    "final-test"
+  ],
+  "support_commands": [
+    "artifacts",
+    "list",
+    "tune"
+  ],
+  "benchmark_checkpoint_options": [
+    "--algorithm",
+    "--checkpoint",
+    "--name",
+    "--sha256"
+  ],
+  "retired_benchmark_options": [
+    "--checkpoint-sha256",
+    "--onnx-path",
+    "--policy-algorithm",
+    "--policy-path",
+    "--policy-sha256",
+    "--sb3-algo",
+    "--sb3-path"
+  ]
+}

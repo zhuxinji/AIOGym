@@ -7,8 +7,8 @@ from collections.abc import Sequence
 from typing import Any
 
 from aiogym._environment.builder import build_track_case_environment
-from aiogym.controllers import make_controller
-from aiogym.evaluation import evaluate_controller
+from aiogym.controllers.registry import make_controller
+from aiogym.evaluation.execution import evaluate_controller
 from aiogym.models.cases import case_controller_config
 
 from .anchors import ANCHOR_SCHEMA_VERSION, anchor_artifact_hash
