@@ -24,7 +24,7 @@ def register_controller(name: str, factory: ControllerFactory, *, replace: bool 
 
 
 def _controller_ids() -> tuple[str, ...]:
-    return tuple(sorted(name for name in _REGISTRY if name != "oracle"))
+    return tuple(sorted(_REGISTRY))
 
 
 def unregister_controller(name: str) -> None:
@@ -49,12 +49,21 @@ def make_controller(
             f"unknown controller ID {name!r}; available controller IDs: "
             f"{', '.join(_controller_ids())}"
         )
-    requested_scenario = scenario or dict(config or {}).get("scenario")
+    requested_scenario = (
+        scenario
+        or dict(config or {}).get("scenario")
+        or getattr(model, "scenario", None)
+    )
+    if model is None and requested_scenario is None:
+        raise ValueError(
+            "make_controller requires an explicit scenario or model"
+        )
     cfg = _merged_controller_config(key, requested_scenario, config)
     if model is None:
         from ..models.registry import make_model
 
-        model = make_model(requested_scenario or cfg.pop("scenario", "cstr"))
+        model = make_model(requested_scenario)
+    cfg.pop("scenario", None)
     return _REGISTRY[key](
         model=model,
         scenario=requested_scenario or getattr(model, "scenario", None),

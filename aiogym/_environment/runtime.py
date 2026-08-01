@@ -34,7 +34,7 @@ from aiogym.models.registry import apply_model_params, make_model
 from .config import (
     validated_range as _validated_range,
 )
-from .spec import ResolvedEnvSpec
+from .spec import ENV_SPEC_HASH_SCHEMA_VERSION, ResolvedEnvSpec
 from .disturbances import DisturbanceRuntimeMixin
 from .observations import ObservationRuntimeMixin
 from .realism import (
@@ -156,6 +156,9 @@ class _AIOGymEnv(
             raise ValueError("action_mode must be one of: actuator, setpoint")
         self.noise_pct = environment_options["noise_pct"]
         self.reward_spec_id = self.reward_spec.id
+        self.reward_spec_hash = self.reward_spec.spec_hash
+        self.env_spec_hash = spec.spec_hash
+        self.env_spec_hash_schema = ENV_SPEC_HASH_SCHEMA_VERSION
         self.goal = self.reward_spec.goal
         if info_level not in {"minimal", "full"}:
             raise ValueError("info_level must be one of: minimal, full")
@@ -430,6 +433,7 @@ class _AIOGymEnv(
             if seed_bundle
             else {}
         )
+        info.update(self._episode_provenance())
         return self._obs(), info
 
     def _reset_from_episode_spec(self, episode_spec, *, seed=None):
@@ -518,9 +522,15 @@ class _AIOGymEnv(
         }
 
     def _episode_provenance(self):
+        provenance = {
+            "reward_spec_id": self.reward_spec_id,
+            "reward_spec_hash": self.reward_spec_hash,
+            "env_spec_hash": self.env_spec_hash,
+            "env_spec_hash_schema": self.env_spec_hash_schema,
+        }
         if self._episode_spec is None:
-            return {}
-        return {
+            return provenance
+        provenance.update({
             "episode_spec_id": self._episode_spec.episode_spec_id,
             "episode_spec_hash": self._episode_spec.resolved_hash,
             "distribution_id": self._episode_spec.distribution_id,
@@ -529,7 +539,8 @@ class _AIOGymEnv(
             "episode_component_seeds": (
                 self._episode_spec.component_seeds
             ),
-        }
+        })
+        return provenance
 
     def _reset_realism(self, initial_state):
         self._sensor_runtime = SensorModelRuntime(
@@ -625,6 +636,9 @@ class _AIOGymEnv(
             "termination_reason",
             "goal",
             "reward_spec_id",
+            "reward_spec_hash",
+            "env_spec_hash",
+            "env_spec_hash_schema",
             "episode_spec_id",
             "episode_spec_hash",
             "distribution_id",

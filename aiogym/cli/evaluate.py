@@ -13,6 +13,9 @@ from aiogym.controllers.checkpoints import (
     learned_policy_spec_for_track,
     load_policy_checkpoint,
 )
+from aiogym._internal.config import parse_csv_ints
+from aiogym._internal.serialization import write_json_artifact
+from aiogym._internal.validation import seed_sequence
 
 
 def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
@@ -39,6 +42,11 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seeds", default="5000")
     parser.add_argument("--output", default=None)
+    parser.add_argument(
+        "--overwrite",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
     return parser
 
 
@@ -59,13 +67,9 @@ def main(argv=None, prog: str | None = None) -> int:
         policy_spec,
         device=args.device,
     )
-    seeds = tuple(
-        int(part.strip())
-        for part in args.seeds.split(",")
-        if part.strip()
+    seeds = seed_sequence(
+        "--seeds", parse_csv_ints(args.seeds, option="--seeds")
     )
-    if not seeds or min(seeds) < 0 or len(set(seeds)) != len(seeds):
-        raise ValueError("--seeds must contain unique non-negative integers")
     result = evaluate_policy_on_track(
         controller,
         track,
@@ -73,11 +77,10 @@ def main(argv=None, prog: str | None = None) -> int:
         include_episodes=True,
     )
     if args.output:
-        target = Path(args.output)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(
-            json.dumps(result, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
+        write_json_artifact(
+            args.output,
+            result,
+            overwrite=args.overwrite,
         )
     print(
         json.dumps(

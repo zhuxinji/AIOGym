@@ -29,18 +29,7 @@ def stable_hash(value: Any) -> str:
 
 
 def reward_spec_hash(reward_spec_id: str) -> str:
-    spec = get_reward_spec(reward_spec_id)
-    return stable_hash(
-        {
-            "id": spec.id,
-            "version": spec.version,
-            "goal": spec.goal,
-            "term_weights": dict(spec.term_weights),
-            "cost_weights": dict(spec.cost_weights),
-            "terminal_failure_cost_rate": spec.terminal_failure_cost_rate,
-            "metadata": dict(spec.metadata),
-        }
-    )
+    return get_reward_spec(reward_spec_id).spec_hash
 
 
 def seed_namespace_hash(namespace: str) -> str:

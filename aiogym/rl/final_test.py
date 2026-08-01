@@ -13,9 +13,11 @@ from aiogym.benchmarks.evaluation import _evaluate_policy_on_track_split
 from aiogym.benchmarks.tracks.registry import load_track
 from aiogym.benchmarks.tracks.schema import TrackSpec
 from aiogym.evaluation.statistics import build_final_statistical_report
+from aiogym.evaluation.provenance import code_commit, package_version
+from aiogym._internal.validation import seed_sequence
 
 
-FINAL_TEST_LOCK_SCHEMA_VERSION = "aiogym.final_test_lock.v1"
+FINAL_TEST_LOCK_SCHEMA_VERSION = "aiogym.final_test_lock.v2"
 
 
 class FinalTestLock:
@@ -41,9 +43,7 @@ class FinalTestLock:
         }
         if not self.checkpoint_ids:
             raise ValueError("final test requires checkpoints")
-        self.base_seeds = tuple(int(seed) for seed in base_seeds)
-        if not self.base_seeds:
-            raise ValueError("final test requires base seeds")
+        self.base_seeds = seed_sequence("final test base seeds", base_seeds)
         if self.path.exists():
             state = self._read()
             self._validate_identity(state)
@@ -54,19 +54,34 @@ class FinalTestLock:
                     "status": "locked",
                     "attempted_at": None,
                     "completed_at": None,
+                    "artifact_path": None,
+                    "artifact_sha256": None,
                     "report_hash": None,
+                    "package_version": package_version(),
+                    "code_commit": code_commit(),
+                    "failure_stage": None,
                     "failure": None,
                 }
             )
 
-    def run(
+    def run_and_commit(
         self,
         controllers: Mapping[str, Any],
         *,
+        artifact_path: str | Path,
+        artifact_builder,
         baseline: str | None = None,
         bootstrap_repetitions: int = 2000,
         _evaluate_test_fn=None,
+        _artifact_commit_fn=None,
     ) -> dict[str, Any]:
+        """Evaluate and atomically publish before completing the lock."""
+
+        output = Path(artifact_path)
+        if output.exists():
+            raise FileExistsError(f"final-test artifact exists: {output}")
+        if not callable(artifact_builder):
+            raise TypeError("artifact_builder must be callable")
         state = self._read()
         self._validate_identity(state)
         if state["status"] != "locked":
@@ -122,7 +137,8 @@ class FinalTestLock:
         except BaseException as exc:
             state.update(
                 {
-                    "status": "failed",
+                    "status": "failed_evaluation",
+                    "failure_stage": "evaluation",
                     "failure": f"{type(exc).__name__}: {exc}",
                 }
             )
@@ -134,25 +150,60 @@ class FinalTestLock:
             separators=(",", ":"),
             allow_nan=False,
         )
+        state.update({
+            "status": "artifact_pending",
+            "report_hash": hashlib.sha256(
+                canonical.encode("utf-8")
+            ).hexdigest(),
+            "artifact_path": str(output.resolve()),
+            "failure_stage": None,
+            "failure": None,
+        })
+        self._write(state)
+        evaluation_result = {
+            "evaluations": evaluations,
+            "statistical_report": report,
+        }
+        try:
+            artifact = artifact_builder(evaluation_result, dict(state))
+            if not isinstance(artifact, Mapping):
+                raise TypeError("artifact_builder must return a mapping")
+            commit = (
+                self._commit_artifact
+                if _artifact_commit_fn is None
+                else _artifact_commit_fn
+            )
+            artifact_sha256 = commit(output, dict(artifact))
+        except BaseException as exc:
+            state.update(
+                {
+                    "status": "failed_artifact_commit",
+                    "failure_stage": "artifact_commit",
+                    "failure": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            self._write(state)
+            raise
         state.update(
             {
                 "status": "complete",
                 "completed_at": _utc_now(),
-                "report_hash": hashlib.sha256(
-                    canonical.encode("utf-8")
-                ).hexdigest(),
+                "artifact_sha256": artifact_sha256,
+                "failure_stage": None,
                 "failure": None,
             }
         )
         self._write(state)
+        self._validate_complete_artifact(state)
         return {
-            "evaluations": evaluations,
-            "statistical_report": report,
+            **evaluation_result,
             "lock": dict(state),
         }
 
     def state(self) -> dict[str, Any]:
-        return self._read()
+        state = self._read()
+        self._validate_complete_artifact(state)
+        return state
 
     def _identity(self) -> dict[str, Any]:
         return {
@@ -179,6 +230,16 @@ class FinalTestLock:
         if state.get("schema_version") != FINAL_TEST_LOCK_SCHEMA_VERSION:
             raise ValueError("unsupported final test lock schema")
         return state
+
+    def _validate_complete_artifact(self, state) -> None:
+        if state.get("status") != "complete":
+            return
+        artifact_path = Path(str(state.get("artifact_path", "")))
+        if not artifact_path.is_file():
+            raise ValueError("complete final test artifact is missing")
+        actual = _file_sha256(artifact_path)
+        if actual != state.get("artifact_sha256"):
+            raise ValueError("complete final test artifact hash mismatch")
 
     def _claim_attempt(self) -> None:
         claim_path = self.path.with_name(f".{self.path.name}.claimed")
@@ -220,11 +281,49 @@ class FinalTestLock:
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, self.path)
+            _fsync_directory(self.path.parent)
         finally:
             try:
                 os.unlink(temporary)
             except FileNotFoundError:
                 pass
+
+    @staticmethod
+    def _commit_artifact(path: Path, artifact: Mapping[str, Any]) -> str:
+        if path.exists():
+            raise FileExistsError(f"final-test artifact exists: {path}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = (
+            json.dumps(
+                dict(artifact),
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("utf-8")
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+        )
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if path.exists():
+                raise FileExistsError(
+                    f"final-test artifact exists: {path}"
+                )
+            os.replace(temporary, path)
+            _fsync_directory(path.parent)
+        finally:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+        return hashlib.sha256(payload).hexdigest()
 
 
 def _non_empty(name: str, value) -> str:
@@ -235,6 +334,22 @@ def _non_empty(name: str, value) -> str:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 __all__ = ["FINAL_TEST_LOCK_SCHEMA_VERSION", "FinalTestLock"]

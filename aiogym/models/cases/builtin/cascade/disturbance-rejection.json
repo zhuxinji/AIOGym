@@ -3,7 +3,7 @@
   "name": "disturbance-rejection",
   "scenario": "cascade",
   "status": "benchmark-designed",
-  "description": "Deterministic rejection of feed-pump capacity, common heater efficiency, and ambient changes around the continuous open-cascade equilibrium.",
+  "description": "Deterministic recovery from a feasible startup offset followed by feed-pump capacity, common heater efficiency, and ambient changes around the continuous open-cascade equilibrium.",
   "specialist_metadata": {
     "controllers": {
       "pid": {"profile": "cascade-control-benchmark"},
@@ -29,8 +29,8 @@
     "min_product_flow": 0.0004
   },
   "initialization": {
-    "state": [0.45, 35.0, 0.45, 50.0, 0.45, 65.0],
-    "basis": "model-consistent nominal continuous equilibrium"
+    "state": [0.4, 33.0, 0.42, 47.0, 0.44, 62.0],
+    "basis": "feasible bounded offset from the model-consistent nominal continuous equilibrium"
   },
   "setpoints": {
     "initial": [0.45, 0.45, 0.45, 35.0, 50.0, 65.0],

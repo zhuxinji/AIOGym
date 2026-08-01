@@ -7,7 +7,9 @@ import pytest
 from aiogym.benchmarks import load_track
 from aiogym.rl.checkpoints import (
     CheckpointManager,
+    LEGACY_TRAINING_CHECKPOINT_SCHEMA_VERSION,
     TrainingCheckpoint,
+    selected_checkpoint_manifest,
     validate_resume_config,
 )
 from aiogym.rl.config import RLTrainingConfig
@@ -122,8 +124,9 @@ def test_training_checkpoint_records_restart_contract_round_trip(
         replace(checkpoint, resume_mode="exact_single_process")
 
 
-def test_resume_allows_env_count_but_rejects_identity_changes():
-    validate_resume_config(_config(n_envs=1), _config(n_envs=4))
+def test_resume_rejects_changed_n_envs_and_identity_changes():
+    with pytest.raises(ValueError, match="unchanged n_envs"):
+        validate_resume_config(_config(n_envs=1), _config(n_envs=4))
     validate_resume_config(
         _config(),
         replace(
@@ -137,6 +140,72 @@ def test_resume_allows_env_count_but_rejects_identity_changes():
             _config(),
             _config(track_id="cascade-regulation-generalist-v1"),
         )
+
+
+def test_resume_rejects_changed_n_envs_for_rlpd():
+    first = RLTrainingConfig(
+        track_id=TRACK_ID,
+        algorithm_id="rlpd",
+        training_seed=3,
+        total_transitions=100,
+        n_envs=1,
+        dataset_id="dataset",
+        dataset_path="dataset",
+    )
+    with pytest.raises(ValueError, match="unchanged n_envs"):
+        validate_resume_config(first, replace(first, n_envs=2))
+
+
+def test_tampered_best_checkpoint_hash_is_rejected(tmp_path):
+    policy = tmp_path / "best.zip"
+    policy.write_bytes(b"canonical-best")
+    record = {"checkpoint_id": "step-10", "step": 10}
+    manifest = selected_checkpoint_manifest(policy, record)
+    validation_state = {
+        "schema_version": "test",
+    }
+    checkpoint = TrainingCheckpoint(
+        config=_config(),
+        transition_count=10,
+        update_count=1,
+        algorithm_state={},
+        replay_state=None,
+        normalization_state=None,
+        coordinator_state={},
+        curriculum_state=None,
+        best_validation=None,
+        rng_state={},
+        validation_state=validation_state,
+        selected_checkpoint=manifest,
+    )
+    policy.write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="SHA256"):
+        checkpoint.require_exact_validation_resume()
+
+
+def test_legacy_checkpoint_is_not_claimed_as_exact_resume():
+    config = _config()
+    payload = TrainingCheckpoint(
+        config=config,
+        transition_count=10,
+        update_count=1,
+        algorithm_state={},
+        replay_state=None,
+        normalization_state=None,
+        coordinator_state={},
+        curriculum_state=None,
+        best_validation={"step": 10},
+        rng_state={},
+    ).payload()
+    payload["schema_version"] = LEGACY_TRAINING_CHECKPOINT_SCHEMA_VERSION
+    payload.pop("validation_state")
+    payload.pop("selected_checkpoint")
+    payload.pop("legacy_partial_validation_state")
+    restored = TrainingCheckpoint.from_payload(payload)
+    assert restored.legacy_partial_validation_state is True
+    assert restored.best_validation == {"step": 10}
+    with pytest.raises(ValueError, match="legacy v1"):
+        restored.require_exact_validation_resume()
 def test_rlpd_rejects_fractional_utd_ratio():
     with pytest.raises(ValueError, match="positive integer"):
         RLTrainingConfig(

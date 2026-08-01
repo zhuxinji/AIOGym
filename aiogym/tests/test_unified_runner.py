@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -22,10 +23,11 @@ TRACK_ID = "quadruple-regulation-generalist-v1"
 
 def _config(tmp_path, **overrides):
     data = {
+        "schema_version": "aiogym.rl_training_config.v3",
         "track_id": TRACK_ID,
         "algorithm_id": "sac",
         "training_seed": 7,
-        "total_transitions": 20,
+        "budget": {"unit": "environment_transitions", "value": 20},
         "n_envs": 1,
         "algorithm": {"batch_size": 2, "utd_ratio": 1.0},
         "replay": {"capacity": 32},
@@ -41,9 +43,14 @@ def _config(tmp_path, **overrides):
     return RLTrainingConfig.from_mapping(data)
 
 
-def test_v2_config_hash_covers_lifecycle_and_output_fields(tmp_path):
+def test_v3_config_hash_covers_budget_lifecycle_and_output_fields(tmp_path):
     config = _config(tmp_path)
-    assert config.schema_version == "aiogym.rl_training_config.v2"
+    assert config.schema_version == "aiogym.rl_training_config.v3"
+    assert config.as_dict()["budget"] == {
+        "unit": "environment_transitions",
+        "value": 20,
+    }
+    assert "total_transitions" not in config.as_dict()
     restored = RLTrainingConfig.from_mapping(config.as_dict())
     assert restored.config_hash == config.config_hash
     assert restored.validation_seeds == (101, 102)
@@ -124,7 +131,10 @@ def test_lifecycle_reloads_checkpoint_and_replaces_stale_artifact(
     tmp_path,
     monkeypatch,
 ):
-    plan = resolve_training_plan(_config(tmp_path))
+    plan = replace(
+        resolve_training_plan(_config(tmp_path)),
+        replace_existing=True,
+    )
     plan.artifact_dir.mkdir(parents=True)
     plan.policy_path.write_bytes(b"selected-policy")
     (plan.artifact_dir / "benchmark.json").write_text(
@@ -314,7 +324,7 @@ def test_cli_train_is_config_first_and_has_no_backend_subcommand(
     )
     monkeypatch.setattr(
         "aiogym.cli.train.run_experiment",
-        lambda resolved: result,
+        lambda resolved, *, overwrite=False: result,
     )
     assert cli_main(["train", "--config", str(config_path)]) == 0
     payload = json.loads(capsys.readouterr().out)
@@ -386,6 +396,7 @@ def test_rlpd_backend_accepts_only_a_resolved_plan():
     assert tuple(inspect.signature(run_rlpd).parameters) == ("plan",)
 
 
+@pytest.mark.rl
 def test_sb3_callback_records_unique_training_episode_specs(tmp_path):
     from aiogym.rl.backends.sb3 import make_learning_curve_callback
 

@@ -9,6 +9,7 @@ import numpy as np
 
 from aiogym.benchmarks.tracks.registry import load_track
 from aiogym.benchmarks.tracks.schema import TrackSpec
+from aiogym._internal.validation import seed_sequence
 
 from .config import RLTrainingConfig
 from .validation import ValidationEpisodePlan
@@ -94,8 +95,16 @@ class HPOStudySpec:
             raise ValueError("study_name and storage must be non-empty")
         if self.n_trials <= 0:
             raise ValueError("n_trials must be positive")
-        if not self.training_seeds or not self.validation_seeds:
-            raise ValueError("HPO seed lists must be non-empty")
+        object.__setattr__(
+            self,
+            "training_seeds",
+            seed_sequence("HPO training seeds", self.training_seeds),
+        )
+        object.__setattr__(
+            self,
+            "validation_seeds",
+            seed_sequence("HPO validation seeds", self.validation_seeds),
+        )
 
 
 def apply_hpo_parameters(

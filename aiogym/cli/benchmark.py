@@ -8,7 +8,9 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 
-from aiogym._internal.serialization import jsonable
+from aiogym._internal.serialization import write_json_artifact
+from aiogym._internal.config import parse_csv_ints
+from aiogym._internal.validation import seed_sequence
 from aiogym.benchmarks.evaluation import evaluate_policy_on_track
 from aiogym.benchmarks.tracks.registry import list_tracks, load_track
 from aiogym.controllers.checkpoints import (
@@ -67,7 +69,7 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     parser.add_argument(
         "--overwrite",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
     )
     return parser
 
@@ -90,7 +92,7 @@ def main(argv=None, prog: str | None = None) -> int:
         parser.error("provide --config FILE or an official TRACK")
     try:
         track = load_track(args.track)
-        seeds = _parse_seeds(args.seeds)
+        seeds = _resolve_seed_input(args.seeds)
         controllers = _baseline_controllers(args.controllers, track.scenario)
         if args.checkpoint:
             if not args.algorithm_id:
@@ -148,7 +150,11 @@ def main(argv=None, prog: str | None = None) -> int:
     }
     if args.output:
         try:
-            _write_payload(args.output, output, overwrite=args.overwrite)
+            write_json_artifact(
+                args.output,
+                output,
+                overwrite=args.overwrite,
+            )
         except (FileExistsError, OSError) as exc:
             parser.error(str(exc))
     return 0
@@ -175,18 +181,14 @@ def _baseline_controllers(raw: str, scenario: str) -> dict:
     }
 
 
-def _parse_seeds(raw) -> tuple[int, ...]:
+def _resolve_seed_input(raw) -> tuple[int, ...]:
     if isinstance(raw, (list, tuple)):
-        seeds = tuple(int(seed) for seed in raw)
+        seeds = raw
     else:
-        seeds = tuple(
-            int(part.strip())
-            for part in str(raw).split(",")
-            if part.strip()
+        seeds = parse_csv_ints(
+            str(raw), option="--seeds"
         )
-    if not seeds or min(seeds) < 0 or len(set(seeds)) != len(seeds):
-        raise ValueError("--seeds must contain unique non-negative integers")
-    return seeds
+    return seed_sequence("--seeds", seeds)
 
 
 def _load_config(path: str | Path) -> dict:
@@ -229,17 +231,6 @@ def _apply_config(args, declaration: dict) -> None:
     ):
         if field in declaration:
             setattr(args, field, declaration[field])
-
-
-def _write_payload(path: str, payload: dict, *, overwrite: bool) -> None:
-    target = Path(path)
-    if target.exists() and not overwrite:
-        raise FileExistsError(f"artifact already exists: {target}")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(
-        json.dumps(jsonable(payload), indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
 
 
 __all__ = ["BENCHMARK_CONFIG_SCHEMA_VERSION", "build_parser", "main"]

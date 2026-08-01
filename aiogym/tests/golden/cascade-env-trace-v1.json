@@ -2,10 +2,10 @@
   "schema_version": "aiogym.golden_env_trace.v1",
   "scenario": "cascade",
   "case": "continuous-benchmark",
-  "case_profile_hash": "87c8c23e0e50d4e089d547072701fe3ff332039b5bea18425609bdf808d540b7",
+  "case_profile_hash": "c6dcb6819a91efced66fe57e7a9c34f77c8d52c403aeffe05b06bccf2a2171dc",
   "reward_spec": "regulation-v1",
   "reward_spec_version": "1",
-  "env_spec_hash": "34b9dcad37c48c73be967c23dc13c74b2541b1981081365ec18e44e1e5d9108e",
+  "env_spec_hash": "1f725d3186509c498129896468045ebcd1587385867c092c7237b96990edac1f",
   "seed": 17,
   "action_space": {
     "shape": [7],

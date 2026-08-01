@@ -196,6 +196,7 @@ def test_nonfinite_action_values_are_rejected(model, nominal_env, bad_value):
         model.energy_kw(action)
 
 
+@pytest.mark.oracle
 def test_casadi_dynamics_defensively_bounds_actions(model, nominal_env):
     ca = pytest.importorskip("casadi")
     state = ca.DM([0.3, 40.0, 0.3, 50.0, 0.3, 60.0])
@@ -219,6 +220,7 @@ def test_action_energy_defensively_bounds_actions(model):
     assert model.energy_kw(raw) == pytest.approx(model.energy_kw(bounded))
 
 
+@pytest.mark.oracle
 def test_casadi_action_energy_defensively_bounds_actions(model):
     ca = pytest.importorskip("casadi")
     raw = ca.DM([-0.2, 1.3, -0.4, 1.2, -0.1, 1.4, 2.0])
@@ -274,6 +276,7 @@ def test_temperature_trip_removes_heater_power(model, nominal_env, tank_index):
     )
 
 
+@pytest.mark.oracle
 def test_numeric_and_casadi_safety_gates_match(model, nominal_env):
     ca = pytest.importorskip("casadi")
     state = [0.01, 40.0, 0.3, 92.0, 0.3, 60.0]
@@ -380,6 +383,7 @@ def test_temperature_hard_limit_is_an_unconditional_structured_termination():
     assert "temperature_hard_limit" in info["safety_events"]
 
 
+@pytest.mark.oracle
 def test_numeric_and_casadi_controlled_outputs_match_for_same_state(model):
     ca = pytest.importorskip("casadi")
     state = [-0.01, 35.0, 0.2, 50.0, 0.3, 65.0]
@@ -556,6 +560,7 @@ def test_ideal_energy_uses_task_throughput_not_current_pump_action(model, nomina
     )
 
 
+@pytest.mark.oracle
 def test_numeric_and_casadi_continuous_economics_match(model, nominal_env):
     ca = pytest.importorskip("casadi")
     model.configure_operation(

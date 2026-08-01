@@ -48,6 +48,18 @@ def test_public_vocabulary_is_case_goal_reward_track():
     assert all(not hasattr(aiogym, name) for name in advanced)
 
 
+def test_controller_discovery_includes_optional_registered_ids():
+    assert aiogym.list_controllers() == ("hold", "mpc", "oracle", "pid")
+
+
+def test_controller_requires_explicit_model_or_scenario():
+    with pytest.raises(
+        ValueError,
+        match="requires an explicit scenario or model",
+    ):
+        aiogym.make_controller("pid")
+
+
 def test_models_do_not_expose_retired_gym_id_helpers():
     import aiogym.models as models
 

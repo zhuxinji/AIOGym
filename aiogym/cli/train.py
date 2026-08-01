@@ -7,6 +7,8 @@ from dataclasses import replace
 
 from aiogym.rl.config import RLTrainingConfig
 from aiogym.rl.runner import run_experiment, run_seed_sweep
+from aiogym._internal.validation import seed_sequence
+from aiogym._internal.config import parse_csv_ints
 
 
 def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
@@ -19,7 +21,9 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
     parser.add_argument("--seeds", default=None)
     parser.add_argument("--device", default=None)
     parser.add_argument("--output", default=None)
-    parser.add_argument("--resume", default=None)
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--resume", default=None)
+    group.add_argument("--overwrite", action="store_true")
     return parser
 
 
@@ -43,12 +47,21 @@ def main(argv=None, prog: str | None = None) -> int:
         ),
     )
     if args.seeds is not None:
+        if config.resume_checkpoint:
+            raise ValueError(
+                "--resume cannot be combined with --seeds; multi-seed "
+                "sweeps are independent fresh runs"
+            )
         if args.seed is not None:
             raise ValueError("--seed and --seeds are mutually exclusive")
-        result = run_seed_sweep(config, _parse_seeds(args.seeds))
+        result = run_seed_sweep(
+            config,
+            _seed_csv(args.seeds),
+            overwrite=bool(args.overwrite),
+        )
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0
-    result = run_experiment(config)
+    result = run_experiment(config, overwrite=bool(args.overwrite))
     payload = {
         **result.as_dict(),
         "next_command": (
@@ -62,19 +75,10 @@ def main(argv=None, prog: str | None = None) -> int:
     return 0
 
 
-def _parse_seeds(value: str) -> tuple[int, ...]:
-    seeds = tuple(
-        int(part.strip())
-        for part in str(value).split(",")
-        if part.strip()
+def _seed_csv(value: str) -> tuple[int, ...]:
+    return seed_sequence(
+        "--seeds", parse_csv_ints(str(value), option="--seeds")
     )
-    if (
-        not seeds
-        or min(seeds) < 0
-        or len(set(seeds)) != len(seeds)
-    ):
-        raise ValueError("--seeds must contain unique non-negative integers")
-    return seeds
 
 
 __all__ = ["build_parser", "main"]

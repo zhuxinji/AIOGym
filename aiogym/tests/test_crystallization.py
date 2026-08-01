@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from aiogym.controllers import make_controller
 from aiogym.tests._env import make_test_env as make_env
@@ -60,6 +61,7 @@ def test_unified_reward_modes_are_finite():
         assert "goal_reward" in info
 
 
+@pytest.mark.oracle
 def test_tracking_controllers_build():
     pid = make_controller("pid", scenario="crystallization")
     mpc = make_controller("mpc", scenario="crystallization")

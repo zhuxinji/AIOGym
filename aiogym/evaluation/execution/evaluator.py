@@ -8,6 +8,7 @@ from typing import Sequence
 import numpy as np
 
 from ..._internal.serialization import jsonable as _jsonable
+from ..._internal.validation import nonnegative_int, positive_int, seed_sequence
 from ...controllers.adapters import as_controller
 from ...controllers.contracts import build_context, validate_action
 from ..results import _aggregate_metric_keys, evaluate_case_acceptance, result_schema
@@ -59,14 +60,13 @@ def evaluate_controller(agent, env, episodes: int = 1, seed: int = 0,
     reproduce the benchmark.
     """
 
+    _require_full_evaluation_info(env)
     if seed_list is None:
-        if episodes <= 0:
-            raise ValueError("episodes must be positive when seed_list is not provided")
-        seeds = [int(seed) + ep for ep in range(episodes)]
+        resolved_episodes = positive_int("episodes", episodes)
+        first_seed = nonnegative_int("seed", seed)
+        seeds = tuple(range(first_seed, first_seed + resolved_episodes))
     else:
-        seeds = [int(value) for value in seed_list]
-        if not seeds:
-            raise ValueError("seed_list must contain at least one seed")
+        seeds = seed_sequence("seed_list", seed_list)
     resolved_episode_specs = (
         None if episode_specs is None else tuple(episode_specs)
     )
@@ -455,6 +455,36 @@ def evaluate_controller(agent, env, episodes: int = 1, seed: int = 0,
     if include_episodes:
         result["episode_metrics"] = per_episode
     return result
+
+
+def _require_full_evaluation_info(env) -> None:
+    """Reject environments that cannot provide the evaluator metric inputs."""
+
+    missing = object()
+    info_level = missing
+    getter = getattr(env, "get_wrapper_attr", None)
+    if callable(getter):
+        try:
+            info_level = getter("info_level")
+        except AttributeError:
+            pass
+    if info_level is missing:
+        unwrapped = getattr(env, "unwrapped", None)
+        if unwrapped is not None:
+            info_level = getattr(unwrapped, "info_level", missing)
+    if info_level is missing:
+        info_level = getattr(env, "info_level", missing)
+    if info_level is missing:
+        raise TypeError(
+            "evaluate_controller requires an AIO-Gym environment created "
+            "with info_level='full'"
+        )
+    if info_level != "full":
+        raise ValueError(
+            "evaluate_controller requires an AIO-Gym environment created "
+            "with info_level='full'; info_level='minimal' is intended for "
+            "training/stepping only"
+        )
 
 
 def _accumulate_raw_tracking_metrics(

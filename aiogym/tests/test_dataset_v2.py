@@ -180,6 +180,80 @@ def test_dataset_writer_resumes_without_duplicates(tmp_path):
     assert reader.validate_integrity()["ok"]
 
 
+def test_manifest_failure_removes_newly_written_shard(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "manifest-failure"
+    writer = DatasetWriter(
+        path,
+        dataset_id="manifest-failure-v2",
+        split="training",
+    )
+    monkeypatch.setattr(
+        writer,
+        "_write_manifest",
+        lambda: (_ for _ in ()).throw(RuntimeError("manifest commit failed")),
+    )
+    with pytest.raises(RuntimeError, match="manifest commit failed"):
+        writer.append_episode(_collected_episode(30))
+    assert list((path / "shards").glob("part-*.npz")) == []
+    assert writer.manifest["episode_count"] == 0
+
+
+def test_resume_quarantines_orphan_shard_idempotently(tmp_path):
+    path = tmp_path / "orphan"
+    with DatasetWriter(
+        path,
+        dataset_id="orphan-v2",
+        split="training",
+    ) as writer:
+        writer.append_episode(_collected_episode(31))
+    orphan = path / "shards" / "part-00000007.npz"
+    np.savez_compressed(orphan, orphan=np.asarray([1]))
+
+    with DatasetWriter(
+        path,
+        dataset_id="orphan-v2",
+        split="training",
+        resume=True,
+    ) as writer:
+        events = writer.manifest["collection"]["recovery_events"]
+        assert len(events) == 1
+        assert events[0]["source"] == "shards/part-00000007.npz"
+        writer.append_episode(_collected_episode(32))
+    assert (path / "shards" / "part-00000001.npz").is_file()
+    quarantined = list((path / "shards" / ".orphaned").iterdir())
+    assert len(quarantined) == 1
+
+    with DatasetWriter(
+        path,
+        dataset_id="orphan-v2",
+        split="training",
+        resume=True,
+    ) as writer:
+        assert len(
+            writer.manifest["collection"]["recovery_events"]
+        ) == 1
+
+
+def test_missing_referenced_shard_is_not_treated_as_orphan(tmp_path):
+    path = tmp_path / "missing"
+    with DatasetWriter(
+        path,
+        dataset_id="missing-v2",
+        split="training",
+    ) as writer:
+        record = writer.append_episode(_collected_episode(33))
+    (path / record["shard"]).unlink()
+    with pytest.raises(FileNotFoundError, match="referenced shard"):
+        DatasetWriter(
+            path,
+            dataset_id="missing-v2",
+            split="training",
+            resume=True,
+        )
+
+
 def test_manifest_hash_and_shard_checksum_detect_corruption(tmp_path):
     episode = _collected_episode(5)
     path = tmp_path / "corrupt"

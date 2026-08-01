@@ -3,14 +3,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace as dataclass_replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+from aiogym._internal.validation import seed_sequence
 
-RL_TRAINING_CONFIG_SCHEMA_VERSION = "aiogym.rl_training_config.v2"
+
+RL_TRAINING_CONFIG_SCHEMA_VERSION = "aiogym.rl_training_config.v3"
+LEGACY_RL_TRAINING_CONFIG_SCHEMA_VERSION = "aiogym.rl_training_config.v2"
 _ALGORITHMS = frozenset({"bc", "ppo", "rlpd", "sac", "td3"})
 _ALGORITHM_FIELDS = {
     "bc": frozenset({"batch_size", "hidden", "learning_rate"}),
@@ -89,6 +93,7 @@ _WORKFLOW_FIELDS = {
             "onnx",
             "rollout_steps",
             "save_rollout",
+            "strict_export",
         }
     ),
 }
@@ -163,10 +168,10 @@ _EVALUATION_DEFAULTS = {
 }
 _OUTPUT_DEFAULTS = {
     "bc": {},
-    "ppo": {"onnx": False, "rollout_steps": None, "save_rollout": True},
-    "rlpd": {"onnx": False, "rollout_steps": None, "save_rollout": False},
-    "sac": {"onnx": False, "rollout_steps": None, "save_rollout": True},
-    "td3": {"onnx": False, "rollout_steps": None, "save_rollout": True},
+    "ppo": {"onnx": False, "rollout_steps": None, "save_rollout": True, "strict_export": False},
+    "rlpd": {"onnx": False, "rollout_steps": None, "save_rollout": False, "strict_export": False},
+    "sac": {"onnx": False, "rollout_steps": None, "save_rollout": True, "strict_export": False},
+    "td3": {"onnx": False, "rollout_steps": None, "save_rollout": True, "strict_export": False},
 }
 
 
@@ -225,6 +230,7 @@ class RLTrainingConfig:
     dataset_path: str | None = None
     dataset_hash: str | None = None
     curriculum_id: str | None = None
+    migration_metadata: Mapping[str, Any] | None = None
     schema_version: str = RL_TRAINING_CONFIG_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -287,20 +293,9 @@ class RLTrainingConfig:
             raise ValueError(
                 "RLPD algorithm.utd_ratio must be a positive integer"
             )
-        seeds = tuple(self.validation_seeds)
-        if (
-            not seeds
-            or any(
-                isinstance(seed, bool)
-                or not isinstance(seed, int)
-                or seed < 0
-                for seed in seeds
-            )
-            or len(set(seeds)) != len(seeds)
-        ):
-            raise ValueError(
-                "validation_seeds must be unique non-negative integers"
-            )
+        seeds = seed_sequence(
+            "validation_seeds", self.validation_seeds
+        )
         object.__setattr__(self, "validation_seeds", seeds)
         if self.resume_mode != "restart_episode":
             raise ValueError("resume_mode must be 'restart_episode'")
@@ -324,6 +319,30 @@ class RLTrainingConfig:
             raise ValueError(
                 "dataset_hash must be null or a lowercase SHA-256 digest"
             )
+        if self.migration_metadata is not None:
+            if not isinstance(self.migration_metadata, Mapping):
+                raise TypeError("migration_metadata must be a mapping")
+            object.__setattr__(
+                self,
+                "migration_metadata",
+                _freeze_json(
+                    _json_mapping(
+                        "migration_metadata", self.migration_metadata
+                    )
+                ),
+            )
+
+    @property
+    def budget_unit(self) -> str:
+        return (
+            "optimizer_updates"
+            if self.algorithm_id == "bc"
+            else "environment_transitions"
+        )
+
+    @property
+    def budget_value(self) -> int:
+        return int(self.total_transitions)
 
     @property
     def utd_ratio(self) -> float:
@@ -356,7 +375,10 @@ class RLTrainingConfig:
             "track_id": self.track_id,
             "algorithm_id": self.algorithm_id,
             "training_seed": self.training_seed,
-            "total_transitions": self.total_transitions,
+            "budget": {
+                "unit": self.budget_unit,
+                "value": self.budget_value,
+            },
             "n_envs": self.n_envs,
             "device": self.device,
             "algorithm": _thaw_json(self.algorithm),
@@ -371,6 +393,11 @@ class RLTrainingConfig:
             "dataset_path": self.dataset_path,
             "dataset_hash": self.dataset_hash,
             "curriculum_id": self.curriculum_id,
+            "migration_metadata": (
+                None
+                if self.migration_metadata is None
+                else _thaw_json(self.migration_metadata)
+            ),
         }
 
     def canonical_json(self) -> str:
@@ -388,6 +415,65 @@ class RLTrainingConfig:
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "RLTrainingConfig":
         data = dict(value)
+        source_schema = data.get("schema_version")
+        if source_schema in {
+            None,
+            LEGACY_RL_TRAINING_CONFIG_SCHEMA_VERSION,
+        }:
+            if "total_transitions" not in data:
+                raise ValueError(
+                    "v2 RL training config requires total_transitions"
+                )
+            algorithm_id = str(data.get("algorithm_id", "")).lower()
+            unit = (
+                "optimizer_updates"
+                if algorithm_id == "bc"
+                else "environment_transitions"
+            )
+            data["schema_version"] = RL_TRAINING_CONFIG_SCHEMA_VERSION
+            data["migration_metadata"] = {
+                "source_schema_version": (
+                    source_schema or "unspecified-v2-shape"
+                ),
+                "legacy_budget_field": "total_transitions",
+                "resolved_budget_unit": unit,
+            }
+            warnings.warn(
+                "migrating v2 total_transitions to explicit v3 budget",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        elif source_schema != RL_TRAINING_CONFIG_SCHEMA_VERSION:
+            raise ValueError(
+                f"unsupported RL training config: {source_schema!r}"
+            )
+        if source_schema == RL_TRAINING_CONFIG_SCHEMA_VERSION:
+            if "total_transitions" in data:
+                raise ValueError(
+                    "v3 RL training config uses budget, not total_transitions"
+                )
+            budget = data.pop("budget", None)
+            if not isinstance(budget, Mapping):
+                raise TypeError("v3 RL training config budget must be a mapping")
+            if set(budget) != {"unit", "value"}:
+                raise ValueError("budget requires exactly unit and value")
+            algorithm_id = str(data.get("algorithm_id", "")).lower()
+            expected_unit = (
+                "optimizer_updates"
+                if algorithm_id == "bc"
+                else "environment_transitions"
+            )
+            if budget["unit"] != expected_unit:
+                raise ValueError(
+                    f"{algorithm_id.upper()} budget unit must be "
+                    f"{expected_unit}"
+                )
+            value = budget["value"]
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError("budget value must be an integer")
+            if value <= 0:
+                raise ValueError("budget value must be positive")
+            data["total_transitions"] = value
         unknown = sorted(
             set(data)
             - {
@@ -410,6 +496,7 @@ class RLTrainingConfig:
                 "dataset_path",
                 "dataset_hash",
                 "curriculum_id",
+                "migration_metadata",
             }
         )
         if unknown:

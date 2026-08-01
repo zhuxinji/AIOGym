@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 import numpy as np
+import pytest
 
 from aiogym.benchmarks import TrackSpec, load_track
 from aiogym.generation import make_episode_sampler
@@ -155,6 +156,7 @@ def test_online_collector_injects_sampler_episode_specs():
         collector.close()
 
 
+@pytest.mark.rl
 def test_sb3_vector_autoreset_advances_partitioned_global_indexes():
     from stable_baselines3.common.vec_env import DummyVecEnv
 

@@ -1,11 +1,11 @@
 {
   "schema_version": "aiogym.tune.v1",
   "training": {
-    "schema_version": "aiogym.rl_training_config.v2",
+    "schema_version": "aiogym.rl_training_config.v3",
     "track_id": "quadruple-regulation-generalist-v1",
     "algorithm_id": "sac",
     "training_seed": 0,
-    "total_transitions": 10000,
+    "budget": {"unit": "environment_transitions", "value": 10000},
     "n_envs": 4,
     "device": "cpu",
     "algorithm": {

@@ -6,6 +6,8 @@ from collections.abc import Mapping, Sequence
 
 import numpy as np
 
+from aiogym._internal.validation import seed_sequence
+
 
 PAIR_ROLES = ("nominal", "shifted")
 
@@ -33,9 +35,7 @@ def paired_seed_metadata(
 ) -> tuple[dict, ...]:
     """Declare nominal/shifted members that share each base random seed."""
 
-    seeds = tuple(int(seed) for seed in base_seeds)
-    if not seeds:
-        raise ValueError("paired robustness requires at least one base seed")
+    seeds = seed_sequence("paired robustness base seeds", base_seeds)
     return tuple(
         {
             "pair_id": str(pair_id),

@@ -41,7 +41,7 @@ def run_bc(plan) -> BackendResult:
         seed=config.training_seed,
     )
     report = trainer.fit(
-        steps=config.total_transitions,
+        steps=config.budget_value,
         batch_size=int(algorithm["batch_size"]),
     )
     report["kind"] = "behavior_cloning_sanity"
@@ -62,6 +62,10 @@ def run_bc(plan) -> BackendResult:
             "dataset_id": plan.dataset_id,
             "dataset_hash": plan.dataset_hash,
             "optimizer_steps": int(report["steps"]),
+            "optimizer_updates": int(report["steps"]),
+            "environment_transitions": 0,
+            "offline_samples_available": len(replay),
+            "offline_samples_drawn": int(replay.sample_count),
             "batch_size": int(algorithm["batch_size"]),
             "hidden": int(algorithm["hidden"]),
             "learning_rate": float(algorithm["learning_rate"]),

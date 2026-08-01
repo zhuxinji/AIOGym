@@ -268,6 +268,7 @@ def test_constrained_gate_applies_declared_cost_budgets():
     assert failed["reasons"] == ["cost_budget:soft_safety_cost"]
 
 
+@pytest.mark.rl
 def test_lagrangian_sac_separates_reward_and_cost_and_resumes():
     agent = LagrangianSAC(
         3,

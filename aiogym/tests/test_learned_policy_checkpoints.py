@@ -300,6 +300,7 @@ def test_sb3_dispatch_validates_spaces_and_requests_device(
     assert controller.normalized_actions is True
 
 
+@pytest.mark.onnx
 def test_onnx_dispatch_passes_complete_shape_contract(
     tmp_path,
     monkeypatch,

@@ -20,6 +20,9 @@ from aiogym.rewards.specs import RewardSpec
 from .config import DIRECT_ENV_DEFAULTS
 
 
+ENV_SPEC_HASH_SCHEMA_VERSION = "aiogym.resolved_env_spec.v2"
+
+
 _CONFIG_FIELDS = frozenset(
     {"scenario", "case", "reward_spec", "environment", "info_level"}
 )
@@ -74,20 +77,7 @@ class ResolvedEnvSpec:
                     name,
                     _freeze(deepcopy(dict(value))),
                 )
-        payload = {
-            "scenario": self.scenario,
-            "case_profile": _thaw(self.case_profile),
-            "reward_spec": self.reward_spec.id,
-            "control_dt": self.control_dt,
-            "episode_steps": self.episode_steps,
-            "action_mode": self.action_mode,
-            "observation": _thaw(self.observation),
-            "realism": _thaw(self.realism),
-            "events": _thaw(self.events),
-            "model_params": _thaw(self.model_params),
-            "info_level": self.info_level,
-            "profile_timing": self.profile_timing,
-        }
+        payload = self.hash_payload()
         canonical = json.dumps(
             payload,
             sort_keys=True,
@@ -100,6 +90,29 @@ class ResolvedEnvSpec:
             "spec_hash",
             hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
         )
+
+    def hash_payload(self) -> dict[str, Any]:
+        """Return the complete versioned identity hashed by ``spec_hash``."""
+
+        return {
+            "hash_schema": ENV_SPEC_HASH_SCHEMA_VERSION,
+            "scenario": self.scenario,
+            "case_profile": _thaw(self.case_profile),
+            "reward_spec": {
+                "id": self.reward_spec.id,
+                "spec_hash": self.reward_spec.spec_hash,
+                "content": self.reward_spec.as_dict(),
+            },
+            "control_dt": self.control_dt,
+            "episode_steps": self.episode_steps,
+            "action_mode": self.action_mode,
+            "observation": _thaw(self.observation),
+            "realism": _thaw(self.realism),
+            "events": _thaw(self.events),
+            "model_params": _thaw(self.model_params),
+            "info_level": self.info_level,
+            "profile_timing": self.profile_timing,
+        }
 
     def runtime(self) -> dict[str, Any]:
         """Return a detached mutable view for the internal environment."""
@@ -268,4 +281,8 @@ def _thaw(value):
     return deepcopy(value)
 
 
-__all__ = ["ResolvedEnvSpec", "resolve_env_spec"]
+__all__ = [
+    "ENV_SPEC_HASH_SCHEMA_VERSION",
+    "ResolvedEnvSpec",
+    "resolve_env_spec",
+]

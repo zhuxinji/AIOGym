@@ -2,16 +2,26 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Sequence
 
+from aiogym._internal.serialization import write_json_artifact
+from aiogym._internal.validation import seed_sequence
+
 from .backends import run_backend, validate_backend_result
 from .config import RLTrainingConfig
 from .lifecycle import finalize_training_lifecycle
 from .plan import ResolvedTrainingPlan, resolve_training_plan
+from .run_claim import (
+    RunClaim,
+    RunClaimIdentity,
+    SeedSweepClaim,
+    SeedSweepIdentity,
+)
 
 
 RUN_RESULT_SCHEMA_VERSION = "aiogym.run_result.v3"
@@ -65,86 +75,145 @@ def run_experiment(
     validation_plan=None,
     backend_runner=run_backend,
     lifecycle_finalizer=finalize_training_lifecycle,
+    overwrite: bool = False,
 ) -> RunResult:
     """Resolve, execute, and report one complete training lifecycle."""
 
     plan = resolve_training_plan(config)
+    resume = bool(plan.config.resume_checkpoint)
+    if resume and plan.config.algorithm_id == "bc":
+        raise ValueError("BC resume is not implemented")
+    if overwrite and resume:
+        raise ValueError("overwrite and resume are mutually exclusive")
     if validation_plan is not None:
         _validate_external_plan(plan, validation_plan)
         plan = replace(plan, validation_plan=validation_plan)
-    plan.output_dir.mkdir(parents=True, exist_ok=True)
-    plan.artifact_dir.mkdir(parents=True, exist_ok=True)
-    _atomic_json(plan.resolved_config_path, plan.config.as_dict())
-    backend_result = backend_runner(plan)
-    validate_backend_result(plan, backend_result)
-    lifecycle = lifecycle_finalizer(plan, backend_result)
-    result = RunResult(
-        config_hash=plan.config.config_hash,
-        track_id=plan.track.id,
-        track_hash=plan.track.track_hash,
-        algorithm_id=plan.config.algorithm_id,
-        training_seed=plan.config.training_seed,
-        output_dir=str(plan.output_dir),
-        policy_path=str(plan.policy_path),
-        artifact_dir=str(plan.artifact_dir),
-        resolved_config_path=str(plan.resolved_config_path),
-        validation_plan_hash=plan.validation_plan.plan_hash,
-        policy_sha256=lifecycle.policy_sha256,
-        backend=backend_result.compact_summary(),
-        validation=lifecycle.validation,
-        artifact_check=lifecycle.artifact_check,
-        distribution_id=plan.track.train_distribution_id,
+    plan = replace(plan, replace_existing=bool(overwrite or resume))
+    claim_path = plan.output_dir / f".{plan.run_name}.claim.json"
+    run_result_path = plan.output_dir / f"{plan.run_name}.run-result.json"
+    artifact_path = plan.artifact_dir / "benchmark.json"
+    claim = RunClaim.acquire(
+        claim_path,
+        RunClaimIdentity(
+            run_name=plan.run_name,
+            config_hash=plan.config.config_hash,
+            track_hash=plan.track.track_hash,
+            algorithm_id=plan.config.algorithm_id,
+            training_seed=plan.config.training_seed,
+        ),
+        occupied_paths=_owned_paths(plan, run_result_path),
+        overwrite=overwrite,
+        resume=resume,
+        previous_artifact=artifact_path,
     )
-    _atomic_json(
-        plan.output_dir / f"{plan.run_name}.run-result.json",
-        result.as_dict(),
-    )
+    try:
+        if overwrite:
+            _clear_file_outputs(plan, run_result_path)
+        plan.output_dir.mkdir(parents=True, exist_ok=True)
+        plan.artifact_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_json(plan.resolved_config_path, plan.config.as_dict())
+        backend_result = backend_runner(plan)
+        validate_backend_result(plan, backend_result)
+        lifecycle = lifecycle_finalizer(plan, backend_result)
+        result = RunResult(
+            config_hash=plan.config.config_hash,
+            track_id=plan.track.id,
+            track_hash=plan.track.track_hash,
+            algorithm_id=plan.config.algorithm_id,
+            training_seed=plan.config.training_seed,
+            output_dir=str(plan.output_dir),
+            policy_path=str(plan.policy_path),
+            artifact_dir=str(plan.artifact_dir),
+            resolved_config_path=str(plan.resolved_config_path),
+            validation_plan_hash=plan.validation_plan.plan_hash,
+            policy_sha256=lifecycle.policy_sha256,
+            backend=backend_result.compact_summary(),
+            validation=lifecycle.validation,
+            artifact_check=lifecycle.artifact_check,
+            distribution_id=plan.track.train_distribution_id,
+        )
+        _atomic_json(run_result_path, result.as_dict())
+        claim.complete(
+            run_result_hash=_file_sha256(run_result_path),
+            artifact_hash=(
+                _file_sha256(artifact_path) if artifact_path.is_file() else None
+            ),
+        )
+    except BaseException as exc:
+        claim.fail(exc)
+        raise
     return result
 
 
 def run_seed_sweep(
     config: RLTrainingConfig,
     seeds: Sequence[int],
+    *,
+    overwrite: bool = False,
 ) -> dict[str, Any]:
     """Run independent local seeds and persist one compact comparison."""
 
-    resolved_seeds = tuple(int(seed) for seed in seeds)
-    if (
-        not resolved_seeds
-        or min(resolved_seeds) < 0
-        or len(set(resolved_seeds)) != len(resolved_seeds)
-    ):
-        raise ValueError("seeds must be unique non-negative integers")
+    resolved_seeds = seed_sequence("seeds", seeds)
+    if config.resume_checkpoint:
+        raise ValueError(
+            "--resume cannot be combined with --seeds; multi-seed sweeps "
+            "are independent fresh runs"
+        )
+    base_plan = resolve_training_plan(config)
     base_output = dict(config.output)
     base_name = str(
         base_output.get("name")
         or f"{config.algorithm_id}-{config.track_id}"
     )
-    results = []
-    for seed in resolved_seeds:
-        output = {
-            **base_output,
-            "name": f"{base_name}-seed{seed}",
-        }
-        results.append(
-            run_experiment(
-                replace(
-                    config,
-                    training_seed=seed,
-                    output=output,
-                )
-            )
-        )
-    summary = {
-        "schema_version": "aiogym.multi_seed_run.v1",
-        "track_id": config.track_id,
-        "algorithm_id": config.algorithm_id,
-        "seeds": list(resolved_seeds),
-        "runs": [result.as_dict() for result in results],
-        "validation_summary": _summarize_validations(results),
-    }
     directory = Path(str(base_output.get("directory", "runs")))
-    _atomic_json(directory / f"{base_name}.multi-seed.json", summary)
+    summary_path = directory / f"{base_name}.multi-seed.json"
+    identity = SeedSweepIdentity(
+        base_name=base_name,
+        config_hash=base_plan.config.config_hash,
+        track_id=base_plan.track.id,
+        track_hash=base_plan.track.track_hash,
+        algorithm_id=base_plan.config.algorithm_id,
+        seeds=resolved_seeds,
+    )
+    claim = SeedSweepClaim.acquire(
+        directory / f".{base_name}.multi-seed.claim.json",
+        identity,
+        summary_path=summary_path,
+        overwrite=overwrite,
+    )
+    results = []
+    try:
+        for seed in resolved_seeds:
+            output = {
+                **base_output,
+                "name": f"{base_name}-seed{seed}",
+            }
+            result = run_experiment(
+                replace(config, training_seed=seed, output=output),
+                overwrite=overwrite,
+            )
+            results.append(result)
+            claim.record_child(
+                seed=seed,
+                result_hash=_mapping_sha256(result.as_dict()),
+            )
+        summary = {
+            "schema_version": "aiogym.multi_seed_run.v1",
+            "sweep_id": identity.sweep_id,
+            "config_hash": identity.config_hash,
+            "track_id": identity.track_id,
+            "track_hash": identity.track_hash,
+            "algorithm_id": identity.algorithm_id,
+            "summary_path": str(summary_path),
+            "seeds": list(resolved_seeds),
+            "runs": [result.as_dict() for result in results],
+            "validation_summary": _summarize_validations(results),
+        }
+        write_json_artifact(summary_path, summary, overwrite=overwrite)
+        claim.complete(summary_hash=_file_sha256(summary_path))
+    except BaseException as exc:
+        claim.fail(exc)
+        raise
     return summary
 
 
@@ -229,6 +298,44 @@ def _atomic_json(path: Path, value) -> None:
             os.unlink(temporary)
         except FileNotFoundError:
             pass
+
+
+def _owned_paths(plan, run_result_path: Path) -> tuple[Path, ...]:
+    final_suffix = ".pt" if plan.config.algorithm_id in {"bc", "rlpd"} else ".zip"
+    return (
+        plan.policy_path,
+        Path(f"{plan.policy_path}.training.ckpt"),
+        plan.output_dir / f"{plan.run_name}.final{final_suffix}",
+        plan.output_dir / f"{plan.run_name}.onnx",
+        plan.resolved_config_path,
+        run_result_path,
+        plan.artifact_dir / "benchmark.json",
+        plan.artifact_dir / "report.md",
+    )
+
+
+def _clear_file_outputs(plan, run_result_path: Path) -> None:
+    for path in _owned_paths(plan, run_result_path):
+        if path.is_file() or path.is_symlink():
+            path.unlink()
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _mapping_sha256(value: dict[str, Any]) -> str:
+    payload = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 __all__ = [

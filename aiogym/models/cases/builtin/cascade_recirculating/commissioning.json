@@ -3,7 +3,7 @@
   "name": "commissioning",
   "scenario": "cascade-recirculating",
   "status": "design-derived-benchmark",
-  "description": "Deterministic hold test at the model-consistent 80 mL/s closed-loop equilibrium with PDF-range-derived inventory geometry.",
+  "description": "Deterministic recovery from a feasible low-inventory, low-temperature startup toward the model-consistent 80 mL/s closed-loop equilibrium.",
   "environment": {
     "control_dt": 0.5,
     "episode_steps": 600,
@@ -19,8 +19,8 @@
     "noise_pct": 0.01
   },
   "initialization": {
-    "state": [0.4, 30.0, 0.4, 28.932991890738368, 0.4, 27.57566937897707],
-    "basis": "model-consistent equilibrium derived from an assumed 8.0e-5 m3/s circulation flow; 0.40 m represents 16 L, 16 L, and 60 L"
+    "state": [0.28, 24.0, 0.32, 25.5, 0.36, 26.5],
+    "basis": "feasible bounded startup offset from the model-consistent equilibrium derived from an assumed 8.0e-5 m3/s circulation flow"
   },
   "setpoints": {
     "initial": [0.4, 0.4, 0.4, 30.0, 28.932991890738368, 27.57566937897707],

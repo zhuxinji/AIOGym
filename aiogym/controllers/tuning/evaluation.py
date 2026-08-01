@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from aiogym.controllers.registry import make_controller
 from aiogym import make_env
 from aiogym.evaluation.execution import evaluate_controller
+from aiogym._internal.validation import seed_sequence
 
 
 def evaluate_specialist(
@@ -17,9 +18,7 @@ def evaluate_specialist(
     controller_config: Mapping | None = None,
     environment: Mapping | None = None,
 ) -> dict:
-    seed_list = tuple(int(seed) for seed in seeds)
-    if not seed_list:
-        raise ValueError("tuning evaluation requires at least one seed")
+    seed_list = seed_sequence("tuning evaluation seeds", seeds)
     agent = make_controller(
         controller,
         scenario=scenario,

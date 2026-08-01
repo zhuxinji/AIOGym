@@ -66,6 +66,6 @@
     "safety_gate": "zero-hard-failure-v1",
     "case_score": "fixed-anchor-v1",
     "track_aggregation": "weighted-geometric-mean-v1",
-    "anchor_id": "quadruple-regulation-anchors-v1"
+    "anchor_id": "quadruple-regulation-anchors-v2"
   }
 }

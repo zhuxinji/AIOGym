@@ -1,9 +1,9 @@
 {
-  "schema_version": "aiogym.rl_training_config.v2",
+  "schema_version": "aiogym.rl_training_config.v3",
   "track_id": "quadruple-regulation-generalist-v1",
   "algorithm_id": "rlpd",
   "training_seed": 0,
-  "total_transitions": 100,
+  "budget": {"unit": "environment_transitions", "value": 100},
   "n_envs": 1,
   "algorithm": {
     "batch_size": 64,

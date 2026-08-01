@@ -12,9 +12,10 @@ from aiogym.controllers.checkpoints import (
     learned_policy_spec_for_track,
     load_policy_checkpoint,
 )
+from aiogym.controllers.export import ExportResult, export_policy_checkpoint
 from aiogym.evaluation.artifact import check_benchmark_artifacts
 from aiogym.evaluation.execution.rollouts import rollout_controller
-from aiogym.evaluation.provenance import seed_namespace_hash
+from aiogym.evaluation.provenance import reward_spec_hash, seed_namespace_hash
 
 from .backends import BackendResult, validate_backend_result
 from .plan import ResolvedTrainingPlan
@@ -50,12 +51,14 @@ def finalize_training_lifecycle(
         include_episodes=True,
     )
     rollouts = _validation_rollouts(plan, controller)
+    export_result = _optional_export(plan, spec)
     _write_runner_artifacts(
         plan,
         backend_result,
         digest,
         evaluation,
         rollouts,
+        export_result,
     )
     payload = _read_json(plan.artifact_dir / "benchmark.json")
     validation = payload.get("track_evaluation")
@@ -74,6 +77,14 @@ def finalize_training_lifecycle(
             "training artifacts failed structural validation: "
             + (failed or "unknown check")
         )
+    if (
+        export_result.status == "failed"
+        and bool(plan.config.output.get("strict_export", False))
+    ):
+        raise RuntimeError(
+            "strict ONNX export failed after preserving native checkpoint "
+            f"and artifacts: {export_result.error}"
+        )
     return TrainingLifecycleResult(
         policy_sha256=digest,
         validation=dict(validation),
@@ -87,6 +98,7 @@ def _write_runner_artifacts(
     digest,
     evaluation,
     rollouts,
+    export_result,
 ) -> None:
     track = plan.track
     config = plan.config
@@ -98,6 +110,7 @@ def _write_runner_artifacts(
         "action_mode": action_mode,
         "goal": track.goal,
         "reward_spec_id": track.reward_spec_id,
+        "reward_spec_hash": reward_spec_hash(track.reward_spec_id),
         "track_id": track.id,
         "track_hash": track.track_hash,
         "policy_scope": track.policy_scope,
@@ -105,7 +118,20 @@ def _write_runner_artifacts(
         "training_seed": config.training_seed,
         "n_envs": config.n_envs,
         "device": config.device,
-        "total_transitions": config.total_transitions,
+        "budget_unit": config.budget_unit,
+        "budget_value": config.budget_value,
+        "environment_transitions": (
+            0
+            if config.algorithm_id == "bc"
+            else int(backend_result.final_step)
+        ),
+        "optimizer_updates": (
+            int(backend_result.final_step)
+            if config.algorithm_id == "bc"
+            else None
+        ),
+        "offline_samples_available": None,
+        "offline_samples_drawn": None,
         "training_config": config.as_dict(),
         "training_config_hash": config.config_hash,
         "validation_plan_hash": plan.validation_plan.plan_hash,
@@ -129,7 +155,9 @@ def _write_runner_artifacts(
     }
     _merge_backend_metadata(training, backend_result.training_metadata)
     training["runtime"] = dict(backend_result.runtime)
-    training["exports"] = dict(backend_result.exports)
+    training["exports"] = {
+        "onnx": export_result.as_dict(),
+    }
     results = list(evaluation["results"])
     payload = rl_payload(
         kind=f"{config.algorithm_id}_train_eval",
@@ -159,7 +187,7 @@ def _write_runner_artifacts(
     write_rl_artifacts(
         plan.artifact_dir,
         payload,
-        replace_existing=True,
+        replace_existing=plan.replace_existing,
     )
 
 
@@ -179,11 +207,26 @@ def _merge_backend_metadata(training, backend_metadata) -> None:
             + ", ".join(sorted(collisions))
         )
     for name, value in backend_metadata.items():
+        if name in training and training[name] is None:
+            training[name] = value
+            continue
         if name in training and training[name] != value:
             raise ValueError(
                 f"backend metadata conflicts with canonical field: {name}"
             )
         training[name] = value
+
+
+def _optional_export(plan, policy_spec) -> ExportResult:
+    output = dict(plan.config.output)
+    if not bool(output.get("onnx", False)):
+        return ExportResult(format="onnx", status="skipped")
+    return export_policy_checkpoint(
+        policy_spec,
+        format="onnx",
+        output=plan.output_dir / f"{plan.run_name}.onnx",
+        device=plan.config.device,
+    )
 
 
 def _validation_rollouts(plan, controller) -> list[dict[str, Any]]:

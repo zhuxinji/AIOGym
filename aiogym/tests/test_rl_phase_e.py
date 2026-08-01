@@ -1,8 +1,14 @@
 """Phase-E acceptance tests for Dataset replay and RLPD v2."""
 from __future__ import annotations
 
+import json
 import numpy as np
 import pytest
+
+torch = pytest.importorskip("torch")
+pytestmark = pytest.mark.rl
+
+from aiogym import load_track
 
 from aiogym.datasets.schema import DatasetEpisode
 from aiogym.datasets.writer import DatasetWriter
@@ -22,11 +28,11 @@ from aiogym.rl.rlpd import Actor, RLPD
 from aiogym.rl.training_artifacts import rl_payload
 from aiogym.rl.backends.bc import run_bc
 from aiogym.rl.plan import resolve_training_plan
+from aiogym.rl.runner import run_experiment
+from aiogym.controllers.export import ExportResult
 from aiogym.rl.online_collection import VectorOnlineCollector
+from aiogym.rewards import get_reward_spec
 from aiogym.tests._env import make_test_env as make_env
-
-
-torch = pytest.importorskip("torch")
 
 
 def test_bc_reproduces_collector_on_tiny_dataset(tmp_path):
@@ -152,6 +158,84 @@ def test_bc_backend_writes_policy_spec_and_policy_only_state(
     ]
     assert set(checkpoint["policy_state_dict"]) == set(
         checkpoint["trainer"]["policy"]
+    )
+
+
+@pytest.mark.parametrize("strict", [False, True])
+def test_optional_export_failure_preserves_native_checkpoint_and_artifact(
+    tmp_path, monkeypatch, strict
+):
+    dataset_path = _dataset(tmp_path, episode_count=1)
+    name = "bc-strict-export" if strict else "bc-best-effort-export"
+    monkeypatch.setattr(
+        "aiogym.rl.lifecycle.export_policy_checkpoint",
+        lambda *args, **kwargs: ExportResult(
+            format="onnx",
+            status="failed",
+            path=str(tmp_path / f"{name}.onnx"),
+            error="RuntimeError: injected export failure",
+        ),
+    )
+    track = load_track("quadruple-regulation-generalist-v1")
+    monkeypatch.setattr(
+        "aiogym.rl.lifecycle.load_policy_checkpoint",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        "aiogym.rl.lifecycle.evaluate_validation_policy",
+        lambda controller, plan, **kwargs: {
+            "split": "validation",
+            "track_id": track.id,
+            "track_hash": track.track_hash,
+            "episode_plan_hash": plan.plan_hash,
+            "seed_namespace": track.seed_namespace("validation"),
+            "base_seeds": list(plan.base_seeds),
+            "case_count": 0,
+            "results": [],
+            "aggregate": {
+                "metric": "regulation_cost_rate",
+                "metric_direction": "minimize",
+                "metric_value": 0.0,
+                "official_score": 0.0,
+                "ranking_eligible": True,
+                "case_values": [0.0],
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "aiogym.rl.lifecycle.check_benchmark_artifacts",
+        lambda *args, **kwargs: {"ok": True, "failed": []},
+    )
+    config = RLTrainingConfig(
+        track_id="quadruple-regulation-generalist-v1",
+        algorithm_id="bc",
+        training_seed=0,
+        total_transitions=1,
+        n_envs=1,
+        algorithm={"batch_size": 2, "hidden": 8},
+        output={
+            "directory": str(tmp_path),
+            "name": name,
+            "onnx": True,
+            "strict_export": strict,
+            "save_rollout": False,
+        },
+        dataset_id="phase-e-prior-v2",
+        dataset_path=str(dataset_path),
+        validation_seeds=(7100,),
+    )
+    if strict:
+        with pytest.raises(RuntimeError, match="preserving native checkpoint"):
+            run_experiment(config)
+    else:
+        run_experiment(config)
+    assert (tmp_path / f"{name}.pt").is_file()
+    artifact = tmp_path / f"{name}_artifacts" / "benchmark.json"
+    assert artifact.is_file()
+    training = json.loads(artifact.read_text())["training"]
+    assert training["exports"]["onnx"]["status"] == "failed"
+    assert "injected export failure" in (
+        training["exports"]["onnx"]["error"]
     )
 
 
@@ -428,6 +512,10 @@ def _episode(index, *, constant_action=None):
         "component_seeds": {"policy": index},
         "scenario": "quadruple",
         "goal": "regulation",
+        "reward_spec_id": "regulation-v1",
+        "reward_spec_hash": get_reward_spec("regulation-v1").spec_hash,
+        "env_spec_hash": "0" * 64,
+        "env_spec_hash_schema": "aiogym.resolved_env_spec.v2",
         "action_mode": "actuator",
         "collector_id": "nominal_pid" if index == 0 else "mpc",
         "policy_id": "collector-policy",

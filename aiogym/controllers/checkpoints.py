@@ -32,6 +32,8 @@ class LearnedPolicySpec:
     action_mode: str
     observation_dim: int
     action_dim: int
+    reward_spec_id: str | None = None
+    reward_spec_hash: str | None = None
 
     def __post_init__(self) -> None:
         path = Path(self.path)
@@ -55,6 +57,16 @@ class LearnedPolicySpec:
                 or value <= 0
             ):
                 raise ValueError(f"{name} must be a positive integer")
+        if (self.reward_spec_id is None) != (self.reward_spec_hash is None):
+            raise ValueError(
+                "reward_spec_id and reward_spec_hash must be provided together"
+            )
+        if self.reward_spec_id is not None:
+            from aiogym.rewards.registry import get_reward_spec
+
+            canonical = get_reward_spec(self.reward_spec_id)
+            if self.reward_spec_hash != canonical.spec_hash:
+                raise ValueError("reward_spec_hash does not match reward_spec_id")
         object.__setattr__(self, "path", path)
         object.__setattr__(self, "algorithm_id", algorithm_id)
 
@@ -86,6 +98,8 @@ def learned_policy_spec_for_environment(
         action_mode=action_mode,
         observation_dim=observation_dim,
         action_dim=action_dim,
+        reward_spec_id=getattr(unwrapped, "reward_spec_id", None),
+        reward_spec_hash=getattr(unwrapped, "reward_spec_hash", None),
     )
 
 
@@ -410,6 +424,8 @@ def _attach_checkpoint_metadata(
         "action_mode": spec.action_mode,
         "observation_dim": spec.observation_dim,
         "action_dim": spec.action_dim,
+        "reward_spec_id": spec.reward_spec_id,
+        "reward_spec_hash": spec.reward_spec_hash,
     }
     original_metadata = controller.metadata
 

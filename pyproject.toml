@@ -33,6 +33,9 @@ onnx = [
 hpo = [
   "optuna>=4.0",
 ]
+test = [
+  "pytest>=8.0",
+]
 all = [
   "casadi>=3.6",
   "stable-baselines3>=2.3",
@@ -65,6 +68,17 @@ select = ["F"]
 "aiogym/controllers/__init__.py" = ["F401"]
 "aiogym/evaluation/protocols.py" = ["F401"]
 "aiogym/models/core.py" = ["F401"]
+
+[tool.pytest.ini_options]
+addopts = ["--strict-config", "--strict-markers"]
+markers = [
+  "core: NumPy and Gymnasium core tests without optional dependencies",
+  "rl: Torch and Stable-Baselines3 tests",
+  "oracle: CasADi oracle tests",
+  "onnx: ONNX and ONNX Runtime tests",
+  "e2e: end-to-end pipeline tests",
+  "slow: tests intentionally excluded from fast presubmit jobs",
+]
 
 [project.scripts]
 aiogym = "aiogym.cli.main:main"

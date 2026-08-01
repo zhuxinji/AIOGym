@@ -2,8 +2,14 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+JSON_WRITE_CLAIM_SCHEMA_VERSION = "aiogym.json_write_claim.v1"
 
 
 def jsonable(value):
@@ -31,3 +37,79 @@ def write_json(path: str | Path, data: Any) -> None:
     with output.open("w") as stream:
         json.dump(jsonable(data), stream, indent=2)
         stream.write("\n")
+
+
+def write_json_artifact(
+    path: str | Path,
+    data: Any,
+    *,
+    overwrite: bool = False,
+) -> Path:
+    """Durably commit one JSON artifact without silent replacement."""
+
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    claim = target.with_name(f".{target.name}.write-claim")
+    try:
+        descriptor = os.open(
+            claim,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            0o600,
+        )
+    except FileExistsError as exc:
+        raise FileExistsError(
+            f"artifact write claim already exists: {claim}"
+        ) from exc
+    temporary: Path | None = None
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(
+                {
+                    "schema_version": JSON_WRITE_CLAIM_SCHEMA_VERSION,
+                    "pid": os.getpid(),
+                    "target": str(target),
+                    "claimed_at": datetime.now(timezone.utc).isoformat(),
+                    "overwrite": bool(overwrite),
+                },
+                stream,
+                indent=2,
+                sort_keys=True,
+            )
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        if target.exists() and not overwrite:
+            raise FileExistsError(f"artifact already exists: {target}")
+        temporary_descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            dir=target.parent,
+        )
+        temporary = Path(temporary_name)
+        with os.fdopen(temporary_descriptor, "w", encoding="utf-8") as stream:
+            json.dump(jsonable(data), stream, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, target)
+        temporary = None
+        _fsync_directory(target.parent)
+        return target
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+        claim.unlink(missing_ok=True)
+
+
+def _fsync_directory(directory: Path) -> None:
+    """Best-effort directory sync; unsupported platforms safely degrade."""
+
+    descriptor = None
+    try:
+        descriptor = os.open(directory, os.O_RDONLY)
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)

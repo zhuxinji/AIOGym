@@ -5,7 +5,7 @@
   "case_profile_hash": "e161503a954e325223f658e27edccaf46688c3c4bc500ad97c481304066d3ffc",
   "reward_spec": "regulation-v1",
   "reward_spec_version": "1",
-  "env_spec_hash": "b169782b28089edf58a92bccf57d20c5fa4d2786215e7d10f20bf6f3fc4b0b41",
+  "env_spec_hash": "2e4f60b082f3b67ffcc94ef12b7dde5b5948bdb6f1c70d7137b8b83cce492a8e",
   "seed": 17,
   "action_space": {
     "shape": [2],

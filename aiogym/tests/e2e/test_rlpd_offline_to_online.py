@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
+
+pytestmark = pytest.mark.e2e
+pytest.importorskip("torch")
 
 from aiogym import load_track
 from aiogym.datasets.schema import DatasetEpisode
 from aiogym.datasets.writer import DatasetWriter
 from aiogym.rl.rlpd import RLPD
 from aiogym.rl.validation import CompleteValidationCallback
+from aiogym.rewards import get_reward_spec
 
 
 TRACK_ID = "quadruple-regulation-generalist-v1"
@@ -118,6 +123,10 @@ def _episode() -> DatasetEpisode:
             "component_seeds": {"policy": 4},
             "scenario": "quadruple",
             "goal": "regulation",
+            "reward_spec_id": "regulation-v1",
+            "reward_spec_hash": get_reward_spec("regulation-v1").spec_hash,
+            "env_spec_hash": "0" * 64,
+            "env_spec_hash_schema": "aiogym.resolved_env_spec.v2",
             "action_mode": "actuator",
             "collector_id": "nominal_pid",
             "policy_id": "pid",

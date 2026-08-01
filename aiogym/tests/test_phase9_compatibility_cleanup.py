@@ -42,6 +42,7 @@ def test_legacy_transition_and_compat_packages_are_absent():
     assert not hasattr(aiogym, "TransitionDataset")
 
 
+@pytest.mark.rl
 def test_rlpd_does_not_define_a_second_replay_buffer():
     from aiogym.rl import rlpd
 
@@ -84,6 +85,7 @@ def test_checkpoint_cli_has_one_canonical_option_family():
     }.isdisjoint(options)
 
 
+@pytest.mark.rl
 def test_removed_trainer_helpers_and_physical_rlpd_api_are_absent():
     from aiogym.rl.rlpd import RLPD, RLPD_STATE_SCHEMA_VERSION
 

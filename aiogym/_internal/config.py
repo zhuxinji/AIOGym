@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .validation import nonnegative_int, positive_int, seed_sequence
+
 
 def resolve_auto_events(
     auto_events: bool | None = None,
@@ -47,10 +49,21 @@ def parse_seed_list(
     """Parse explicit seeds or generate one deterministic seed per episode."""
 
     if raw:
-        seeds = [int(part.strip()) for part in raw.split(",") if part.strip()]
-        if not seeds:
-            raise ValueError(f"{option} must contain at least one integer seed")
-        return seeds
-    if episodes <= 0:
-        raise ValueError("episodes must be positive")
-    return [seed + i for i in range(episodes)]
+        return list(seed_sequence(option, parse_csv_ints(raw)))
+    count = positive_int("episodes", episodes)
+    start = nonnegative_int("seed", seed)
+    return list(seed_sequence(option, range(start, start + count)))
+
+
+def parse_csv_ints(raw: str, *, option: str = "value") -> tuple[int, ...]:
+    """Parse comma-separated integer syntax without applying semantics."""
+
+    if not isinstance(raw, str):
+        raise TypeError(f"{option} must be a comma-separated string")
+    parts = tuple(part.strip() for part in raw.split(",") if part.strip())
+    if not parts:
+        raise ValueError(f"{option} must contain at least one integer")
+    try:
+        return tuple(int(part) for part in parts)
+    except ValueError as exc:
+        raise ValueError(f"{option} must contain only integers") from exc

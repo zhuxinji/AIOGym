@@ -12,9 +12,11 @@ from aiogym.benchmarks.evaluation import evaluate_policy_on_track
 from aiogym.benchmarks.tracks.registry import load_track
 from aiogym.benchmarks.tracks.schema import TrackSpec
 from aiogym.generation.samplers import episode_spec_from_case
+from aiogym._internal.validation import seed_sequence
 
 
 VALIDATION_PLAN_SCHEMA_VERSION = "aiogym.validation_plan.v1"
+VALIDATION_STATE_SCHEMA_VERSION = "aiogym.validation_state.v1"
 
 
 @dataclass(frozen=True)
@@ -44,11 +46,9 @@ class ValidationEpisodePlan:
         base_seeds: Sequence[int],
     ) -> None:
         self.track = track
-        self.base_seeds = tuple(int(seed) for seed in base_seeds)
-        if not self.base_seeds:
-            raise ValueError("validation plan requires base seeds")
-        if len(set(self.base_seeds)) != len(self.base_seeds):
-            raise ValueError("validation base seeds must be unique")
+        self.base_seeds = seed_sequence(
+            "validation base seeds", base_seeds
+        )
         entries = []
         by_case = {}
         for case in track.resolved_cases("validation"):
@@ -217,6 +217,7 @@ class EligibilityAwareSelector:
 
     def state_dict(self) -> dict[str, Any]:
         return {
+            "schema_version": VALIDATION_STATE_SCHEMA_VERSION,
             "records": [
                 {
                     **record.__dict__,
@@ -228,6 +229,76 @@ class EligibilityAwareSelector:
                 self.best.checkpoint_id if self.best is not None else None
             ),
         }
+
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        """Restore records after validating the claimed global best."""
+
+        if not isinstance(state, Mapping):
+            raise TypeError("selector state must be a mapping")
+        payload = dict(state)
+        schema_version = payload.pop(
+            "schema_version", VALIDATION_STATE_SCHEMA_VERSION
+        )
+        if schema_version != VALIDATION_STATE_SCHEMA_VERSION:
+            raise ValueError(
+                f"unsupported validation state: {schema_version!r}"
+            )
+        raw_records = payload.pop("records", None)
+        best_checkpoint_id = payload.pop("best_checkpoint_id", None)
+        if payload:
+            raise ValueError(
+                "selector state contains unknown fields: "
+                + ", ".join(sorted(payload))
+            )
+        if not isinstance(raw_records, (list, tuple)):
+            raise TypeError("selector records must be a sequence")
+
+        records: list[CheckpointSelectionRecord] = []
+        checkpoint_ids: set[str] = set()
+        for raw_record in raw_records:
+            record = _selection_record_from_state(raw_record)
+            if record.checkpoint_id in checkpoint_ids:
+                raise ValueError(
+                    "selector checkpoint IDs must be unique"
+                )
+            checkpoint_ids.add(record.checkpoint_id)
+            records.append(record)
+
+        expected_best = None
+        for record in records:
+            if not record.eligible:
+                continue
+            if (
+                expected_best is None
+                or record.selection_key > expected_best.selection_key
+            ):
+                expected_best = record
+        expected_best_id = (
+            expected_best.checkpoint_id
+            if expected_best is not None
+            else None
+        )
+        if best_checkpoint_id != expected_best_id:
+            if (
+                best_checkpoint_id is not None
+                and best_checkpoint_id not in checkpoint_ids
+            ):
+                raise ValueError(
+                    "best_checkpoint_id does not exist in selector records"
+                )
+            raise ValueError(
+                "selector best checkpoint is not the best eligible record"
+            )
+        self.records = records
+        self.best = expected_best
+
+    @classmethod
+    def from_state_dict(
+        cls, state: Mapping[str, Any]
+    ) -> "EligibilityAwareSelector":
+        selector = cls()
+        selector.load_state_dict(state)
+        return selector
 
 
 class CompleteValidationCallback:
@@ -274,6 +345,49 @@ class CompleteValidationCallback:
             self.save_best(checkpoint_id, controller, self.selector.best)
         return evaluation
 
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": VALIDATION_STATE_SCHEMA_VERSION,
+            "track_id": self.track.id,
+            "track_hash": self.track.track_hash,
+            "validation_plan_hash": self.plan.plan_hash,
+            "selector": self.selector.state_dict(),
+            "history": list(self.history),
+        }
+
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        if not isinstance(state, Mapping):
+            raise TypeError("validation callback state must be a mapping")
+        payload = dict(state)
+        schema_version = payload.pop("schema_version", None)
+        if schema_version != VALIDATION_STATE_SCHEMA_VERSION:
+            raise ValueError(
+                f"unsupported validation state: {schema_version!r}"
+            )
+        expected_identity = {
+            "track_id": self.track.id,
+            "track_hash": self.track.track_hash,
+            "validation_plan_hash": self.plan.plan_hash,
+        }
+        for name, expected in expected_identity.items():
+            if payload.pop(name, None) != expected:
+                raise ValueError(
+                    f"validation state {name} does not match current plan"
+                )
+        selector = EligibilityAwareSelector.from_state_dict(
+            payload.pop("selector", None)
+        )
+        history = payload.pop("history", None)
+        if not isinstance(history, (list, tuple)):
+            raise TypeError("validation callback history must be a sequence")
+        if payload:
+            raise ValueError(
+                "validation callback state contains unknown fields: "
+                + ", ".join(sorted(payload))
+            )
+        self.selector = selector
+        self.history = list(history)
+
 
 def evaluate_validation_policy(
     controller,
@@ -313,8 +427,64 @@ def _interquartile_mean(values) -> float:
     return float(np.sum(weights * sorted_values) / np.sum(weights))
 
 
+def _selection_record_from_state(
+    state: Mapping[str, Any],
+) -> CheckpointSelectionRecord:
+    if not isinstance(state, Mapping):
+        raise TypeError("selector record must be a mapping")
+    payload = dict(state)
+    expected_fields = set(CheckpointSelectionRecord.__dataclass_fields__)
+    unknown = set(payload) - expected_fields
+    missing = expected_fields - set(payload)
+    if unknown or missing:
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(sorted(missing)))
+        if unknown:
+            details.append("unknown " + ", ".join(sorted(unknown)))
+        raise ValueError("invalid selector record: " + "; ".join(details))
+    checkpoint_id = payload["checkpoint_id"]
+    metric = payload["metric"]
+    direction = payload["metric_direction"]
+    if not isinstance(checkpoint_id, str) or not checkpoint_id:
+        raise ValueError("selector checkpoint_id must be non-empty")
+    if not isinstance(metric, str) or not metric:
+        raise ValueError("selector metric must be non-empty")
+    if direction not in {"minimize", "maximize"}:
+        raise ValueError("selector metric direction is invalid")
+    if type(payload["eligible"]) is not bool:
+        raise TypeError("selector eligible must be boolean")
+    step = payload["step"]
+    if isinstance(step, bool) or not isinstance(step, int) or step < 0:
+        raise ValueError("selector step must be a non-negative integer")
+    numeric_names = (
+        "metric_value",
+        "official_score",
+        "iqm_value",
+        "worst_case_value",
+        "intervention_cost",
+    )
+    for name in numeric_names:
+        value = payload[name]
+        if isinstance(value, bool) or not isinstance(
+            value, (int, float, np.integer, np.floating)
+        ):
+            raise TypeError(f"selector {name} must be numeric")
+        if not np.isfinite(float(value)):
+            raise ValueError(f"selector {name} must be finite")
+        payload[name] = float(value)
+    reasons = payload["rejection_reasons"]
+    if not isinstance(reasons, (list, tuple)) or not all(
+        isinstance(reason, str) for reason in reasons
+    ):
+        raise TypeError("selector rejection_reasons must be strings")
+    payload["rejection_reasons"] = tuple(reasons)
+    return CheckpointSelectionRecord(**payload)
+
+
 __all__ = [
     "VALIDATION_PLAN_SCHEMA_VERSION",
+    "VALIDATION_STATE_SCHEMA_VERSION",
     "CheckpointSelectionRecord",
     "CompleteValidationCallback",
     "EligibilityAwareSelector",

@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import hashlib
+from importlib.metadata import PackageNotFoundError, version
 import json
+import platform
 from collections.abc import Sequence
 from typing import Any
 
@@ -10,8 +12,10 @@ from aiogym._environment.builder import build_track_case_environment
 from aiogym.controllers.registry import make_controller
 from aiogym.evaluation.execution import evaluate_controller
 from aiogym.models.cases import case_controller_config
+from aiogym._internal.validation import seed_sequence
 
 from .anchors import ANCHOR_SCHEMA_VERSION, anchor_artifact_hash
+from .anchors.quality import anchor_quality_statistics
 from .ranking import case_utility
 
 
@@ -25,9 +29,7 @@ def calibrate_anchor_manifest(
 ) -> dict[str, Any]:
     """Evaluate frozen baselines without mutating official anchor files."""
 
-    seeds = tuple(int(seed) for seed in base_seeds)
-    if not seeds or len(set(seeds)) != len(seeds):
-        raise ValueError("anchor calibration seeds must be non-empty and unique")
+    seeds = seed_sequence("anchor calibration seeds", base_seeds)
     unique_cases = {}
     for split in ("validation", "test"):
         for case in track.resolved_cases(split):
@@ -51,45 +53,57 @@ def calibrate_anchor_manifest(
                 scenario=track.scenario,
                 config=config,
             )
+            samples = []
+            eligibility = []
             try:
-                result = evaluate_controller(
-                    controller,
-                    env,
-                    episodes=len(seeds),
-                    seed_list=seeds,
-                    goal_specification=track.goal,
-                    seed_namespace=track.seed_namespace(split),
-                    include_episodes=False,
-                    safety_gate_spec=track.safety_gate_spec(),
-                )
                 horizon = float(env.control_dt * env.episode_steps)
+                for seed in seeds:
+                    result = evaluate_controller(
+                        controller,
+                        env,
+                        episodes=1,
+                        seed_list=(seed,),
+                        goal_specification=track.goal,
+                        seed_namespace=track.seed_namespace(split),
+                        include_episodes=False,
+                        safety_gate_spec=track.safety_gate_spec(),
+                    )
+                    samples.append(
+                        case_utility(
+                            {
+                                **result,
+                                "case_horizon_seconds": horizon,
+                            },
+                            goal=track.goal,
+                        )
+                    )
+                    eligibility.append(
+                        bool(result.get("ranking_eligible", False))
+                    )
             finally:
                 env.close()
-            if not result.get("ranking_eligible", False):
-                raise ValueError(
-                    f"anchor controller {controller_id!r} is unsafe on "
-                    f"case {case.case_id!r}"
-                )
-            utility = case_utility(
-                {
-                    **result,
-                    "case_horizon_seconds": horizon,
-                },
-                goal=track.goal,
-            )
-            utilities[controller_id] = utility
+            utilities[controller_id] = samples
+            utilities[f"{controller_id}:eligible"] = eligibility
             frozen_controllers[controller_id] = _frozen_controller_metadata(
                 controller_id,
                 controller,
                 config,
             )
-        bad_utility = utilities[bad_controller_id]
-        reference_utility = utilities[reference_controller_id]
-        if reference_utility <= bad_utility:
+        quality = anchor_quality_statistics(
+            utilities[bad_controller_id],
+            utilities[reference_controller_id],
+            bad_eligible=utilities[f"{bad_controller_id}:eligible"],
+            reference_eligible=utilities[
+                f"{reference_controller_id}:eligible"
+            ],
+        )
+        if not quality["passed"]:
             raise ValueError(
-                f"reference utility does not exceed bad utility for "
-                f"{case.case_id!r}: {reference_utility} <= {bad_utility}"
+                f"anchor quality failed for {case.case_id!r}: "
+                + "; ".join(quality["failure_reasons"])
             )
+        bad_utility = quality["bad_mean"]
+        reference_utility = quality["reference_mean"]
         cases[case_hash] = {
             "case_id": case.case_id,
             "resolved_case_hash": case_hash,
@@ -99,6 +113,7 @@ def calibrate_anchor_manifest(
             "reference_controller": frozen_controllers[
                 reference_controller_id
             ],
+            "quality": quality,
         }
     payload = {
         "schema_version": ANCHOR_SCHEMA_VERSION,
@@ -116,6 +131,12 @@ def calibrate_anchor_manifest(
             "config_scope": "per-case",
         },
         "evaluation_seeds": list(seeds),
+        "calibration": {
+            "generator": "aiogym.benchmarks.calibration.calibrate_anchor_manifest",
+            "paired_seed_evaluation": True,
+            "python_version": platform.python_version(),
+            "dependency_versions": _dependency_versions(),
+        },
         "cases": dict(sorted(cases.items())),
     }
     payload["artifact_hash"] = anchor_artifact_hash(payload)
@@ -144,6 +165,16 @@ def _frozen_controller_metadata(
             canonical.encode("utf-8")
         ).hexdigest(),
     }
+
+
+def _dependency_versions() -> dict[str, str]:
+    resolved = {}
+    for distribution in ("aiogym", "numpy", "gymnasium", "casadi"):
+        try:
+            resolved[distribution] = version(distribution)
+        except PackageNotFoundError:
+            resolved[distribution] = "not-installed"
+    return resolved
 
 
 __all__ = ["calibrate_anchor_manifest"]

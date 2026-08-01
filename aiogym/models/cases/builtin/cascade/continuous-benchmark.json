@@ -3,10 +3,18 @@
   "name": "continuous-benchmark",
   "scenario": "cascade",
   "status": "assumed-benchmark",
-  "description": "Deterministic continuous-production benchmark using an assumed test throughput, not a verified equipment rating.",
+  "description": "Deterministic continuous-production benchmark with a recoverable feed-capacity loss, using an assumed test throughput rather than a verified equipment rating.",
   "specialist_metadata": {
     "controllers": {
-      "oracle": {"profile": "cascade-control-benchmark"}
+      "oracle": {
+        "profile": "cascade-control-benchmark",
+        "goal": "economic",
+        "reward_spec": "economic-v1",
+        "parameters": {
+          "solve_every": 60,
+          "ipopt_max_iter": 80
+        }
+      }
     }
   },
   "environment": {
@@ -27,13 +35,27 @@
     "min_product_flow": 0.0004
   },
   "initialization": {
-    "state": [0.45, 35.0, 0.45, 50.0, 0.45, 65.0]
+    "state": [0.45, 35.0, 0.45, 50.0, 0.45, 65.0],
+    "basis": "model-consistent nominal continuous equilibrium"
   },
   "setpoints": {
     "initial": [0.45, 0.45, 0.45, 35.0, 50.0, 65.0],
     "schedule": []
   },
-  "disturbances": [],
+  "disturbances": [
+    {
+      "at_step": 100,
+      "name": "pump_flow_factor",
+      "value": 0.7,
+      "description": "recoverable 30% feed-pump capacity loss"
+    },
+    {
+      "at_step": 400,
+      "name": "pump_flow_factor",
+      "value": 1.0,
+      "description": "feed-pump capacity restored"
+    }
+  ],
   "constraints": {
     "product_flow_shortfall": "penalized below min_product_flow"
   },

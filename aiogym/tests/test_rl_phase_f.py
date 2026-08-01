@@ -1,6 +1,7 @@
 """Phase-F acceptance tests for validation, HPO, and final statistics."""
 from __future__ import annotations
 
+import copy
 import numpy as np
 import pytest
 
@@ -59,6 +60,76 @@ def test_ineligible_checkpoint_cannot_be_best():
     )
     assert selector.best.checkpoint_id == "eligible"
     assert selector.records[-1].rejection_reasons == ("hard_termination",)
+
+
+def test_resume_preserves_pre_resume_global_best_and_records():
+    track = load_track("quadruple-regulation-generalist-v1")
+    selector = EligibilityAwareSelector()
+    assert selector.consider(
+        "step-100",
+        _validation_evaluation(track, values=[1.0, 1.1], eligible=True),
+        step=100,
+    )
+    restored = EligibilityAwareSelector.from_state_dict(
+        selector.state_dict()
+    )
+    assert not restored.consider(
+        "step-200",
+        _validation_evaluation(track, values=[2.0, 2.1], eligible=True),
+        step=200,
+    )
+    assert [record.checkpoint_id for record in restored.records] == [
+        "step-100",
+        "step-200",
+    ]
+    assert restored.best.checkpoint_id == "step-100"
+
+
+def test_selector_rejects_tampered_global_best_and_nonfinite_values():
+    track = load_track("quadruple-regulation-generalist-v1")
+    selector = EligibilityAwareSelector()
+    selector.consider(
+        "best",
+        _validation_evaluation(track, values=[1.0, 1.1], eligible=True),
+        step=1,
+    )
+    selector.consider(
+        "worse",
+        _validation_evaluation(track, values=[2.0, 2.1], eligible=True),
+        step=2,
+    )
+    tampered = copy.deepcopy(selector.state_dict())
+    tampered["best_checkpoint_id"] = "worse"
+    with pytest.raises(ValueError, match="not the best"):
+        EligibilityAwareSelector.from_state_dict(tampered)
+    tampered = copy.deepcopy(selector.state_dict())
+    tampered["records"][0]["official_score"] = float("nan")
+    with pytest.raises(ValueError, match="finite"):
+        EligibilityAwareSelector.from_state_dict(tampered)
+
+
+def test_validation_callback_state_round_trip():
+    track = load_track("quadruple-regulation-generalist-v1")
+
+    def evaluate(controller, resolved_track, **kwargs):
+        return _validation_evaluation(
+            track, values=[1.0, 1.1], eligible=True
+        )
+
+    callback = CompleteValidationCallback(
+        track,
+        base_seeds=[10, 11],
+        evaluate_fn=evaluate,
+    )
+    callback.evaluate(object(), checkpoint_id="step-10", step=10)
+    restored = CompleteValidationCallback(
+        track,
+        base_seeds=[10, 11],
+        evaluate_fn=evaluate,
+    )
+    restored.load_state_dict(callback.state_dict())
+    assert restored.selector.best.checkpoint_id == "step-10"
+    assert len(restored.history) == 1
 
 
 def test_hpo_does_not_override_reward_or_track():
@@ -167,15 +238,25 @@ def test_final_test_lock_is_consumed_once(tmp_path):
             },
         )
 
-    output = lock.run(
+    output = lock.run_and_commit(
         {"sac": object()},
+        artifact_path=tmp_path / "final-test.json",
+        artifact_builder=lambda result, state: {
+            "result": result,
+            "lock": state,
+        },
         bootstrap_repetitions=20,
         _evaluate_test_fn=evaluate,
     )
     assert output["lock"]["status"] == "complete"
     with pytest.raises(RuntimeError, match="already consumed"):
-        lock.run(
+        lock.run_and_commit(
             {"sac": object()},
+            artifact_path=tmp_path / "another-final-test.json",
+            artifact_builder=lambda result, state: {
+                "result": result,
+                "lock": state,
+            },
             bootstrap_repetitions=20,
             _evaluate_test_fn=evaluate,
         )

@@ -90,7 +90,13 @@ def resolve_reward_spec(
             "custom RewardSpec objects are not registered; "
             "use regulation-v1 or economic-v1"
         )
-    return resolved
+    canonical = get_reward_spec(resolved.id)
+    if resolved.as_dict() != canonical.as_dict():
+        raise ValueError(
+            "RewardSpec content does not match the registered canonical "
+            f"definition for {resolved.id!r}"
+        )
+    return canonical
 
 
 def iter_reward_specs() -> Iterable[RewardSpec]:

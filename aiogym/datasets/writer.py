@@ -82,6 +82,7 @@ class DatasetWriter:
                     collection_metadata
                 )
             self._write_manifest()
+        self._reconcile_shards()
         self._episode_ids = {
             record["episode_id"]
             for record in self._manifest["episodes"]
@@ -90,7 +91,10 @@ class DatasetWriter:
             record["content_hash"]
             for record in self._manifest["episodes"]
         }
-        self._next_shard_index = _next_shard_index(self.shards_path)
+        self._next_shard_index = _next_shard_index(
+            self.shards_path,
+            self._manifest["episodes"],
+        )
 
     @property
     def manifest(self) -> dict:
@@ -168,16 +172,24 @@ class DatasetWriter:
         }
         if episode_index is not None:
             record["episode_index"] = episode_index
+        previous_manifest = copy.deepcopy(self._manifest)
         self._manifest["episodes"].append(record)
         self._manifest["episode_count"] += 1
         self._manifest["transition_count"] += episode.transition_count
         self._manifest["updated_at"] = _utc_now()
         try:
             self._write_manifest()
-        except Exception:
-            self._manifest["episodes"].pop()
-            self._manifest["episode_count"] -= 1
-            self._manifest["transition_count"] -= episode.transition_count
+        except Exception as manifest_error:
+            self._manifest = previous_manifest
+            try:
+                shard_path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as cleanup_error:
+                manifest_error.add_note(
+                    "failed to remove uncommitted dataset shard "
+                    f"{shard_path}: {cleanup_error}"
+                )
             raise
         self._episode_ids.add(episode.episode_id)
         self._content_hashes.add(episode.content_hash)
@@ -207,6 +219,59 @@ class DatasetWriter:
             self.manifest_path,
             manifest_with_hash(self._manifest),
         )
+
+    def _reconcile_shards(self) -> None:
+        """Quarantine uncommitted files and fail on committed corruption."""
+
+        referenced: set[Path] = set()
+        for record in self._manifest["episodes"]:
+            relative = Path(record["shard"])
+            shard = self.path / relative
+            if shard.parent != self.shards_path:
+                raise ValueError(
+                    f"dataset manifest has invalid shard path: {relative}"
+                )
+            if not shard.is_file():
+                raise FileNotFoundError(
+                    f"dataset manifest referenced shard is missing: {shard}"
+                )
+            if file_sha256(shard) != record["shard_sha256"]:
+                raise ValueError(
+                    f"dataset referenced shard checksum mismatch: {shard}"
+                )
+            referenced.add(shard.resolve())
+
+        candidates = list(self.shards_path.glob("part-*.npz"))
+        candidates.extend(self.shards_path.glob(".*.tmp"))
+        orphaned = [
+            path
+            for path in candidates
+            if path.resolve() not in referenced
+        ]
+        if not orphaned:
+            return
+        quarantine = self.shards_path / ".orphaned"
+        quarantine.mkdir(parents=True, exist_ok=True)
+        recovered_at = _utc_now()
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        events = []
+        for source in sorted(orphaned):
+            destination = quarantine / (
+                f"{source.name}.{stamp}.{uuid.uuid4().hex}.orphan"
+            )
+            os.replace(source, destination)
+            events.append(
+                {
+                    "kind": "orphan_shard_quarantined",
+                    "source": str(source.relative_to(self.path)),
+                    "quarantined": str(destination.relative_to(self.path)),
+                    "recovered_at": recovered_at,
+                }
+            )
+        collection = self._manifest.setdefault("collection", {})
+        collection.setdefault("recovery_events", []).extend(events)
+        self._manifest["updated_at"] = recovered_at
+        self._write_manifest()
 
 
 def manifest_with_hash(manifest: dict) -> dict:
@@ -263,10 +328,14 @@ def _atomic_write_json(path: Path, data: dict) -> None:
             temporary.unlink()
 
 
-def _next_shard_index(shards_path: Path) -> int:
+def _next_shard_index(shards_path: Path, episodes=()) -> int:
     indices = []
     for path in shards_path.glob("part-*.npz"):
         match = _SHARD_PATTERN.match(path.name)
+        if match:
+            indices.append(int(match.group(1)))
+    for record in episodes:
+        match = _SHARD_PATTERN.match(Path(record["shard"]).name)
         if match:
             indices.append(int(match.group(1)))
     return max(indices, default=-1) + 1

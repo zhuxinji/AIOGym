@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
+import json
 import math
 from types import MappingProxyType
 from typing import Any, Callable, Literal, Mapping, Sequence
@@ -10,8 +12,36 @@ from typing import Any, Callable, Literal, Mapping, Sequence
 GoalName = Literal["regulation", "economic"]
 
 
-def _frozen_mapping(values: Mapping[str, Any]) -> Mapping[str, Any]:
-    return MappingProxyType(dict(values))
+def _frozen_json_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        resolved = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError("reward metadata keys must be strings")
+            resolved[key] = _frozen_json_value(item)
+        return MappingProxyType(resolved)
+    if isinstance(value, (list, tuple)):
+        return tuple(_frozen_json_value(item) for item in value)
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("reward metadata numbers must be finite")
+        return value
+    raise TypeError(
+        "reward metadata must contain only JSON-compatible values"
+    )
+
+
+def _canonical_json_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            key: _canonical_json_value(item)
+            for key, item in sorted(value.items())
+        }
+    if isinstance(value, tuple):
+        return [_canonical_json_value(item) for item in value]
+    return value
 
 
 def _validated_weights(
@@ -64,7 +94,37 @@ class RewardSpec:
             "cost_weights",
             _validated_weights("cost_weights", self.cost_weights),
         )
-        object.__setattr__(self, "metadata", _frozen_mapping(self.metadata))
+        object.__setattr__(
+            self,
+            "metadata",
+            _frozen_json_value(self.metadata),
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the canonical JSON-compatible reward identity."""
+
+        return {
+            "id": self.id,
+            "version": self.version,
+            "goal": self.goal,
+            "term_weights": dict(sorted(self.term_weights.items())),
+            "cost_weights": dict(sorted(self.cost_weights.items())),
+            "terminal_failure_cost_rate": self.terminal_failure_cost_rate,
+            "metadata": _canonical_json_value(self.metadata),
+        }
+
+    @property
+    def spec_hash(self) -> str:
+        """SHA-256 identity of the complete canonical reward definition."""
+
+        canonical = json.dumps(
+            self.as_dict(),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     @property
     def canonical(self) -> bool:

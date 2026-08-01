@@ -4,8 +4,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
-import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -16,6 +14,7 @@ from aiogym.controllers.checkpoints import (
     load_policy_checkpoint,
 )
 from aiogym.rl.final_test import FinalTestLock
+from aiogym._internal.validation import seed_sequence
 
 
 FINAL_TEST_CONFIG_SCHEMA_VERSION = "aiogym.final_test.v1"
@@ -46,6 +45,9 @@ def main(argv=None, prog: str | None = None) -> int:
     args = build_parser(prog).parse_args(argv)
     declaration = _load_config(args.config)
     track = load_track(declaration["track_id"])
+    output = Path(declaration["output"])
+    if output.exists():
+        raise FileExistsError(f"final-test artifact exists: {output}")
     controllers = {}
     checkpoint_ids = {}
     for name, checkpoint in sorted(
@@ -67,25 +69,23 @@ def main(argv=None, prog: str | None = None) -> int:
         checkpoint_ids=checkpoint_ids,
         base_seeds=declaration["base_seeds"],
     )
-    output = Path(declaration["output"])
-    if output.exists():
-        raise FileExistsError(f"final-test artifact exists: {output}")
-    result = lock.run(
+    result = lock.run_and_commit(
         controllers,
+        artifact_path=output,
+        artifact_builder=lambda evaluation, lock_state: {
+            "schema_version": "aiogym.final_test_artifact.v2",
+            "track_id": track.id,
+            "track_hash": track.track_hash,
+            "config_hash": config_hash,
+            "checkpoint_sha256": checkpoint_ids,
+            "lock_at_commit": lock_state,
+            **evaluation,
+        },
         baseline=declaration.get("baseline"),
         bootstrap_repetitions=int(
             declaration.get("bootstrap_repetitions", 2000)
         ),
     )
-    artifact = {
-        "schema_version": "aiogym.final_test_artifact.v1",
-        "track_id": track.id,
-        "track_hash": track.track_hash,
-        "config_hash": config_hash,
-        "checkpoint_sha256": checkpoint_ids,
-        **result,
-    }
-    _atomic_json(output, artifact)
     print(
         json.dumps(
             {
@@ -93,6 +93,7 @@ def main(argv=None, prog: str | None = None) -> int:
                 "output": str(output),
                 "lock_status": result["lock"]["status"],
                 "report_hash": result["lock"]["report_hash"],
+                "artifact_sha256": result["lock"]["artifact_sha256"],
             },
             sort_keys=True,
         )
@@ -124,15 +125,9 @@ def _load_config(path: str | Path) -> dict:
         if not isinstance(data[field], str) or not data[field]:
             raise ValueError(f"{field} must be a non-empty string")
     seeds = data["base_seeds"]
-    if not isinstance(seeds, list) or not seeds:
+    if not isinstance(seeds, list):
         raise ValueError("base_seeds must be a non-empty list")
-    if any(
-        isinstance(seed, bool)
-        or not isinstance(seed, int)
-        or seed < 0
-        for seed in seeds
-    ):
-        raise ValueError("base_seeds must contain non-negative integers")
+    data["base_seeds"] = list(seed_sequence("base_seeds", seeds))
     checkpoints = data["checkpoints"]
     if not isinstance(checkpoints, Mapping) or not checkpoints:
         raise ValueError("checkpoints must be a non-empty mapping")
@@ -176,27 +171,6 @@ def _stable_hash(value) -> str:
         allow_nan=False,
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def _atomic_json(path: Path, value) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        dir=path.parent,
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(value, stream, indent=2, sort_keys=True)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
 
 
 __all__ = [

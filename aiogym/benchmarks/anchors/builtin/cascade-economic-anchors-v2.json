@@ -1,0 +1,109 @@
+{
+  "artifact_hash": "4e1bb74862d681f90bb1638d742e288817273e2c2816e731f129622f93d1c20d",
+  "bad_controller": {
+    "config_scope": "per-case",
+    "id": "hold"
+  },
+  "calibration": {
+    "dependency_versions": {
+      "aiogym": "0.1.0",
+      "casadi": "3.7.2",
+      "gymnasium": "1.3.0",
+      "numpy": "2.5.0"
+    },
+    "generator": "aiogym.benchmarks.calibration.calibrate_anchor_manifest",
+    "paired_seed_evaluation": true,
+    "python_version": "3.14.6"
+  },
+  "cases": {
+    "c6dcb6819a91efced66fe57e7a9c34f77c8d52c403aeffe05b06bccf2a2171dc": {
+      "bad_controller": {
+        "controller_api_version": "aiogym.controller.v1",
+        "controller_config_hash": "9792ba34f1008feac47cd874cb1fa5021ce9010488f80192a5a55610a7797146",
+        "id": "hold",
+        "source_config": {}
+      },
+      "bad_utility": -21.77674858300721,
+      "case_id": "continuous-benchmark",
+      "quality": {
+        "absolute_gap": 12.297716002506919,
+        "bad_eligible": [
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "bad_max": -21.77674858300721,
+        "bad_mean": -21.77674858300721,
+        "bad_min": -21.77674858300721,
+        "bad_samples": [
+          -21.77674858300721,
+          -21.77674858300721,
+          -21.77674858300721,
+          -21.77674858300721,
+          -21.77674858300721
+        ],
+        "bad_std": 0.0,
+        "failure_reasons": [],
+        "passed": true,
+        "policy_id": "fixed-anchor-quality-v1",
+        "reference_eligible": [
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "reference_max": -9.47903258050029,
+        "reference_mean": -9.47903258050029,
+        "reference_min": -9.47903258050029,
+        "reference_samples": [
+          -9.47903258050029,
+          -9.47903258050029,
+          -9.47903258050029,
+          -9.47903258050029,
+          -9.47903258050029
+        ],
+        "reference_std": 0.0,
+        "relative_gap": 0.5647177288947097,
+        "sample_count": 5,
+        "signal_to_noise": "infinity",
+        "standard_error": 0.0
+      },
+      "reference_controller": {
+        "controller_api_version": "aiogym.controller.v1",
+        "controller_config_hash": "8677b9865fcf59618eb31e9de7ec65d5704527443b1ca36d191fd92d78344725",
+        "id": "oracle",
+        "source_config": {
+          "goal": "economic",
+          "parameters": {
+            "ipopt_max_iter": 80,
+            "solve_every": 60
+          },
+          "profile": "cascade-control-benchmark",
+          "reward_spec": "economic-v1"
+        }
+      },
+      "reference_utility": -9.47903258050029,
+      "resolved_case_hash": "c6dcb6819a91efced66fe57e7a9c34f77c8d52c403aeffe05b06bccf2a2171dc"
+    }
+  },
+  "evaluation_seeds": [
+    9000,
+    9001,
+    9002,
+    9003,
+    9004
+  ],
+  "goal": "economic",
+  "id": "cascade-economic-anchors-v2",
+  "ranking_spec_id": "cascade-economic-ranking-v1",
+  "reference_controller": {
+    "config_scope": "per-case",
+    "id": "oracle"
+  },
+  "schema_version": "aiogym.ranking_anchors.v2",
+  "track_hash": "b1add7956f00b4f11784a18b007f3c695a13250ff83075569a1020adf75bdc9c",
+  "track_id": "cascade-economic-specialist-v1"
+}

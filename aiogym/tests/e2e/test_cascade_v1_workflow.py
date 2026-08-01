@@ -3,6 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
+
+pytestmark = pytest.mark.e2e
 
 from aiogym import load_track, make_controller, make_env
 from aiogym.benchmarks import evaluate_policy_on_track

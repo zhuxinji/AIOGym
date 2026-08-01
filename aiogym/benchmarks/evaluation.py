@@ -6,6 +6,7 @@ from typing import Any
 
 import numpy as np
 
+from aiogym._internal.validation import seed_sequence
 from aiogym.evaluation.execution import evaluate_controller
 from aiogym.evaluation.provenance import track_provenance
 from aiogym.evaluation.results import build_evaluation_report
@@ -73,9 +74,7 @@ def _evaluate_policy_on_track_split(
         if safety_gate_spec is None
         else safety_gate_spec
     )
-    seeds = tuple(int(seed) for seed in base_seeds)
-    if not seeds:
-        raise ValueError("track evaluation requires at least one base seed")
+    seeds = seed_sequence("track evaluation base seeds", base_seeds)
     if episode_plan is not None:
         if split != "validation":
             raise ValueError(

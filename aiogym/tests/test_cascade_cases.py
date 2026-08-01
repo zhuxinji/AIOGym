@@ -107,6 +107,7 @@ def test_controllers_complete_short_commissioning_case(controller):
     assert result["controller_status"] == "ok"
 
 
+@pytest.mark.oracle
 def test_continuous_case_can_use_economic_goal():
     env = make_test_env(
         "cascade",

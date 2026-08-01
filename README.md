@@ -7,8 +7,9 @@ checkpoints, and official benchmark Tracks.
 
 Supported in v1:
 
-- eight process scenarios, with official benchmark coverage for Quadruple Tank
-  and Cascade;
+- eight process scenarios: Cascade, Cascade Recirculating, Crystallization,
+  CSTR, Extraction, Heater, HVAC, and Quadruple Tank, with official benchmark
+  coverage concentrated on Quadruple Tank and Cascade;
 - PID, MPC, SAC, TD3, PPO, BC, and RLPD;
 - validation selection, immutable ranking anchors, and one-shot final testing.
 
@@ -85,6 +86,12 @@ aiogym final-test --config FILE
 The same collect, SAC, BC, RLPD, and benchmark quickstarts are provided under
 `configs/quickstart/cascade/`.
 
+Artifact output paths are protected by default. `aiogym evaluate`, `aiogym
+benchmark`, and multi-seed training sweeps fail if their summary output already
+exists; pass `--overwrite` only when replacement is intentional. Evaluation
+requires environments created with `info_level="full"`; minimal info remains
+available for high-throughput training and raw stepping.
+
 ## Official Tracks
 
 - `quadruple-regulation-generalist-v1`
@@ -100,6 +107,11 @@ fixed anchors, and ranking formula. Training and tuning can access only
 training and validation. `final-test` is the sole ordinary command allowed to
 consume a test split, and its lock cannot be reused.
 
+Scenario implementation and benchmark maturity are tracked separately in
+[Scenario readiness](docs/SCENARIO_READINESS.md). Validation is the public
+selection and comparison split; the locked test split is not available through
+`evaluate` or `benchmark`.
+
 Every Dataset, resolved training configuration, checkpoint, Track, Case, and
 anchor carries a reproducible identity or checksum. A learned checkpoint is
 loaded through one canonical loader that verifies its SHA-256 digest before
@@ -108,3 +120,19 @@ backend deserialization and applies action normalization exactly once.
 Advanced material is in [Documentation](docs/index.md),
 [Public API](docs/public_api.md), [Architecture](docs/architecture.md), and
 [API compatibility](docs/api_compatibility.md).
+
+## Test and release checks
+
+Core tests exclude optional dependency groups:
+
+```bash
+pytest -q -m "not rl and not oracle and not onnx and not e2e"
+pytest -q -m rl      # install aiogym[rl]
+pytest -q -m oracle  # install aiogym[oracle]
+pytest -q -m onnx    # install aiogym[rl,onnx]
+pytest -q -m e2e     # install aiogym[all]
+```
+
+Official source ZIPs are produced with `git archive`, which avoids macOS
+resource-fork metadata. Release wheels and source archives are checked for
+`__MACOSX`, `.DS_Store`, AppleDouble `._*`, Python bytecode, and cache paths.

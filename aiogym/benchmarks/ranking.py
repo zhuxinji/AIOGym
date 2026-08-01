@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 
 from .anchors import AnchorSet, load_anchor_set
+from .anchors.quality import validate_anchor_gap
 
 
 RANKING_EPSILON = 1e-12
@@ -34,8 +35,7 @@ def fixed_anchor_score(
     bad_utility: float,
     reference_utility: float,
 ) -> float:
-    if reference_utility <= bad_utility:
-        raise ValueError("reference anchor utility must exceed bad anchor")
+    validate_anchor_gap(bad_utility, reference_utility)
     return max(
         0.0,
         100.0

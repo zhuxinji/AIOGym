@@ -162,6 +162,7 @@ def test_model_readiness_records_mass_and_energy_as_checked():
     assert report["not_checked"] == ["reference_parameter_fidelity"]
 
 
+@pytest.mark.oracle
 def test_numeric_and_casadi_dynamics_match_across_internal_domain():
     ca = pytest.importorskip("casadi")
     model = make_model("cascade-recirculating")
@@ -194,6 +195,7 @@ def test_numeric_and_casadi_dynamics_match_across_internal_domain():
         assert symbolic == pytest.approx(numeric, rel=1e-12, abs=1e-12)
 
 
+@pytest.mark.oracle
 def test_numeric_and_casadi_use_the_same_action_clipping():
     ca = pytest.importorskip("casadi")
     model = make_model("cascade-recirculating")
@@ -344,6 +346,7 @@ def test_hard_boundaries_remain_distinct_from_passive_protection():
     ) == ("temperature_hard_limit",)
 
 
+@pytest.mark.oracle
 def test_numeric_and_casadi_match_with_both_overflow_branches_active():
     ca = pytest.importorskip("casadi")
     model = make_model("cascade-recirculating")
@@ -414,7 +417,7 @@ def test_device_cases_are_explicit_and_goal_independent():
             "objectives",
         }.intersection(profile)
 
-def test_commissioning_case_starts_at_the_declared_equilibrium():
+def test_commissioning_case_starts_from_a_feasible_nontrivial_offset():
     model = make_model("cascade-recirculating")
     case = aiogym.load_case("cascade-recirculating/commissioning")
     equilibrium = model.nominal_steady_state()
@@ -423,12 +426,13 @@ def test_commissioning_case_starts_at_the_declared_equilibrium():
     )
     env.reset(seed=4)
 
-    assert env.integ.x == pytest.approx(equilibrium["state"])
+    assert env.integ.x == pytest.approx(case["initialization"]["state"])
+    assert env.integ.x != pytest.approx(equilibrium["state"])
     assert env.y_sp == pytest.approx(equilibrium["y_sp"])
     _, _, terminated, _, info = env.step(equilibrium["action"])
     assert not terminated
     assert info["closed_loop_nominal"] is True
-    assert info["tracking_error_cost"] < 1e-18
+    assert info["tracking_error_cost"] > 1e-8
 
 
 def test_temperature_step_is_visible_before_its_control_step():
@@ -482,7 +486,7 @@ def test_safety_recovery_case_starts_with_recoverable_protection_layers():
     [
         ("pid", {}),
         ("mpc", {"P": 2, "Ts": 0.5}),
-        (
+        pytest.param(
             "oracle",
             {
                 "horizon": 1,
@@ -491,6 +495,7 @@ def test_safety_recovery_case_starts_with_recoverable_protection_layers():
                 "terminal_weight": 0.0,
                 "r_move": 0.01,
             },
+            marks=pytest.mark.oracle,
         ),
     ],
 )

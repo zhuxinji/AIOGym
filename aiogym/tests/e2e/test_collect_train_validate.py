@@ -4,6 +4,10 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.e2e
+
 from aiogym import load_track
 from aiogym.cli.benchmark import main as benchmark_main
 from aiogym.cli.evaluate import main as evaluate_main
@@ -93,6 +97,12 @@ def test_mixed_collect_validate_and_bc_checkpoint(tmp_path):
     assert trained.validation["split"] == "validation"
     assert trained.artifact_check["ok"]
     assert training["training_config_hash"] == trained.config_hash
+    assert training["budget_unit"] == "optimizer_updates"
+    assert training["budget_value"] == 2
+    assert training["environment_transitions"] == 0
+    assert training["optimizer_updates"] == 2
+    assert training["offline_samples_available"] == 2700
+    assert training["offline_samples_drawn"] > 0
     assert check_benchmark_artifacts(artifact_dir)["ok"]
 
     evaluate_output = tmp_path / "evaluate.json"
@@ -178,6 +188,10 @@ def test_mixed_collect_validate_and_bc_checkpoint(tmp_path):
             hybrid_config,
             total_transitions=2,
             resume_checkpoint=hybrid.policy_path,
+            output={
+                **dict(hybrid_config.output),
+                "name": "rlpd-e2e-resume",
+            },
         )
     )
     assert resumed_hybrid.backend["final_step"] == 2
@@ -237,6 +251,10 @@ def test_sac_records_multiple_training_specs_and_valid_artifacts(tmp_path):
             config,
             total_transitions=6,
             resume_checkpoint=result.policy_path,
+            output={
+                **dict(config.output),
+                "name": "sac-e2e-resume",
+            },
         )
     )
     assert resumed.backend["final_step"] == 6

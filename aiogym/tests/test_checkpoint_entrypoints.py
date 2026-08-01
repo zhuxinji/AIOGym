@@ -127,6 +127,53 @@ def test_evaluate_cli_without_digest_pins_current_file(
     ] == digest
 
 
+def test_evaluate_cli_output_requires_explicit_overwrite(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    checkpoint = tmp_path / "policy.pt"
+    checkpoint.write_bytes(b"policy")
+    output = tmp_path / "evaluate.json"
+    output.write_bytes(b"original\n")
+    monkeypatch.setattr(
+        "aiogym.cli.evaluate.load_policy_checkpoint",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        "aiogym.cli.evaluate.evaluate_policy_on_track",
+        lambda *args, **kwargs: {
+            "track_id": TRACK_ID,
+            "track_hash": "a" * 64,
+            "split": "validation",
+            "seed_namespace": "validation",
+            "base_seeds": [5000],
+            "case_count": 1,
+            "aggregate": {},
+        },
+    )
+    args = [
+        "--checkpoint",
+        str(checkpoint),
+        "--track",
+        TRACK_ID,
+        "--algorithm",
+        "bc",
+        "--output",
+        str(output),
+    ]
+
+    with pytest.raises(FileExistsError, match="artifact already exists"):
+        evaluate_main(args)
+    assert output.read_bytes() == b"original\n"
+
+    assert evaluate_main([*args, "--overwrite"]) == 0
+    capsys.readouterr()
+    assert json.loads(output.read_text())["split"] == "validation"
+    assert list(tmp_path.glob(".*write-claim")) == []
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
 def test_evaluate_cli_rejects_wrong_digest_through_unified_loader(
     tmp_path,
 ):
@@ -248,6 +295,28 @@ def test_benchmark_checkpoint_path_uses_environment_contract(
     assert json.loads(output.read_text(encoding="utf-8"))["split"] == (
         "validation"
     )
+    with pytest.raises(SystemExit):
+        benchmark_cli.main(
+            [
+                TRACK_ID,
+                "--controllers",
+                "pid",
+                "--output",
+                str(output),
+            ]
+        )
+    assert benchmark_cli.main(
+        [
+            TRACK_ID,
+            "--controllers",
+            "pid",
+            "--output",
+            str(output),
+            "--overwrite",
+        ]
+    ) == 0
+    assert list(tmp_path.glob(".*write-claim")) == []
+    assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_benchmark_uses_one_canonical_checkpoint_option_family():

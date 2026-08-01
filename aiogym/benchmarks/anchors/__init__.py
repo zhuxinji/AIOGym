@@ -10,8 +10,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from aiogym._internal.validation import seed_sequence
 
-ANCHOR_SCHEMA_VERSION = "aiogym.ranking_anchors.v1"
+from .quality import validate_anchor_quality
+
+
+ANCHOR_SCHEMA_VERSION = "aiogym.ranking_anchors.v2"
 BUILTIN_ANCHOR_DIR = Path(__file__).with_name("builtin")
 
 
@@ -39,6 +43,7 @@ class CaseAnchors:
     reference_utility: float
     bad_controller: Mapping[str, Any]
     reference_controller: Mapping[str, Any]
+    quality: Mapping[str, Any]
 
     def __post_init__(self) -> None:
         if not self.case_id or not self.resolved_case_hash:
@@ -47,10 +52,17 @@ class CaseAnchors:
             self.reference_utility
         ):
             raise ValueError("anchor utilities must be finite")
-        if self.reference_utility <= self.bad_utility:
+        quality = validate_anchor_quality(self.quality)
+        if quality["bad_mean"] != self.bad_utility:
+            raise ValueError("anchor bad utility does not match quality mean")
+        if quality["reference_mean"] != self.reference_utility:
             raise ValueError(
-                f"reference utility must exceed bad utility for "
-                f"{self.case_id!r}"
+                "anchor reference utility does not match quality mean"
+            )
+        if not quality["passed"]:
+            raise ValueError(
+                f"degenerate ranking anchor for {self.case_id!r}: "
+                + "; ".join(quality["failure_reasons"])
             )
 
 
@@ -63,6 +75,7 @@ class AnchorSet:
     goal: str
     bad_controller: Mapping[str, Any]
     reference_controller: Mapping[str, Any]
+    calibration: Mapping[str, Any]
     evaluation_seeds: tuple[int, ...]
     cases: Mapping[str, CaseAnchors]
     artifact_hash: str
@@ -88,6 +101,7 @@ class AnchorSet:
             "reference_controller": deepcopy(
                 dict(self.reference_controller)
             ),
+            "calibration": deepcopy(dict(self.calibration)),
             "evaluation_seeds": list(self.evaluation_seeds),
             "cases": {
                 key: {
@@ -101,6 +115,7 @@ class AnchorSet:
                     "reference_controller": deepcopy(
                         dict(row.reference_controller)
                     ),
+                    "quality": deepcopy(dict(row.quality)),
                 }
                 for key, row in sorted(self.cases.items())
             },
@@ -128,6 +143,16 @@ def load_anchor_set(
     expected_hash = anchor_artifact_hash(payload)
     if payload.get("artifact_hash") != expected_hash:
         raise ValueError("ranking anchor artifact hash mismatch")
+    calibration = payload.get("calibration")
+    if (
+        not isinstance(calibration, Mapping)
+        or not calibration.get("generator")
+        or calibration.get("paired_seed_evaluation") is not True
+        or not isinstance(calibration.get("dependency_versions"), Mapping)
+    ):
+        raise ValueError(
+            "ranking anchor requires paired calibration provenance"
+        )
     cases = {}
     raw_cases = payload.get("cases")
     if not isinstance(raw_cases, Mapping) or not raw_cases:
@@ -142,13 +167,20 @@ def load_anchor_set(
             reference_controller=deepcopy(
                 dict(value["reference_controller"])
             ),
+            quality=deepcopy(dict(value["quality"])),
         )
         if str(key) != row.resolved_case_hash:
             raise ValueError("anchor case key must equal resolved_case_hash")
         cases[str(key)] = row
-    seeds = tuple(int(seed) for seed in payload.get("evaluation_seeds", ()))
-    if not seeds or len(set(seeds)) != len(seeds):
-        raise ValueError("anchor evaluation seeds must be non-empty and unique")
+    seeds = seed_sequence(
+        "anchor evaluation seeds",
+        payload.get("evaluation_seeds", ()),
+    )
+    for row in cases.values():
+        if int(row.quality["sample_count"]) != len(seeds):
+            raise ValueError(
+                "anchor quality sample count must match evaluation seeds"
+            )
     anchors = AnchorSet(
         anchor_id=str(payload["id"]),
         track_id=str(payload["track_id"]),
@@ -157,6 +189,7 @@ def load_anchor_set(
         goal=str(payload["goal"]),
         bad_controller=deepcopy(dict(payload["bad_controller"])),
         reference_controller=deepcopy(dict(payload["reference_controller"])),
+        calibration=deepcopy(dict(calibration)),
         evaluation_seeds=seeds,
         cases=cases,
         artifact_hash=expected_hash,

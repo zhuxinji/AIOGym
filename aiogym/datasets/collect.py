@@ -8,6 +8,7 @@ import math
 from concurrent.futures import ProcessPoolExecutor
 
 from aiogym.benchmarks.tracks.registry import load_track
+from aiogym.rewards.registry import get_reward_spec
 from aiogym.generation.factory import make_episode_sampler
 from aiogym.rl.episode_env import (
     make_track_episode_sampler,
@@ -59,11 +60,14 @@ def collect_dataset(
     )
     track, sampler = validate_collection_capabilities(resolved)
     distribution = sampler.distribution
+    reward_spec = get_reward_spec(track.reward_spec_id)
     collection_metadata = {
         "schema_version": resolved.declaration["schema_version"],
         "config_hash": resolved.config_hash,
         "track_id": track.id,
         "track_hash": track.track_hash,
+        "reward_spec_id": reward_spec.id,
+        "reward_spec_hash": reward_spec.spec_hash,
         "distribution_id": distribution.distribution_id,
         "distribution_hash": distribution.distribution_hash,
         "requested_transitions": resolved.target_transitions,

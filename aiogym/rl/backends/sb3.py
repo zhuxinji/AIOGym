@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.util
-import inspect
 import json
 import os
+import shutil
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from aiogym.controllers.adapters import PolicyController
@@ -17,6 +17,8 @@ from ..checkpoints import (
     TrainingCheckpoint,
     capture_rng_state,
     restore_rng_state,
+    selected_checkpoint_manifest,
+    validate_selected_checkpoint,
 )
 from ..coordinator import EpisodeCoordinator
 from ..episode_env import make_track_training_env
@@ -184,6 +186,8 @@ def save_resumable_training_state(
     checkpoint_path: str | Path,
     *,
     best_validation=None,
+    validation_state=None,
+    selected_checkpoint=None,
 ) -> str:
     """Save SB3 state for a declared restart-episode continuation."""
 
@@ -217,6 +221,8 @@ def save_resumable_training_state(
         ),
         best_validation=best_validation,
         rng_state=capture_rng_state(),
+        validation_state=validation_state,
+        selected_checkpoint=selected_checkpoint,
         resume_mode="restart_episode",
         last_committed_episode_index=resume_state.get(
             "last_committed_episode_index"
@@ -251,6 +257,7 @@ def prepare_resume_training_state(plan):
         allow_runtime_changes=True,
     )
     _validate_sb3_resume_contract(plan, checkpoint)
+    checkpoint.require_exact_validation_resume()
     return checkpoint
 
 
@@ -361,6 +368,56 @@ def make_learning_curve_callback(
             )
             self.validation_plan = self.validator.plan
 
+        def state_dict(self):
+            return {
+                "schema_version": "aiogym.sb3_validation_callback.v1",
+                "validation_callback": self.validator.state_dict(),
+                "learning_curve_history": list(self.history),
+                "training_episode_specs": dict(
+                    self.training_episode_specs
+                ),
+                "next_validation_boundary": int(self._next_eval),
+                "best_metric_value": self.best_metric_value,
+                "best_step": self.best_step,
+            }
+
+        def load_state_dict(self, state):
+            if not isinstance(state, dict):
+                raise TypeError("SB3 validation state must be a mapping")
+            payload = dict(state)
+            if payload.pop("schema_version", None) != (
+                "aiogym.sb3_validation_callback.v1"
+            ):
+                raise ValueError("unsupported SB3 validation state")
+            self.validator.load_state_dict(
+                payload.pop("validation_callback", None)
+            )
+            history = payload.pop("learning_curve_history", None)
+            episode_specs = payload.pop("training_episode_specs", None)
+            if not isinstance(history, (list, tuple)):
+                raise TypeError("SB3 learning curve history is invalid")
+            if not isinstance(episode_specs, dict):
+                raise TypeError("SB3 episode spec state is invalid")
+            boundary = payload.pop("next_validation_boundary", None)
+            if (
+                isinstance(boundary, bool)
+                or not isinstance(boundary, int)
+                or boundary <= 0
+            ):
+                raise ValueError("next validation boundary is invalid")
+            self.history = list(history)
+            self.training_episode_specs = dict(episode_specs)
+            self._next_eval = boundary
+            self.best_metric_value = payload.pop(
+                "best_metric_value", None
+            )
+            self.best_step = payload.pop("best_step", None)
+            if payload:
+                raise ValueError(
+                    "SB3 validation state contains unknown fields: "
+                    + ", ".join(sorted(payload))
+                )
+
         def _on_step(self) -> bool:
             for info in self.locals.get("infos", ()):
                 episode_hash = info.get("episode_spec_hash")
@@ -400,63 +457,22 @@ def make_learning_curve_callback(
                 self.best_metric_value = float(row["metric_value"])
                 self.best_step = int(self.num_timesteps)
                 self.model.save(str(best_checkpoint_path))
+                selected = selected_checkpoint_manifest(
+                    best_checkpoint_path,
+                    self.validator.selector.best.__dict__,
+                )
                 save_resumable_training_state(
                     plan,
                     self.model,
                     best_checkpoint_path,
                     best_validation=row,
+                    validation_state=self.state_dict(),
+                    selected_checkpoint=selected,
                 )
             self._next_eval += max(1, every)
             return True
 
     return LearningCurveCallback()
-
-
-def export_onnx(model, obs_dim: int, path: str | Path) -> None:
-    import torch
-
-    class DeterministicPolicy(torch.nn.Module):
-        def __init__(self, policy):
-            super().__init__()
-            self.policy = policy
-
-        def forward(self, obs):
-            return self.policy._predict(obs, deterministic=True)
-
-    policy = model.policy
-    policy.eval()
-    device = next(policy.parameters()).device
-    dummy = torch.zeros(1, obs_dim, device=device)
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    export_options = {
-        "input_names": ["obs"],
-        "output_names": ["action"],
-        "opset_version": 17,
-    }
-    if "dynamo" in inspect.signature(torch.onnx.export).parameters:
-        export_options["dynamo"] = False
-    torch.onnx.export(
-        DeterministicPolicy(policy),
-        dummy,
-        str(target),
-        **export_options,
-    )
-
-
-def require_onnx_export_dependencies() -> None:
-    try:
-        import torch  # noqa: F401
-    except ModuleNotFoundError as exc:
-        raise SystemExit(
-            "torch is required for ONNX export; install AIO-Gym "
-            "with `pip install 'aiogym[rl]'`."
-        ) from exc
-    if importlib.util.find_spec("onnx") is None:
-        raise SystemExit(
-            "onnx is required for ONNX export; install AIO-Gym "
-            "with `pip install 'aiogym[rl]'`."
-        )
 
 
 def run_sb3(plan) -> BackendResult:
@@ -469,14 +485,11 @@ def run_sb3(plan) -> BackendResult:
         )
     algorithm = dict(config.algorithm)
     replay = dict(config.replay)
-    output = dict(config.output)
     gamma = float(algorithm["gamma"])
     if not 0.0 < gamma <= 1.0:
         raise ValueError("algorithm.gamma must be in (0, 1]")
     if config.utd_ratio < 0.0:
         raise ValueError("algorithm.utd_ratio must be non-negative")
-    if bool(output["onnx"]):
-        require_onnx_export_dependencies()
 
     try:
         import torch
@@ -525,6 +538,16 @@ def run_sb3(plan) -> BackendResult:
             plan,
             plan.policy_path,
         )
+        selected_checkpoint = None
+        if resume_checkpoint is not None:
+            curve_callback.load_state_dict(
+                resume_checkpoint.validation_state
+            )
+            if resume_checkpoint.selected_checkpoint is not None:
+                selected_checkpoint = _materialize_selected_checkpoint(
+                    resume_checkpoint.selected_checkpoint,
+                    plan.policy_path,
+                )
         if config.resume_checkpoint:
             initial = evaluate_training_policy(
                 plan,
@@ -535,17 +558,28 @@ def run_sb3(plan) -> BackendResult:
                 validation_callback=curve_callback.validator,
                 checkpoint_id=f"resume-step-{starting_step}",
             )
-            if curve_callback.validator.selector.best is not None:
+            improved = (
+                curve_callback.validator.selector.best is not None
+                and curve_callback.validator.selector.best.checkpoint_id
+                == f"resume-step-{starting_step}"
+            )
+            if improved:
                 curve_callback.best_step = starting_step
                 curve_callback.best_metric_value = float(
                     initial["metric_value"]
                 )
                 model.save(str(plan.policy_path))
+                selected_checkpoint = selected_checkpoint_manifest(
+                    plan.policy_path,
+                    curve_callback.validator.selector.best.__dict__,
+                )
                 save_resumable_training_state(
                     plan,
                     model,
                     plan.policy_path,
                     best_validation=initial,
+                    validation_state=curve_callback.state_dict(),
+                    selected_checkpoint=selected_checkpoint,
                 )
         else:
             initial = evaluate_training_policy(
@@ -612,6 +646,16 @@ def run_sb3(plan) -> BackendResult:
             model,
             final_checkpoint_path,
             best_validation=best_validation,
+            validation_state=curve_callback.state_dict(),
+            selected_checkpoint=(
+                selected_checkpoint_manifest(
+                    plan.policy_path,
+                    curve_callback.validator.selector.best.__dict__,
+                )
+                if curve_callback.validator.selector.best is not None
+                and plan.policy_path.is_file()
+                else selected_checkpoint
+            ),
         )
         if curve_callback.best_step is None:
             model.save(str(plan.policy_path))
@@ -620,28 +664,12 @@ def run_sb3(plan) -> BackendResult:
                 model,
                 plan.policy_path,
                 best_validation=best_validation,
+                validation_state=curve_callback.state_dict(),
+                selected_checkpoint=None,
             )
             checkpoint_selection = "final"
         else:
             checkpoint_selection = "best-validation"
-
-        exports = {}
-        if bool(output["onnx"]):
-            onnx_path = plan.output_dir / f"{plan.run_name}.onnx"
-            export_model = model
-            if checkpoint_selection == "best-validation":
-                export_model = load_algorithm_checkpoint(
-                    config.algorithm_id,
-                    plan.policy_path,
-                    env=env,
-                    device=config.device,
-                )
-            export_onnx(
-                export_model,
-                int(env.observation_space.shape[0]),
-                onnx_path,
-            )
-            exports["onnx"] = str(onnx_path)
 
         learning_curve = list(curve_callback.history)
         if (
@@ -712,6 +740,10 @@ def run_sb3(plan) -> BackendResult:
             ),
             "best_step": curve_callback.best_step,
             "best_metric_value": curve_callback.best_metric_value,
+            "environment_transitions": final_step,
+            "optimizer_updates": int(getattr(model, "_n_updates", 0)),
+            "offline_samples_available": 0,
+            "offline_samples_drawn": 0,
             "training_episode_specs": episode_specs,
             "unique_training_episode_specs": len(episode_specs),
         }
@@ -723,11 +755,37 @@ def run_sb3(plan) -> BackendResult:
             learning_curve=tuple(learning_curve),
             training_metadata=metadata,
             runtime=runtime,
-            exports=exports,
         )
     finally:
         if env is not None:
             env.close()
+
+
+def _materialize_selected_checkpoint(manifest, destination: Path):
+    """Copy a verified historical best into the current run namespace."""
+
+    source = validate_selected_checkpoint(manifest)
+    destination = Path(destination).resolve()
+    if source.resolve() == destination:
+        return dict(manifest)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+    for suffix in (".replay.pkl",):
+        companion = Path(f"{source}{suffix}")
+        if companion.is_file():
+            shutil.copy2(companion, Path(f"{destination}{suffix}"))
+    updated = selected_checkpoint_manifest(
+        destination,
+        manifest["selection_record"],
+    )
+    sidecar = Path(f"{source}.training.ckpt")
+    if sidecar.is_file():
+        checkpoint = CheckpointManager.load(sidecar)
+        CheckpointManager.save(
+            f"{destination}.training.ckpt",
+            replace(checkpoint, selected_checkpoint=updated),
+        )
+    return updated
 
 
 __all__ = [
@@ -735,11 +793,9 @@ __all__ = [
     "build_algo",
     "default_n_envs",
     "evaluate_training_policy",
-    "export_onnx",
     "make_learning_curve_callback",
     "make_training_env",
     "prepare_resume_training_state",
-    "require_onnx_export_dependencies",
     "run_sb3",
     "save_resumable_training_state",
     "unified_config",

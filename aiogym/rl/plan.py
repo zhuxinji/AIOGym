@@ -25,6 +25,7 @@ class ResolvedTrainingPlan:
     dataset_path: Path | None
     dataset_id: str | None
     dataset_hash: str | None
+    replace_existing: bool = False
 
     @property
     def resolved_config_path(self) -> Path:

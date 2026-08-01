@@ -2,7 +2,10 @@
 .venv/
 .venv-rl/
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 *.egg-info/
 build/
 dist/
@@ -11,8 +14,13 @@ tmp/
 
 # Node / OS
 node_modules/
+# macOS metadata
 .DS_Store
+**/.DS_Store
+._*
+**/._*
 __MACOSX/
+**/__MACOSX/
 
 # Trained policies (build artifacts)
 *.onnx

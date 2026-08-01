@@ -3,7 +3,7 @@
   "name": "disturbance-rejection",
   "scenario": "cascade-recirculating",
   "status": "benchmark-designed",
-  "description": "Deterministic rejection of P101 capacity, H1 efficiency, and laboratory ambient changes around the nominal closed-loop equilibrium.",
+  "description": "Deterministic recovery from a feasible startup offset followed by P101 capacity, H1 efficiency, and laboratory ambient changes around the nominal closed-loop equilibrium.",
   "environment": {
     "control_dt": 0.5,
     "episode_steps": 1400,
@@ -19,8 +19,8 @@
     "noise_pct": 0.01
   },
   "initialization": {
-    "state": [0.4, 30.0, 0.4, 28.932991890738368, 0.4, 27.57566937897707],
-    "basis": "model-consistent nominal equilibrium"
+    "state": [0.36, 28.0, 0.37, 27.5, 0.38, 26.5],
+    "basis": "feasible bounded offset from the model-consistent nominal equilibrium"
   },
   "setpoints": {
     "initial": [0.4, 0.4, 0.4, 30.0, 28.932991890738368, 27.57566937897707],

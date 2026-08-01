@@ -1,0 +1,293 @@
+{
+  "artifact_hash": "ea229ea4816d1d9e3efce8103ce79de2857cb01cb245611ae8d3acc98a9f1c43",
+  "bad_controller": {
+    "config_scope": "per-case",
+    "id": "hold"
+  },
+  "calibration": {
+    "dependency_versions": {
+      "aiogym": "0.1.0",
+      "casadi": "3.7.2",
+      "gymnasium": "1.3.0",
+      "numpy": "2.5.0"
+    },
+    "generator": "aiogym.benchmarks.calibration.calibrate_anchor_manifest",
+    "paired_seed_evaluation": true,
+    "python_version": "3.14.6"
+  },
+  "cases": {
+    "092635cc1cbadbe16f5d39f0db0da0a6a7f5240afc920cc6a50b7576bde17930": {
+      "bad_controller": {
+        "controller_api_version": "aiogym.controller.v1",
+        "controller_config_hash": "d38f761aaf9a0bbb51b7e8dc6227f6836b5bbc4c51ffb8f7d26af8bfe1a4f4e3",
+        "id": "hold",
+        "source_config": {}
+      },
+      "bad_utility": -0.00241424331277934,
+      "case_id": "disturbance-rejection",
+      "quality": {
+        "absolute_gap": 0.001490294662104579,
+        "bad_eligible": [
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "bad_max": -0.00241424331277934,
+        "bad_mean": -0.00241424331277934,
+        "bad_min": -0.00241424331277934,
+        "bad_samples": [
+          -0.00241424331277934,
+          -0.00241424331277934,
+          -0.00241424331277934,
+          -0.00241424331277934,
+          -0.00241424331277934
+        ],
+        "bad_std": 0.0,
+        "failure_reasons": [],
+        "passed": true,
+        "policy_id": "fixed-anchor-quality-v1",
+        "reference_eligible": [
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "reference_max": -0.0009239486506747612,
+        "reference_mean": -0.0009239486506747612,
+        "reference_min": -0.0009239486506747612,
+        "reference_samples": [
+          -0.0009239486506747612,
+          -0.0009239486506747612,
+          -0.0009239486506747612,
+          -0.0009239486506747612,
+          -0.0009239486506747612
+        ],
+        "reference_std": 0.0,
+        "relative_gap": 0.6172926540651417,
+        "sample_count": 5,
+        "signal_to_noise": "infinity",
+        "standard_error": 0.0
+      },
+      "reference_controller": {
+        "controller_api_version": "aiogym.controller.v1",
+        "controller_config_hash": "bb78df1934e04230504a7c9fb9d8eb467cee8667a3b12d881d3183c58a9567a8",
+        "id": "mpc",
+        "source_config": {}
+      },
+      "reference_utility": -0.0009239486506747612,
+      "resolved_case_hash": "092635cc1cbadbe16f5d39f0db0da0a6a7f5240afc920cc6a50b7576bde17930"
+    },
+    "4bb229c1f066018dfbad0de2d5e8370000e1b6a4a9e3e517e428d9a60040f69e": {
+      "bad_controller": {
+        "controller_api_version": "aiogym.controller.v1",
+        "controller_config_hash": "d38f761aaf9a0bbb51b7e8dc6227f6836b5bbc4c51ffb8f7d26af8bfe1a4f4e3",
+        "id": "hold",
+        "source_config": {}
+      },
+      "bad_utility": -0.0006670943858537271,
+      "case_id": "temperature-step",
+      "quality": {
+        "absolute_gap": 0.00020506174910990413,
+        "bad_eligible": [
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "bad_max": -0.0006670943858537271,
+        "bad_mean": -0.0006670943858537271,
+        "bad_min": -0.0006670943858537271,
+        "bad_samples": [
+          -0.0006670943858537271,
+          -0.0006670943858537271,
+          -0.0006670943858537271,
+          -0.0006670943858537271,
+          -0.0006670943858537271
+        ],
+        "bad_std": 0.0,
+        "failure_reasons": [],
+        "passed": true,
+        "policy_id": "fixed-anchor-quality-v1",
+        "reference_eligible": [
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "reference_max": -0.000462032636743823,
+        "reference_mean": -0.000462032636743823,
+        "reference_min": -0.000462032636743823,
+        "reference_samples": [
+          -0.000462032636743823,
+          -0.000462032636743823,
+          -0.000462032636743823,
+          -0.000462032636743823,
+          -0.000462032636743823
+        ],
+        "reference_std": 0.0,
+        "relative_gap": 0.30739540529556747,
+        "sample_count": 5,
+        "signal_to_noise": "infinity",
+        "standard_error": 0.0
+      },
+      "reference_controller": {
+        "controller_api_version": "aiogym.controller.v1",
+        "controller_config_hash": "bb78df1934e04230504a7c9fb9d8eb467cee8667a3b12d881d3183c58a9567a8",
+        "id": "mpc",
+        "source_config": {}
+      },
+      "reference_utility": -0.000462032636743823,
+      "resolved_case_hash": "4bb229c1f066018dfbad0de2d5e8370000e1b6a4a9e3e517e428d9a60040f69e"
+    },
+    "aa4d82338a710e2e53d65b2833b8f8ebd763b59132372594ef06f984d2e19a51": {
+      "bad_controller": {
+        "controller_api_version": "aiogym.controller.v1",
+        "controller_config_hash": "d38f761aaf9a0bbb51b7e8dc6227f6836b5bbc4c51ffb8f7d26af8bfe1a4f4e3",
+        "id": "hold",
+        "source_config": {}
+      },
+      "bad_utility": -0.0013112990523778546,
+      "case_id": "disturbance-rejection:nominal",
+      "quality": {
+        "absolute_gap": 0.00039273822005395304,
+        "bad_eligible": [
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "bad_max": -0.0013112990523778546,
+        "bad_mean": -0.0013112990523778546,
+        "bad_min": -0.0013112990523778546,
+        "bad_samples": [
+          -0.0013112990523778546,
+          -0.0013112990523778546,
+          -0.0013112990523778546,
+          -0.0013112990523778546,
+          -0.0013112990523778546
+        ],
+        "bad_std": 0.0,
+        "failure_reasons": [],
+        "passed": true,
+        "policy_id": "fixed-anchor-quality-v1",
+        "reference_eligible": [
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "reference_max": -0.0009185608323239014,
+        "reference_mean": -0.0009185608323239015,
+        "reference_min": -0.0009185608323239014,
+        "reference_samples": [
+          -0.0009185608323239014,
+          -0.0009185608323239014,
+          -0.0009185608323239014,
+          -0.0009185608323239014,
+          -0.0009185608323239014
+        ],
+        "reference_std": 0.0,
+        "relative_gap": 0.2995031677493994,
+        "sample_count": 5,
+        "signal_to_noise": "infinity",
+        "standard_error": 0.0
+      },
+      "reference_controller": {
+        "controller_api_version": "aiogym.controller.v1",
+        "controller_config_hash": "bb78df1934e04230504a7c9fb9d8eb467cee8667a3b12d881d3183c58a9567a8",
+        "id": "mpc",
+        "source_config": {}
+      },
+      "reference_utility": -0.0009185608323239015,
+      "resolved_case_hash": "aa4d82338a710e2e53d65b2833b8f8ebd763b59132372594ef06f984d2e19a51"
+    },
+    "e31ebfcb7078b2e3e35ce0abc614b2db1c4a78744fac3ff0f17aaa7498d08cca": {
+      "bad_controller": {
+        "controller_api_version": "aiogym.controller.v1",
+        "controller_config_hash": "d38f761aaf9a0bbb51b7e8dc6227f6836b5bbc4c51ffb8f7d26af8bfe1a4f4e3",
+        "id": "hold",
+        "source_config": {}
+      },
+      "bad_utility": -0.01149807654623934,
+      "case_id": "commissioning",
+      "quality": {
+        "absolute_gap": 0.00599392098562243,
+        "bad_eligible": [
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "bad_max": -0.01149807654623934,
+        "bad_mean": -0.01149807654623934,
+        "bad_min": -0.01149807654623934,
+        "bad_samples": [
+          -0.01149807654623934,
+          -0.01149807654623934,
+          -0.01149807654623934,
+          -0.01149807654623934,
+          -0.01149807654623934
+        ],
+        "bad_std": 0.0,
+        "failure_reasons": [],
+        "passed": true,
+        "policy_id": "fixed-anchor-quality-v1",
+        "reference_eligible": [
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "reference_max": -0.00550415556061691,
+        "reference_mean": -0.00550415556061691,
+        "reference_min": -0.00550415556061691,
+        "reference_samples": [
+          -0.00550415556061691,
+          -0.00550415556061691,
+          -0.00550415556061691,
+          -0.00550415556061691,
+          -0.00550415556061691
+        ],
+        "reference_std": 0.0,
+        "relative_gap": 0.5212977111013279,
+        "sample_count": 5,
+        "signal_to_noise": "infinity",
+        "standard_error": 0.0
+      },
+      "reference_controller": {
+        "controller_api_version": "aiogym.controller.v1",
+        "controller_config_hash": "bb78df1934e04230504a7c9fb9d8eb467cee8667a3b12d881d3183c58a9567a8",
+        "id": "mpc",
+        "source_config": {}
+      },
+      "reference_utility": -0.00550415556061691,
+      "resolved_case_hash": "e31ebfcb7078b2e3e35ce0abc614b2db1c4a78744fac3ff0f17aaa7498d08cca"
+    }
+  },
+  "evaluation_seeds": [
+    9000,
+    9001,
+    9002,
+    9003,
+    9004
+  ],
+  "goal": "regulation",
+  "id": "cascade-recirculating-regulation-anchors-v2",
+  "ranking_spec_id": "cascade-recirculating-regulation-ranking-v1",
+  "reference_controller": {
+    "config_scope": "per-case",
+    "id": "mpc"
+  },
+  "schema_version": "aiogym.ranking_anchors.v2",
+  "track_hash": "3b7c280cd79087d2731a38b7baae72d95044aa699a2f5f5d3c48321676b03fbb",
+  "track_id": "cascade-recirculating-regulation-generalist-v1"
+}
