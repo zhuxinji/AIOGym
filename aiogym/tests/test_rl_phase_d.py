@@ -45,7 +45,6 @@ def test_unified_config_has_stable_canonical_hash():
     assert first.canonical_json() == second.canonical_json()
     assert first.config_hash == second.config_hash
     assert list_algorithm_adapters() == (
-        "lagrangian_sac",
         "ppo",
         "sac",
         "td3",

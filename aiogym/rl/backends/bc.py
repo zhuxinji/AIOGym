@@ -6,7 +6,7 @@ from time import monotonic
 
 from ..behavior_cloning import BehaviorCloningTrainer
 from ..dataset_replay import DatasetReplay
-from . import BackendResult
+from .contracts import BackendResult
 
 
 def run_bc(plan) -> BackendResult:

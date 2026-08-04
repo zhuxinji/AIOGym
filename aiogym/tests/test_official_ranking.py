@@ -5,6 +5,7 @@ import math
 import pytest
 
 from aiogym.benchmarks.ranking import (
+    fixed_anchor_margin,
     fixed_anchor_score,
     weighted_geometric_mean,
 )
@@ -32,6 +33,11 @@ def test_fixed_anchor_golden_values():
         bad_utility=0.0,
         reference_utility=10.0,
     ) == 0.0
+    assert fixed_anchor_margin(
+        -1.0,
+        bad_utility=0.0,
+        reference_utility=10.0,
+    ) == -10.0
 
 
 def test_weighted_geometric_mean_golden_values():
@@ -82,7 +88,53 @@ def test_validation_selector_and_hpo_use_official_score():
     assert _validation_utility(higher_raw_worse_official) == 40.0
 
 
-def _evaluation(*, raw, official):
+def test_selector_uses_unclipped_margin_when_one_case_score_is_zero():
+    selector = EligibilityAwareSelector()
+    commissioning_favored = _evaluation(
+        raw=1.0,
+        official=8e-6,
+        case_values=[0.014, 0.009],
+        anchor_margins=[60.0, -4000.0],
+    )
+    bottleneck_favored = _evaluation(
+        raw=1.1,
+        official=6e-6,
+        case_values=[0.018, 0.003],
+        anchor_margins=[50.0, -1200.0],
+    )
+    assert selector.consider("commissioning", commissioning_favored, step=1)
+    assert selector.consider("bottleneck", bottleneck_favored, step=2)
+    assert selector.best.checkpoint_id == "bottleneck"
+    assert selector.best.worst_anchor_margin == -1200.0
+
+
+def test_selector_returns_to_official_score_after_all_cases_clear_bad_anchor():
+    selector = EligibilityAwareSelector()
+    better_worst_margin = _evaluation(
+        raw=1.0,
+        official=40.0,
+        case_values=[1.0, 1.0],
+        anchor_margins=[40.0, 40.0],
+    )
+    better_official = _evaluation(
+        raw=1.1,
+        official=50.0,
+        case_values=[1.1, 1.1],
+        anchor_margins=[100.0, 25.0],
+    )
+    assert selector.consider("balanced", better_worst_margin, step=1)
+    assert selector.consider("official", better_official, step=2)
+    assert selector.best.checkpoint_id == "official"
+
+
+def _evaluation(
+    *,
+    raw,
+    official,
+    case_values=None,
+    anchor_margins=None,
+):
+    values = list(case_values or [raw])
     return {
         "split": "validation",
         "results": [
@@ -95,7 +147,8 @@ def _evaluation(*, raw, official):
             "metric": "regulation_cost_rate",
             "metric_direction": "minimize",
             "metric_value": raw,
-            "case_values": [raw],
+            "case_values": values,
+            "case_anchor_margins": list(anchor_margins or ()),
             "official_score": official,
             "ranking_eligible": True,
         },

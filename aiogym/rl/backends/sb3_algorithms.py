@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+import numpy as np
+
 from ..config import RLTrainingConfig
 from ..utd import sb3_update_schedule
 
@@ -22,6 +24,9 @@ def _common_kwargs(config: RLTrainingConfig, env, verbose: int) -> dict:
     algorithm = config.algorithm
     return {
         "policy": algorithm["policy"],
+        "policy_kwargs": _materialize_policy_kwargs(
+            algorithm["policy_kwargs"]
+        ),
         "env": env,
         "verbose": int(verbose),
         "seed": config.training_seed,
@@ -47,7 +52,7 @@ def _build_off_policy(name: str, config: RLTrainingConfig, env, *, verbose: int)
         vector_steps=int(algorithm["rollout_vector_steps"]),
     )
     cls = SAC if name == "sac" else TD3
-    return cls(
+    kwargs = dict(
         batch_size=int(algorithm["batch_size"]),
         train_freq=train_freq,
         gradient_steps=gradient_steps,
@@ -56,6 +61,21 @@ def _build_off_policy(name: str, config: RLTrainingConfig, env, *, verbose: int)
         tau=float(algorithm["tau"]),
         **_common_kwargs(config, env, verbose),
     )
+    if name == "sac":
+        kwargs.update(
+            ent_coef=algorithm["ent_coef"],
+            target_entropy=algorithm["target_entropy"],
+        )
+    else:
+        kwargs.update(
+            action_noise=_td3_action_noise(algorithm, env),
+            policy_delay=int(algorithm["policy_delay"]),
+            target_policy_noise=float(
+                algorithm["target_policy_noise"]
+            ),
+            target_noise_clip=float(algorithm["target_noise_clip"]),
+        )
+    return cls(**kwargs)
 
 
 def _build_sac(config, env, *, verbose=0):
@@ -78,57 +98,61 @@ def _build_ppo(config: RLTrainingConfig, env, *, verbose: int = 0):
     return PPO(
         n_steps=int(algorithm["n_steps"]),
         batch_size=int(algorithm["batch_size"]),
+        gae_lambda=float(algorithm["gae_lambda"]),
+        clip_range=float(algorithm["clip_range"]),
+        n_epochs=int(algorithm["n_epochs"]),
+        ent_coef=float(algorithm["ent_coef"]),
+        vf_coef=float(algorithm["vf_coef"]),
+        max_grad_norm=float(algorithm["max_grad_norm"]),
         **_common_kwargs(config, env, verbose),
     )
 
 
-def _build_lagrangian_sac(
-    config: RLTrainingConfig,
-    env,
-    *,
-    verbose: int = 0,
-):
-    del verbose
-    from .constrained import LagrangianSAC
+def _materialize_policy_kwargs(value) -> dict:
+    try:
+        from torch import nn
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "torch is required; install AIO-Gym with "
+            "`pip install 'aiogym[rl]'`"
+        ) from exc
+    activation_classes = {
+        "elu": nn.ELU,
+        "relu": nn.ReLU,
+        "tanh": nn.Tanh,
+    }
+    return {
+        "activation_fn": activation_classes[str(value["activation_fn"])],
+        "net_arch": {
+            str(name): [int(size) for size in layers]
+            for name, layers in value["net_arch"].items()
+        },
+    }
 
-    algorithm = config.algorithm
-    if "cost_limit" not in algorithm:
+
+def _td3_action_noise(algorithm, env):
+    if algorithm["action_noise"] == "none":
+        return None
+    try:
+        from stable_baselines3.common.noise import NormalActionNoise
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "stable-baselines3 is required; install AIO-Gym with "
+            "`pip install 'aiogym[rl]'`"
+        ) from exc
+    shape = tuple(getattr(env.action_space, "shape", ()) or ())
+    if not shape or any(int(size) <= 0 for size in shape):
         raise ValueError(
-            "lagrangian_sac requires algorithm.cost_limit"
+            "TD3 requires a finite-dimensional action-space shape"
         )
-    return LagrangianSAC(
-        observation_dim=int(env.observation_space.shape[0]),
-        action_dim=int(env.action_space.shape[0]),
-        cost_limit=float(algorithm["cost_limit"]),
-        hidden=int(algorithm.get("hidden", 256)),
-        gamma=float(algorithm.get("gamma", 0.99)),
-        tau=float(algorithm.get("tau", 0.005)),
-        entropy_coefficient=float(
-            algorithm.get("entropy_coefficient", 0.1)
-        ),
-        learning_rate=float(algorithm.get("learning_rate", 3e-4)),
-        multiplier_learning_rate=float(
-            algorithm.get("multiplier_learning_rate", 1e-3)
-        ),
-        batch_size=int(algorithm.get("batch_size", 256)),
-        replay_capacity=int(config.replay.get("capacity", 1_000_000)),
-        device=config.device,
-        seed=config.training_seed,
-        cost_channels=tuple(
-            algorithm.get(
-                "cost_channels",
-                ("soft_safety", "hard_safety"),
-            )
-        ),
+    sigma = float(algorithm["action_noise_sigma"])
+    return NormalActionNoise(
+        mean=np.zeros(shape, dtype=np.float32),
+        sigma=np.full(shape, sigma, dtype=np.float32),
     )
 
 
 _REGISTRY = {
-    "lagrangian_sac": AlgorithmAdapter(
-        "lagrangian_sac",
-        True,
-        _build_lagrangian_sac,
-    ),
     "sac": AlgorithmAdapter("sac", True, _build_sac),
     "td3": AlgorithmAdapter("td3", True, _build_td3),
     "ppo": AlgorithmAdapter("ppo", False, _build_ppo),

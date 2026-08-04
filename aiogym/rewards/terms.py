@@ -7,7 +7,8 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from ..evaluation.metrics.tracking import (
+from .._internal.control_math import (
+    normalized_action,
     normalized_tracking_error_sum,
     normalized_tracking_errors,
 )
@@ -217,24 +218,6 @@ def tracking_cost_terms(model, y, y_sp, action, previous_action, q_y, r_move):
         float(move_cost),
         float(tracking_cost),
     )
-
-
-def normalized_action(model, action):
-    values = np.asarray(model.action_vector(action), dtype=np.float64)
-    normalized = []
-    for i, value in enumerate(values):
-        row = model.action_schema()[i]
-        bounds = row.get("bounds")
-        scale = 1.0
-        offset = 0.0
-        if isinstance(bounds, (tuple, list)) and len(bounds) == 2:
-            lo, hi = bounds
-            if lo is not None:
-                offset = float(lo)
-            if lo is not None and hi is not None and float(hi) > float(lo):
-                scale = float(hi) - float(lo)
-        normalized.append((float(value) - offset) / max(scale, 1e-12))
-    return np.asarray(normalized, dtype=np.float64)
 
 
 def process_info(model, state, levels, temps, disturbance, action):

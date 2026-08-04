@@ -278,6 +278,7 @@ def test_runner_owns_resolution_execution_and_result_artifacts(tmp_path):
     assert result.backend == {
         "final_step": 20,
         "checkpoint_selection": "final",
+        "selected_checkpoint_step": 20,
         "runtime": {"seconds": 1.5},
         "exports": {},
     }
@@ -331,8 +332,7 @@ def test_cli_train_is_config_first_and_has_no_backend_subcommand(
     assert payload["algorithm_id"] == "sac"
     assert "--split" not in payload["next_command"]
     assert payload["next_command"] == (
-        f"aiogym evaluate --checkpoint {result.policy_path} "
-        f"--track {TRACK_ID} --algorithm sac"
+        f"aiogym evaluate {tmp_path / 'resolved.run-result.json'}"
     )
     with pytest.raises(SystemExit):
         cli_main(["train", "sb3", "--track", TRACK_ID])

@@ -10,7 +10,7 @@ import gymnasium as gym
 from aiogym.models.cases import CaseSpec
 from aiogym.rewards.specs import RewardSpec
 
-from .runtime import _AIOGymEnv
+from .env import _AIOGymEnv
 from .spec import resolve_env_spec
 
 

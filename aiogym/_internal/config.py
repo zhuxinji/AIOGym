@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 import json
+import re
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .validation import nonnegative_int, positive_int, seed_sequence
+
+
+_COUNT_PATTERN = re.compile(r"^(\d+(?:\.\d+)?)([km]?)$")
 
 
 def resolve_auto_events(
@@ -67,3 +72,24 @@ def parse_csv_ints(raw: str, *, option: str = "value") -> tuple[int, ...]:
         return tuple(int(part) for part in parts)
     except ValueError as exc:
         raise ValueError(f"{option} must contain only integers") from exc
+
+
+def parse_count(value: str, *, option: str) -> int:
+    """Accept positive integers plus decimal ``k`` and ``m`` suffixes."""
+
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise TypeError(f"{option} must be a positive count")
+    match = _COUNT_PATTERN.fullmatch(value.strip())
+    if match is None:
+        raise ValueError(
+            f"{option} must be a positive integer with optional k/m suffix"
+        )
+    try:
+        number = Decimal(match.group(1))
+    except InvalidOperation as exc:
+        raise ValueError(f"{option} must be a finite positive count") from exc
+    multiplier = {"": 1, "k": 1_000, "m": 1_000_000}[match.group(2)]
+    resolved = number * multiplier
+    if resolved <= 0 or resolved != resolved.to_integral_value():
+        raise ValueError(f"{option} must resolve to a positive integer")
+    return int(resolved)

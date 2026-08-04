@@ -17,11 +17,22 @@ GOLDEN = Path(__file__).with_name("golden")
 
 def test_cli_command_and_checkpoint_surfaces_match_golden_contract():
     fixture = json.loads(
-        (GOLDEN / "cli-output-contract-v1.json").read_text(encoding="utf-8")
+        (GOLDEN / "cli-output-contract-v2.json").read_text(encoding="utf-8")
     )
     parser = build_parser()
-    commands = set(parser._subparsers._group_actions[0].choices)
+    command_parsers = parser._subparsers._group_actions[0].choices
+    commands = set(command_parsers)
     assert commands == set(fixture["workflow_commands"] + fixture["support_commands"])
+
+    list_parser = command_parsers["list"]
+    list_resources = set(list_parser._subparsers._group_actions[0].choices)
+    assert list_resources == set(fixture["list_resources"])
+
+    describe_parser = command_parsers["describe"]
+    describe_resources = set(
+        describe_parser._subparsers._group_actions[0].choices
+    )
+    assert describe_resources == set(fixture["describe_resources"])
 
     benchmark = build_benchmark_parser()
     options = {

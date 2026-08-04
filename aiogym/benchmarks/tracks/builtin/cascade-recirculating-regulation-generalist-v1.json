@@ -81,6 +81,6 @@
     "safety_gate": "zero-hard-failure-v1",
     "case_score": "fixed-anchor-v1",
     "track_aggregation": "weighted-geometric-mean-v1",
-    "anchor_id": "cascade-recirculating-regulation-anchors-v2"
+    "anchor_id": "cascade-recirculating-regulation-v1-anchors-v3"
   }
 }

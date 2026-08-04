@@ -47,10 +47,10 @@ class RecirculatingCascadeModel(ProcessModelContract):
         "tank_3_temperature": "degC",
     }
     default_y_sp = (
-        0.40, 0.40, 0.40,
-        30.0, 28.932991890738368, 27.57566937897707,
+        0.24, 0.24, 0.24,
+        30.0, 28.97128161165881, 27.654664660905787,
     )
-    supervisory_layout = (("y_sp", 3, 20.0, 80.0),)
+    supervisory_layout = (("y_sp", 3, 20.0, 75.0),)
 
     # These ranges describe benchmark mutability, not equipment tolerances.
     plant_regime = {
@@ -71,7 +71,9 @@ class RecirculatingCascadeModel(ProcessModelContract):
     param_units = {
         "area": "m2",
         "height_max": "m",
+        "level_sensor_range": "m",
         "cv_interstage": "m2.5/s",
+        "gravity_drop": "m",
         "overflow_level": "m",
         "cv_overflow": "m2.5/s",
         "overflow_head_floor": "m",
@@ -80,17 +82,20 @@ class RecirculatingCascadeModel(ProcessModelContract):
         "heater_power": "W",
         "pump_flow_max": "m3/s",
         "pump_power_max": "W",
+        "pump_static_head": "m",
+        "pump_shutoff_head": "m",
         "t_amb": "degC",
         "h_floor": "m",
-        "pump_min_level": "m",
-        "heater_min_level": "m",
+        "low_level_trip": "m",
         "temperature_trip": "degC",
         "temperature_hard_limit": "degC",
     }
     param_bounds = {
         "area": (0.01, 5.0),
         "height_max": (0.1, 5.0),
+        "level_sensor_range": (0.1, 5.0),
         "cv_interstage": (0.0, 0.02),
+        "gravity_drop": (0.0, 5.0),
         "overflow_level": (0.05, 5.0),
         "cv_overflow": (0.0, 0.05),
         "overflow_head_floor": (1e-12, 1e-3),
@@ -99,10 +104,11 @@ class RecirculatingCascadeModel(ProcessModelContract):
         "heater_power": (0.0, 5000.0),
         "pump_flow_max": (0.0, 0.02),
         "pump_power_max": (0.0, 5000.0),
+        "pump_static_head": (0.0, 20.0),
+        "pump_shutoff_head": (0.0, 50.0),
         "t_amb": (0.0, 45.0),
         "h_floor": (1e-6, 0.1),
-        "pump_min_level": (0.0, 1.0),
-        "heater_min_level": (0.0, 1.0),
+        "low_level_trip": (0.0, 1.0),
         "temperature_trip": (40.0, 100.0),
         "temperature_hard_limit": (60.0, 120.0),
     }
@@ -130,27 +136,29 @@ class RecirculatingCascadeModel(ProcessModelContract):
     )
 
     def __init__(self):
-        # Heater power is specified directly. Geometry is a provisional,
-        # range-derived interpretation of the PDF's 15-20 L small tanks,
-        # 60-80 L buffer, and 0.4-0.5 m reference height. Remaining values are
-        # labelled separately in the parameter profile.
+        # V2.0 is the executable design baseline. Conflicting procurement
+        # candidates remain documented in the parameter profile and must not be
+        # mixed into this numerical parameter set.
         self.p = {
-            "area": [0.04, 0.04, 0.15],
-            "height_max": [0.50, 0.50, 0.50],
-            "cv_interstage": [0.0026, 0.0026],
-            "overflow_level": [0.48, 0.48],
-            "cv_overflow": [0.0052, 0.0052],
+            "area": [0.075, 0.075, 0.075],
+            "height_max": [0.40, 0.40, 0.40],
+            "level_sensor_range": [0.50, 0.50, 0.50],
+            "cv_interstage": [0.0005, 0.0005],
+            "gravity_drop": [0.30, 0.30],
+            "overflow_level": [0.36, 0.36],
+            "cv_overflow": [0.001, 0.001],
             "overflow_head_floor": 1e-9,
-            "high_level_trip": [0.45, 0.45],
+            "high_level_trip": [0.34, 0.34, 0.34],
+            "low_level_trip": [0.08, 0.08, 0.08],
             "ua_loss": [40.0, 40.0, 60.0],
             "heater_power": 2000.0,
-            "pump_flow_max": 0.0016,
-            "pump_power_max": 500.0,
+            "pump_flow_max": 25.0 / 60000.0,
+            "pump_power_max": 370.0,
+            "pump_static_head": 1.7,
+            "pump_shutoff_head": 10.0,
             "t_amb": 20.0,
             "h_floor": 1e-3,
-            "pump_min_level": 0.05,
-            "heater_min_level": 0.05,
-            "temperature_trip": 92.0,
+            "temperature_trip": 80.0,
             "temperature_hard_limit": 100.0,
         }
         self._environment_bounds = {
@@ -188,9 +196,9 @@ class RecirculatingCascadeModel(ProcessModelContract):
     def setpoint_bounds(self):
         bounds = dict(self.output_bounds)
         bounds.update({
-            "tank_1_temperature": (20.0, 80.0),
-            "tank_2_temperature": (20.0, 80.0),
-            "tank_3_temperature": (20.0, 80.0),
+            "tank_1_temperature": (20.0, 75.0),
+            "tank_2_temperature": (20.0, 75.0),
+            "tank_3_temperature": (20.0, 75.0),
         })
         return bounds
 
@@ -205,7 +213,7 @@ class RecirculatingCascadeModel(ProcessModelContract):
             {
                 "name": "P101_low_level_interlock",
                 "states": ("h3",),
-                "bounds": (float(self.p["pump_min_level"]), None),
+                "bounds": (float(self.p["low_level_trip"][2]), None),
             },
             {
                 "name": "passive_overflow_onset",
@@ -213,14 +221,17 @@ class RecirculatingCascadeModel(ProcessModelContract):
                 "bounds": (None, max(float(value) for value in self.p["overflow_level"])),
             },
             {
-                "name": "L3_high_level_trip",
+                "name": "P101_high_level_interlock",
                 "states": ("h1", "h2"),
-                "bounds": (None, max(float(value) for value in self.p["high_level_trip"])),
+                "bounds": (
+                    None,
+                    max(float(value) for value in self.p["high_level_trip"][:2]),
+                ),
             },
             {
                 "name": "H1_low_level_interlock",
                 "states": ("h1",),
-                "bounds": (float(self.p["heater_min_level"]), None),
+                "bounds": (float(self.p["low_level_trip"][0]), None),
             },
             {
                 "name": "H1_temperature_trip",
@@ -235,14 +246,14 @@ class RecirculatingCascadeModel(ProcessModelContract):
         )
 
     def initial_state(self):
-        return [0.40, 20.0, 0.40, 20.0, 0.40, 20.0]
+        return [0.24, 20.0, 0.24, 20.0, 0.24, 20.0]
 
     def nominal_steady_state(
         self,
         *,
-        circulation_flow=8.0e-5,
+        circulation_flow=5.0 / 60000.0,
         tank_1_temperature=30.0,
-        levels=(0.40, 0.40, 0.40),
+        levels=(0.24, 0.24, 0.24),
         env=None,
     ):
         """Return a model-consistent benchmark equilibrium.
@@ -279,23 +290,47 @@ class RecirculatingCascadeModel(ProcessModelContract):
         efficiency = context["heater_efficiency"]
         electric_heat = liquid_heat / efficiency if efficiency > 0.0 else math.inf
         pump_capacity = self.p["pump_flow_max"] * context["pump_flow_factor"]
+        static_head = float(self.p["pump_static_head"])
+        shutoff_head = float(self.p["pump_shutoff_head"])
+        pump_command = math.inf
+        if pump_capacity > 0.0 and shutoff_head > static_head:
+            pump_command = math.sqrt(
+                (
+                    static_head
+                    + (shutoff_head - static_head)
+                    * (flow / pump_capacity) ** 2
+                )
+                / shutoff_head
+            )
+        heater_capacity = float(self.p["heater_power"])
+        heater_command = (
+            electric_heat / heater_capacity
+            if heater_capacity > 0.0
+            else (0.0 if abs(electric_heat) <= 1e-12 else math.inf)
+        )
         action = [
-            flow / pump_capacity if pump_capacity > 0.0 else math.inf,
-            flow / (self.p["cv_interstage"][0] * math.sqrt(h[0])),
-            flow / (self.p["cv_interstage"][1] * math.sqrt(h[1])),
-            electric_heat / self.p["heater_power"] if self.p["heater_power"] > 0.0 else math.inf,
+            pump_command,
+            flow / (
+                self.p["cv_interstage"][0]
+                * math.sqrt(h[0] + self.p["gravity_drop"][0])
+            ),
+            flow / (
+                self.p["cv_interstage"][1]
+                * math.sqrt(h[1] + self.p["gravity_drop"][1])
+            ),
+            heater_command,
         ]
         reasons = []
         labels = ("pump_P101", "valve_V12", "valve_V23", "heater_H1")
         for label, command in zip(labels, action):
             if not math.isfinite(command) or command < 0.0 or command > 1.0:
                 reasons.append(f"{label} command is outside [0, 1]")
-        if h[2] < self.p["pump_min_level"]:
+        if h[2] < self.p["low_level_trip"][2]:
             reasons.append("P101 is blocked by the Tank 3 low-level interlock")
-        if h[0] < self.p["heater_min_level"]:
+        if h[0] < self.p["low_level_trip"][0]:
             reasons.append("H1 is blocked by the Tank 1 low-level interlock")
         if any(h[i] >= self.p["high_level_trip"][i] for i in range(2)):
-            reasons.append("H1 is blocked by the L3 high-level interlock")
+            reasons.append("P101 is blocked by the L3 high-level interlock")
         if any(h[i] > self.p["overflow_level"][i] for i in range(2)):
             reasons.append("requested levels activate passive overflow and are not steady")
         if t1 >= self.p["temperature_trip"]:
@@ -311,13 +346,19 @@ class RecirculatingCascadeModel(ProcessModelContract):
             "action": action,
             "H1_to_liquid_power_w": liquid_heat,
             "H1_electric_power_w": electric_heat,
-            "P101_electric_power_w": action[0] * self.p["pump_power_max"],
+            "P101_electric_power_w": action[0] ** 3 * self.p["pump_power_max"],
             "ideal_energy_kw": (
-                action[0] * self.p["pump_power_max"] + electric_heat
+                action[0] ** 3 * self.p["pump_power_max"] + electric_heat
             ) / 1000.0,
         }
 
     def default_action(self):
+        if self.p["heater_power"] <= 0.0:
+            return list(
+                self.nominal_steady_state(
+                    tank_1_temperature=self.p["t_amb"]
+                )["action"]
+            )
         return list(self.nominal_steady_state()["action"])
 
     def mpc_init(self):
@@ -341,11 +382,88 @@ class RecirculatingCascadeModel(ProcessModelContract):
     def controlled_output(self, x, backend="numeric", ca=None):
         return [x[0], x[2], x[4], x[1], x[3], x[5]]
 
+    def integral_observation_limits(self):
+        return [8.0, 8.0, 8.0, 300.0, 300.0, 300.0]
+
     def display_outputs(self, x, backend="numeric", ca=None):
         levels = [x[0], x[2], x[4]]
         if backend != "casadi":
             levels = [_maxv(value, 0.0) for value in levels]
         return {"levels": levels, "temps": [x[1], x[3], x[5]]}
+
+    def physical_io_schema(self):
+        """Return the V2.0 field-instrument and actuator contract."""
+
+        return {
+            "analog_measurements": [
+                *[
+                    {
+                        "name": f"LT{tank}01",
+                        "quantity": f"tank_{tank}_level",
+                        "range": [0.0, self.p["level_sensor_range"][tank - 1]],
+                        "unit": "m",
+                        "signal": "4-20mA",
+                    }
+                    for tank in (1, 2, 3)
+                ],
+                *[
+                    {
+                        "name": f"TT{tank}01",
+                        "quantity": f"tank_{tank}_temperature",
+                        "range": [-20.0, 150.0],
+                        "unit": "degC",
+                        "signal": "PT100/4-20mA",
+                    }
+                    for tank in (1, 2, 3)
+                ],
+                {
+                    "name": "FT12",
+                    "quantity": "V12_flow",
+                    "range": [0.0, self.p["pump_flow_max"]],
+                    "unit": "m3/s",
+                    "signal": "4-20mA/RS485",
+                },
+                {
+                    "name": "FT23",
+                    "quantity": "V23_flow",
+                    "range": [0.0, self.p["pump_flow_max"]],
+                    "unit": "m3/s",
+                    "signal": "4-20mA/RS485",
+                },
+            ],
+            "digital_inputs": [
+                *[
+                    {
+                        "name": f"LSL{tank}01",
+                        "quantity": f"tank_{tank}_low_level",
+                        "threshold": self.p["low_level_trip"][tank - 1],
+                        "unit": "m",
+                    }
+                    for tank in (1, 2, 3)
+                ],
+                *[
+                    {
+                        "name": f"LSH{tank}01",
+                        "quantity": f"tank_{tank}_high_level",
+                        "threshold": self.p["high_level_trip"][tank - 1],
+                        "unit": "m",
+                    }
+                    for tank in (1, 2, 3)
+                ],
+            ],
+            "actuators": [
+                {"name": "P101", "signal": "VFD/Modbus", "command": "speed"},
+                {"name": "V12", "signal": "4-20mA/Modbus", "command": "position"},
+                {"name": "V23", "signal": "4-20mA/Modbus", "command": "position"},
+                {"name": "H1", "signal": "SSR", "command": "duty"},
+            ],
+            "network": "Modbus RTU (RS485) through RTU-to-TCP gateway",
+        }
+
+    def metadata(self):
+        metadata = super().metadata()
+        metadata["physical_io"] = self.physical_io_schema()
+        return metadata
 
     def _resolved_env(self, env=None, ops=None):
         values = dict(env or {})
@@ -398,20 +516,50 @@ class RecirculatingCascadeModel(ProcessModelContract):
     def _gate(condition, ops):
         return ops.if_else(condition, 1.0, 0.0)
 
-    def _flow_terms(self, levels, u, env, ops):
-        pump_enabled = self._gate(levels[2] >= self.p["pump_min_level"], ops)
-        pump_flow = (
-            u[0] * self.p["pump_flow_max"] * env["pump_flow_factor"] * pump_enabled
+    def _pump_interlock_terms(self, levels, ops):
+        low_level_ok = self._gate(
+            levels[2] >= self.p["low_level_trip"][2], ops
         )
+        high_level_ok = self._gate(
+            (levels[0] < self.p["high_level_trip"][0])
+            * (levels[1] < self.p["high_level_trip"][1]),
+            ops,
+        )
+        return low_level_ok, high_level_ok, low_level_ok * high_level_ok
+
+    def _pump_curve_flow(self, speed, env, ops):
+        """Provisional affinity-law curve fitted to the V2.0 endpoints."""
+
+        effective_max_flow = (
+            self.p["pump_flow_max"] * env["pump_flow_factor"]
+        )
+        head_margin = self.p["pump_shutoff_head"] - self.p["pump_static_head"]
+        if head_margin <= 0.0:
+            raise ValueError(
+                "pump_shutoff_head must be greater than pump_static_head"
+            )
+        normalized_head = (
+            self.p["pump_shutoff_head"] * speed * speed
+            - self.p["pump_static_head"]
+        ) / head_margin
+        return effective_max_flow * ops.sqrt(ops.max(normalized_head, 0.0))
+
+    def _flow_terms(self, levels, u, env, ops):
+        _, _, pump_enabled = self._pump_interlock_terms(levels, ops)
+        pump_flow = self._pump_curve_flow(u[0], env, ops) * pump_enabled
         q12 = (
             self.p["cv_interstage"][0]
             * u[1]
-            * ops.sqrt(ops.max(levels[0], 0.0))
+            * ops.sqrt(
+                ops.max(levels[0] + self.p["gravity_drop"][0], 0.0)
+            )
         )
         q23 = (
             self.p["cv_interstage"][1]
             * u[2]
-            * ops.sqrt(ops.max(levels[1], 0.0))
+            * ops.sqrt(
+                ops.max(levels[1] + self.p["gravity_drop"][1], 0.0)
+            )
         )
         overflow_flows = []
         for i in range(2):
@@ -427,16 +575,13 @@ class RecirculatingCascadeModel(ProcessModelContract):
         return pump_flow, q12, q23, overflow_flows, pump_enabled
 
     def _heater_terms(self, levels, temperatures, u, env, ops):
-        level_ok = self._gate(levels[0] >= self.p["heater_min_level"], ops)
+        level_ok = self._gate(
+            levels[0] >= self.p["low_level_trip"][0], ops
+        )
         temperature_ok = self._gate(
             temperatures[0] < self.p["temperature_trip"], ops
         )
-        high_level_ok = self._gate(
-            (levels[0] < self.p["high_level_trip"][0])
-            * (levels[1] < self.p["high_level_trip"][1]),
-            ops,
-        )
-        enabled = level_ok * temperature_ok * high_level_ok
+        enabled = level_ok * temperature_ok
         electric_power = u[3] * self.p["heater_power"] * enabled
         return (
             electric_power * env["heater_efficiency"],
@@ -444,7 +589,6 @@ class RecirculatingCascadeModel(ProcessModelContract):
             enabled,
             level_ok,
             temperature_ok,
-            high_level_ok,
         )
 
     def _dynamics(self, x, u, env, ops):
@@ -456,7 +600,7 @@ class RecirculatingCascadeModel(ProcessModelContract):
             levels, u, env, ops
         )
         overflow_1, overflow_2 = overflow_flows
-        heat_h1, _, _, _, _, _ = self._heater_terms(
+        heat_h1, _, _, _, _ = self._heater_terms(
             levels, temperatures, u, env, ops
         )
         flows_in = [pump_flow, q12, q23 + overflow_1 + overflow_2]
@@ -507,7 +651,7 @@ class RecirculatingCascadeModel(ProcessModelContract):
             levels, action, context, _NUMERIC_OPS
         )
         overflow_1, overflow_2 = overflow_flows
-        heat_h1, _, _, _, _, _ = self._heater_terms(
+        heat_h1, _, _, _, _ = self._heater_terms(
             levels, temperatures, action, context, _NUMERIC_OPS
         )
         flows_in = [pump_flow, q12, q23 + overflow_1 + overflow_2]
@@ -567,19 +711,19 @@ class RecirculatingCascadeModel(ProcessModelContract):
     def physical_validation_checks(self):
         samples = (
             (
-                [0.20, 25.0, 0.35, 24.0, 0.50, 23.0],
+                [0.20, 25.0, 0.30, 24.0, 0.32, 23.0],
                 [0.04, 0.05, 0.04, 0.30],
                 {"t_amb": 20.0, "pump_flow_factor": 1.0,
                  "heater_efficiency": 0.9, "heat_loss_factor": 1.0},
             ),
             (
-                [0.49, 45.0, 0.40, 36.0, 0.30, 28.0],
+                [0.37, 45.0, 0.30, 36.0, 0.25, 28.0],
                 [0.08, 0.03, 0.07, 0.70],
                 {"t_amb": 18.0, "pump_flow_factor": 0.8,
                  "heater_efficiency": 0.7, "heat_loss_factor": 1.6},
             ),
             (
-                [0.12, 70.0, 0.46, 55.0, 0.25, 40.0],
+                [0.12, 70.0, 0.35, 55.0, 0.25, 40.0],
                 [0.02, 0.09, 0.05, 1.0],
                 {"t_amb": 25.0, "pump_flow_factor": 1.2,
                  "heater_efficiency": 1.0, "heat_loss_factor": 0.6},
@@ -622,7 +766,7 @@ class RecirculatingCascadeModel(ProcessModelContract):
             raise ValueError(f"unknown dynamics backend: {backend!r}")
         effective = self._effective_action(values, ops)
         return (
-            effective[0] * self.p["pump_power_max"]
+            effective[0] ** 3 * self.p["pump_power_max"]
             + effective[3] * self.p["heater_power"]
         ) / 1000.0
 
@@ -630,7 +774,10 @@ class RecirculatingCascadeModel(ProcessModelContract):
         u = self._effective_action(self.action_vector(act), _NUMERIC_OPS)
         if x is None:
             return float(
-                (u[0] * self.p["pump_power_max"] + u[3] * self.p["heater_power"])
+                (
+                    u[0] ** 3 * self.p["pump_power_max"]
+                    + u[3] * self.p["heater_power"]
+                )
                 / 1000.0
             )
         context = self._resolved_env(env)
@@ -639,10 +786,10 @@ class RecirculatingCascadeModel(ProcessModelContract):
         _, _, _, _, pump_enabled = self._flow_terms(
             levels, u, context, _NUMERIC_OPS
         )
-        _, heater_power, _, _, _, _ = self._heater_terms(
+        _, heater_power, _, _, _ = self._heater_terms(
             levels, temperatures, u, context, _NUMERIC_OPS
         )
-        pump_power = u[0] * self.p["pump_power_max"] * pump_enabled
+        pump_power = u[0] ** 3 * self.p["pump_power_max"] * pump_enabled
         return float((pump_power + heater_power) / 1000.0)
 
     def ideal_energy_kw(self, x, y_sp, env, act):
@@ -673,19 +820,31 @@ class RecirculatingCascadeModel(ProcessModelContract):
             heater_enabled,
             heater_level_ok,
             heater_temperature_ok,
-            heater_high_level_ok,
         ) = self._heater_terms(
             physical_levels, temperatures, u, context, _NUMERIC_OPS
         )
+        pump_low_level_ok, pump_high_level_ok, _ = self._pump_interlock_terms(
+            physical_levels, _NUMERIC_OPS
+        )
         hardware_interlocks = []
-        if not bool(pump_enabled):
+        if not bool(pump_low_level_ok):
             hardware_interlocks.append("P101_tank_3_low_level")
+        if not bool(pump_high_level_ok):
+            hardware_interlocks.append("L3_P101_high_level")
         if not bool(heater_level_ok):
             hardware_interlocks.append("L2_H1_dry_fire")
-        if not bool(heater_high_level_ok):
-            hardware_interlocks.append("L3_high_level")
         if not bool(heater_temperature_ok):
             hardware_interlocks.append("L4_H1_over_temperature")
+        low_switches = {
+            f"LSL{tank}01": physical_levels[index]
+            < self.p["low_level_trip"][index]
+            for index, tank in enumerate((1, 2, 3))
+        }
+        high_switches = {
+            f"LSH{tank}01": physical_levels[index]
+            >= self.p["high_level_trip"][index]
+            for index, tank in enumerate((1, 2, 3))
+        }
         passive_safety_events = [
             f"tank_{i + 1}_passive_overflow"
             for i, flow in enumerate(overflow_flows)
@@ -699,14 +858,21 @@ class RecirculatingCascadeModel(ProcessModelContract):
             "circulation_flow_m3s": float(pump_flow),
             "V12_flow_m3s": float(q12),
             "V23_flow_m3s": float(q23),
+            "FT12_flow_m3s": float(q12),
+            "FT23_flow_m3s": float(q23),
             "tank_1_overflow_return_m3s": float(overflow_flows[0]),
             "tank_2_overflow_return_m3s": float(overflow_flows[1]),
             "total_overflow_return_m3s": float(sum(overflow_flows)),
             "P101_enabled": bool(pump_enabled),
+            "P101_speed_fraction": float(u[0]),
+            "P101_electric_power_w": float(
+                u[0] ** 3 * self.p["pump_power_max"] * pump_enabled
+            ),
             "H1_enabled": bool(heater_enabled),
             "H1_electric_power_w": float(heater_power),
             "H1_to_liquid_power_w": float(heat_to_liquid),
             "hardware_interlocks_active": hardware_interlocks,
+            "digital_inputs": {**low_switches, **high_switches},
             "passive_safety_events": passive_safety_events,
             "protection_events": [*hardware_interlocks, *passive_safety_events],
             "closed_loop_nominal": not hardware_interlocks and not passive_safety_events,
@@ -733,7 +899,14 @@ class RecirculatingCascadeModel(ProcessModelContract):
                 ),
                 default=0.0,
             ),
-            "high_level_trip": max(
+            "high_level_alarm": max(
+                (
+                    max(0.0, physical_levels[i] - self.p["high_level_trip"][i])
+                    for i in range(3)
+                ),
+                default=0.0,
+            ),
+            "P101_high_level_trip": max(
                 (
                     max(0.0, physical_levels[i] - self.p["high_level_trip"][i])
                     for i in range(2)

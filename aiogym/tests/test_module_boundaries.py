@@ -30,6 +30,22 @@ assert not any(name.startswith("AIOGym/") for name in registry)
     subprocess.run([sys.executable, "-c", code], check=True)
 
 
+def test_catalog_remains_the_top_level_discovery_facade():
+    import aiogym
+    from aiogym import catalog
+
+    assert set(catalog.__all__) == {
+        "list_cases",
+        "list_controllers",
+        "list_scenarios",
+    }
+    assert aiogym.list_cases is catalog.list_cases
+    assert aiogym.list_controllers is catalog.list_controllers
+    assert aiogym.list_scenarios is catalog.list_scenarios
+    assert not hasattr(catalog, "build_parser")
+    assert not hasattr(catalog, "main")
+
+
 def test_controller_facade_exposes_only_stable_construction_contract():
     import aiogym.controllers as facade
     from aiogym.controllers import contracts, registry
@@ -73,6 +89,14 @@ def test_model_metadata_has_a_single_current_module():
 
     assert importlib.util.find_spec("aiogym.models.cards") is None
     assert metadata.MODEL_METADATA_SCHEMA_VERSION == "aiogym.model_metadata.v1"
+
+
+def test_backend_contract_is_separate_from_dispatcher():
+    from aiogym.rl import backends
+    from aiogym.rl.backends import contracts
+
+    assert backends.BackendResult is contracts.BackendResult
+    assert backends.validate_backend_result is contracts.validate_backend_result
 
 
 def test_generation_public_api_exposes_episode_contracts():
@@ -145,6 +169,7 @@ def test_validation_contracts_require_explicit_modules():
 
 
 def test_research_rl_api_is_explicitly_experimental():
+    import aiogym
     import aiogym.evaluation as evaluation
     import aiogym.experimental.rl as experimental
     import aiogym.rl as public
@@ -152,6 +177,7 @@ def test_research_rl_api_is_explicitly_experimental():
     from aiogym.rl import constrained, observations, safety
 
     assert not hasattr(public, "ObservationContract")
+    assert "experimental" not in aiogym.__all__
     assert experimental.ObservationContract is observations.ObservationContract
     assert (
         experimental.ProjectionSafetyShield
@@ -166,11 +192,22 @@ def test_environment_class_composes_focused_runtime_mixins():
     from aiogym._environment.disturbances import DisturbanceRuntimeMixin
     from aiogym._environment.observations import ObservationRuntimeMixin
     from aiogym._environment.transitions import TransitionRuntimeMixin
-    from aiogym._environment.runtime import _AIOGymEnv
+    from aiogym._environment.env import _AIOGymEnv
 
     assert _AIOGymEnv._env is DisturbanceRuntimeMixin._env
     assert _AIOGymEnv._obs is ObservationRuntimeMixin._obs
     assert _AIOGymEnv.evaluate_transition is TransitionRuntimeMixin.evaluate_transition
+
+
+def test_environment_runtime_has_one_canonical_module():
+    from aiogym._environment.env import _AIOGymEnv
+
+    assert _AIOGymEnv.__module__ == "aiogym._environment.env"
+    assert importlib.util.find_spec("aiogym._environment.runtime") is None
+
+
+def test_generic_tools_package_is_removed():
+    assert importlib.util.find_spec("aiogym.tools") is None
 
 
 def test_unified_benchmark_cli_uses_track_modules():

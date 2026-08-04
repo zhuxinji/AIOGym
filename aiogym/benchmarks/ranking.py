@@ -35,12 +35,29 @@ def fixed_anchor_score(
     bad_utility: float,
     reference_utility: float,
 ) -> float:
-    validate_anchor_gap(bad_utility, reference_utility)
     return max(
         0.0,
+        fixed_anchor_margin(
+            utility,
+            bad_utility=bad_utility,
+            reference_utility=reference_utility,
+        ),
+    )
+
+
+def fixed_anchor_margin(
+    utility: float,
+    *,
+    bad_utility: float,
+    reference_utility: float,
+) -> float:
+    """Return the unclipped percentage margin between fixed anchors."""
+
+    validate_anchor_gap(bad_utility, reference_utility)
+    return (
         100.0
         * (float(utility) - float(bad_utility))
-        / (float(reference_utility) - float(bad_utility)),
+        / (float(reference_utility) - float(bad_utility))
     )
 
 
@@ -93,8 +110,8 @@ def rank_track_results(
     anchors: AnchorSet | None = None
     if case_rule == "fixed-anchor-v1":
         anchors = load_anchor_set(declaration["anchor_id"], track=track)
-        scores = [
-            fixed_anchor_score(
+        anchor_margins = [
+            fixed_anchor_margin(
                 utility,
                 bad_utility=anchors.case(
                     str(result["resolved_case_hash"])
@@ -105,8 +122,10 @@ def rank_track_results(
             )
             for utility, result in zip(raw_utilities, results)
         ]
+        scores = [max(0.0, margin) for margin in anchor_margins]
     elif case_rule == "diagnostic-only-v1":
         scores = list(raw_utilities)
+        anchor_margins = []
     else:
         raise ValueError(f"unsupported case ranking rule {case_rule!r}")
     eligible = all(
@@ -136,6 +155,7 @@ def rank_track_results(
         "track_aggregation": aggregation,
         "ranking_epsilon": RANKING_EPSILON,
         "case_utilities": raw_utilities,
+        "case_anchor_margins": anchor_margins,
         "case_scores": gated_scores,
         "case_weights": weights,
         "official_score": float(official_score),
@@ -157,6 +177,7 @@ def _single_split(results: Sequence[Mapping[str, Any]]) -> str:
 __all__ = [
     "RANKING_EPSILON",
     "case_utility",
+    "fixed_anchor_margin",
     "fixed_anchor_score",
     "rank_track_results",
     "weighted_geometric_mean",

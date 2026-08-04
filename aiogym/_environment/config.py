@@ -6,8 +6,6 @@ import numpy as np
 
 T_HIGH, T_TRIP = 80.0, 92.0
 H_HIGH_FRAC, H_LOW_FRAC, H_OVERFLOW_FRAC = 0.90, 0.15, 0.97
-I_TEMP_MAX, I_LEVEL_MAX = 300.0, 8.0
-
 DIRECT_ENV_DEFAULTS = {
     "auto_events": True,
     "randomize": True,

@@ -261,6 +261,47 @@ def collect_episode(
     if not rows["reward_scalar"]:
         raise ValueError("collector produced no transitions")
 
+    return _finalize_collected_episode(
+        env=env,
+        episode_spec=episode_spec,
+        collector=collector,
+        collector_id=collector_id,
+        controller=controller,
+        checkpoint_hash=checkpoint_hash,
+        episode_index=episode_index,
+        split=split,
+        track_id=track_id,
+        rows=rows,
+        reward_rows=reward_rows,
+        cost_rows=cost_rows,
+        info=info,
+        done=done,
+        recorded_initial_state=recorded_initial_state,
+        requested_initial_state=requested_initial_state,
+        reset_state_delta_linf=reset_state_delta_linf,
+    )
+
+
+def _finalize_collected_episode(
+    *,
+    env,
+    episode_spec,
+    collector,
+    collector_id,
+    controller,
+    checkpoint_hash,
+    episode_index,
+    split,
+    track_id,
+    rows,
+    reward_rows,
+    cost_rows,
+    info,
+    done,
+    recorded_initial_state,
+    requested_initial_state,
+    reset_state_delta_linf,
+):
     termination_reason = str(
         info.get("termination_reason")
         or (

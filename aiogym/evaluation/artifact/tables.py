@@ -122,7 +122,7 @@ def _tracking_rollout_groups(rollouts: Sequence[Mapping[str, Any]]):
             continue
         key = (
             str(rollout["scenario"]),
-            str(rollout.get("case") or "default"),
+            str(rollout.get("case") or rollout.get("case_id") or "default"),
         )
         groups.setdefault(key, []).append(rollout)
     return groups

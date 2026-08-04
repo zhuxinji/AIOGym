@@ -1,13 +1,14 @@
 """Immutable schemas for training distributions and resolved episodes."""
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
+
+from aiogym._internal.serialization import canonical_json_bytes, stable_json_hash
 
 from .seed_tree import SEED_COMPONENTS
 
@@ -66,17 +67,11 @@ _EPISODE_PAYLOAD_FIELDS = frozenset(
 )
 def _canonical_json(value: Mapping[str, Any]) -> str:
     normalized = _json_value(value, path="spec")
-    return json.dumps(
-        normalized,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    )
+    return canonical_json_bytes(normalized).decode("utf-8")
 
 
 def _sha256(canonical_json: str) -> str:
-    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+    return stable_json_hash(json.loads(canonical_json))
 
 
 @dataclass(frozen=True, init=False)

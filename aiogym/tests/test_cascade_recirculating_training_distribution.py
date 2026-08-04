@@ -15,14 +15,14 @@ from aiogym.models.registry import apply_model_params, make_model
 from aiogym.rl.episode_env import make_track_training_base_env
 
 
-TRACK_ID = "cascade-recirculating-regulation-generalist-v1"
+TRACK_ID = "cascade-recirculating-regulation-generalist-v2"
 
 
 def test_recirculating_l0_l2_are_registered_and_deterministic():
     for level in ("l0", "l1", "l2"):
         distribution_id = (
             "cascade-recirculating-regulation-training-"
-            f"{level}-v1"
+            f"{level}-v2"
         )
         distribution = load_distribution(distribution_id)
         assert distribution.scenario_id == "cascade-recirculating"
@@ -73,6 +73,11 @@ def test_recirculating_l2_covers_multiple_realizations():
     assert len(identities(lambda row: row.initial_state)) > 1
     assert len(identities(lambda row: row.reference_schedule)) > 1
     assert len(identities(lambda row: row.disturbance_schedule)) > 1
+    assert all(
+        episode.sensor_model["kind"] == "sensor_dynamics_v1"
+        and episode.actuator_model["kind"] == "actuator_dynamics_v1"
+        for episode in episodes
+    )
 
 
 def test_recirculating_track_contract_and_short_rollout_are_finite():

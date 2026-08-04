@@ -112,6 +112,55 @@ def cascade_training_distribution(
     )
 
 
+def cascade_case_conditioned_training_distribution(
+    level: str = "L2",
+    *,
+    control_dt: float = 0.5,
+    episode_steps: int = 2640,
+) -> DistributionSpec:
+    """Build the versioned commissioning/temperature-step distribution."""
+
+    selected = _normalize_level(level)
+    if selected != "L2":
+        raise ValueError(
+            "case-conditioned cascade training currently requires L2"
+        )
+    declaration = cascade_training_distribution(
+        selected,
+        control_dt=control_dt,
+        episode_steps=episode_steps,
+    ).declaration
+    declaration.update(
+        {
+            "distribution_id": (
+                f"cascade-regulation-training-{selected.lower()}-v2"
+            ),
+            "reference_distribution": {
+                "kind": "case_conditioned_feasible_schedule_v2",
+                "case_conditioned": True,
+                "modes": {
+                    "commissioning": {
+                        "weight": 0.5,
+                        "post_initial_event_count": 2,
+                    },
+                    "temperature-step": {
+                        "weight": 0.5,
+                        "post_initial_event_count": 4,
+                    },
+                },
+            },
+            "mixture_weights": {
+                "commissioning": 0.5,
+                "temperature-step": 0.5,
+            },
+            "curriculum_id": (
+                f"cascade-regulation-case-curriculum-v2:{selected}"
+            ),
+        }
+    )
+    return DistributionSpec(declaration)
+
+
 class CascadeTrainingSampler:
     """Generate deterministic, feasible open-cascade episodes."""
 
@@ -181,14 +230,57 @@ class CascadeTrainingSampler:
             disturbance_rng,
             level,
         )
-        operating_reference, _ = _sample_feasible_reference(
-            model,
-            reference_rng,
-            initial_environment,
-            level=level,
-            nominal=(level == "L0"),
-            component="cascade operating reference",
+        reference_kind = str(
+            self.distribution.declaration["reference_distribution"]["kind"]
         )
+        if reference_kind == "case_conditioned_feasible_schedule_v2":
+            (
+                operating_reference,
+                reference_schedule,
+                training_mode,
+            ) = _sample_case_conditioned_reference_schedule(
+                model,
+                reference_rng,
+                initial_environment,
+                episode_steps=self.distribution.episode_steps,
+            )
+        else:
+            operating_reference, _ = _sample_feasible_reference(
+                model,
+                reference_rng,
+                initial_environment,
+                level=level,
+                nominal=(level == "L0"),
+                component="cascade operating reference",
+            )
+            reference_schedule = [
+                {
+                    "at_step": 0,
+                    "values": operating_reference,
+                    "kind": "initial",
+                }
+            ]
+            if level != "L0":
+                target, _ = _sample_feasible_reference(
+                    model,
+                    reference_rng,
+                    initial_environment,
+                    level=level,
+                    nominal=False,
+                    component="cascade reference event",
+                    separated_from=operating_reference,
+                )
+                reference_schedule.append(
+                    {
+                        "at_step": _event_step(
+                            reference_rng,
+                            self.distribution.episode_steps,
+                        ),
+                        "values": target,
+                        "kind": "feasible_step",
+                    }
+                )
+            training_mode = "equilibrium-regulation"
         equilibrium = _reference_to_state(operating_reference)
         initial_state = correlated_equilibrium_perturbation(
             model,
@@ -198,33 +290,6 @@ class CascadeTrainingSampler:
             temperature_std=0.0 if level == "L0" else 0.45,
             level_margin=0.08,
         )
-        reference_schedule = [
-            {
-                "at_step": 0,
-                "values": operating_reference,
-                "kind": "initial",
-            }
-        ]
-        if level != "L0":
-            target, _ = _sample_feasible_reference(
-                model,
-                reference_rng,
-                initial_environment,
-                level=level,
-                nominal=False,
-                component="cascade reference event",
-                separated_from=operating_reference,
-            )
-            reference_schedule.append(
-                {
-                    "at_step": _event_step(
-                        reference_rng,
-                        self.distribution.episode_steps,
-                    ),
-                    "values": target,
-                    "kind": "feasible_step",
-                }
-            )
         disturbance_schedule = _sample_disturbances(
             model,
             disturbance_rng,
@@ -249,7 +314,11 @@ class CascadeTrainingSampler:
             economic_context=declaration[
                 "economic_context_distribution"
             ].get("context", {}),
-            difficulty_tags=(level, "feasible-equilibrium"),
+            difficulty_tags=(
+                (level, "feasible-equilibrium", training_mode)
+                if reference_kind == "case_conditioned_feasible_schedule_v2"
+                else (level, "feasible-equilibrium")
+            ),
         )
         report = validate_cascade_episode(episode)
         if not report["passed"]:
@@ -482,6 +551,151 @@ def _reference_to_state(reference: list[float]) -> list[float]:
     ]
 
 
+def _sample_case_conditioned_reference_schedule(
+    model,
+    rng: np.random.Generator,
+    environment: Mapping[str, float],
+    *,
+    episode_steps: int,
+) -> tuple[list[float], list[dict[str, Any]], str]:
+    mode = "commissioning" if float(rng.random()) < 0.5 else "temperature-step"
+    nominal = [0.45, 0.45, 0.45, 35.0, 50.0, 65.0]
+    if mode == "commissioning":
+        references = [
+            _sample_reference_near(
+                model,
+                rng,
+                environment,
+                [0.45, 0.45, 0.45, 25.0, 30.0, 35.0],
+                component="cascade commissioning initial reference",
+            ),
+            _sample_reference_near(
+                model,
+                rng,
+                environment,
+                [0.45, 0.45, 0.45, 30.0, 40.0, 50.0],
+                component="cascade commissioning intermediate reference",
+            ),
+            _sample_reference_near(
+                model,
+                rng,
+                environment,
+                nominal,
+                component="cascade commissioning production reference",
+            ),
+        ]
+        fractions = ((0.20, 0.32), (0.47, 0.62))
+    else:
+        references = [
+            _sample_reference_near(
+                model,
+                rng,
+                environment,
+                nominal,
+                component="cascade temperature-step initial reference",
+            ),
+            _sample_reference_near(
+                model,
+                rng,
+                environment,
+                [0.50, 0.45, 0.45, 40.0, 50.0, 65.0],
+                component="cascade temperature-step stage 1 reference",
+            ),
+            _sample_reference_near(
+                model,
+                rng,
+                environment,
+                [0.50, 0.50, 0.45, 40.0, 55.0, 65.0],
+                component="cascade temperature-step stage 2 reference",
+            ),
+            _sample_reference_near(
+                model,
+                rng,
+                environment,
+                [0.50, 0.50, 0.50, 40.0, 55.0, 70.0],
+                component="cascade temperature-step stage 3 reference",
+            ),
+            _sample_reference_near(
+                model,
+                rng,
+                environment,
+                nominal,
+                component="cascade temperature-step return reference",
+            ),
+        ]
+        fractions = (
+            (0.05, 0.12),
+            (0.25, 0.35),
+            (0.48, 0.58),
+            (0.72, 0.82),
+        )
+    schedule = [
+        {"at_step": 0, "values": references[0], "kind": "initial"}
+    ]
+    for index, (reference, bounds) in enumerate(
+        zip(references[1:], fractions),
+        start=1,
+    ):
+        schedule.append(
+            {
+                "at_step": _event_step_between(
+                    rng,
+                    episode_steps,
+                    lower_fraction=bounds[0],
+                    upper_fraction=bounds[1],
+                ),
+                "values": reference,
+                "kind": f"{mode}-stage-{index}",
+            }
+        )
+    return references[0], schedule, mode
+
+
+def _sample_reference_near(
+    model,
+    rng: np.random.Generator,
+    environment: Mapping[str, float],
+    center: list[float],
+    *,
+    component: str,
+) -> list[float]:
+    def candidate() -> list[float]:
+        levels = np.asarray(center[:3], dtype=np.float64) + rng.uniform(
+            -0.012,
+            0.012,
+            size=3,
+        )
+        temperatures = np.asarray(center[3:], dtype=np.float64) + rng.uniform(
+            -0.75,
+            0.75,
+            size=3,
+        )
+        return [
+            *(float(value) for value in levels),
+            *(float(value) for value in temperatures),
+        ]
+
+    def feasible(values: list[float]) -> Mapping[str, Any]:
+        return model.steady_state_requirements(values, env=environment)
+
+    return rejection_sample(component, candidate, feasible, max_attempts=64)
+
+
+def _event_step_between(
+    rng: np.random.Generator,
+    episode_steps: int,
+    *,
+    lower_fraction: float,
+    upper_fraction: float,
+) -> int:
+    lower = max(1, int(lower_fraction * episode_steps))
+    upper = min(
+        episode_steps,
+        max(lower + 1, int(upper_fraction * episode_steps)),
+    )
+    return int(rng.integers(lower, upper))
+
+
 def _event_step(
     rng: np.random.Generator,
     episode_steps: int,
@@ -543,6 +757,7 @@ def _within(value: float, bounds) -> bool:
 __all__ = [
     "CASCADE_PRODUCT_FLOW_M3S",
     "CascadeTrainingSampler",
+    "cascade_case_conditioned_training_distribution",
     "cascade_training_distribution",
     "validate_cascade_episode",
 ]

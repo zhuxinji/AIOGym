@@ -13,8 +13,8 @@
   "scenarios": {
     "cascade": {},
     "cascade_recirculating": {
-      "P": 20,
-      "move_supp": 0.8
+      "P": 40,
+      "move_supp": 0.1
     },
     "quadruple": {},
     "cstr": {},
@@ -39,6 +39,13 @@
     },
     "cascade-recirculating-regulation-generalist-v1": {
       "track": "cascade-recirculating-regulation-generalist-v1",
+      "policy_scope": "generalist",
+      "goal": "regulation",
+      "reward_spec": "regulation-v1",
+      "access_level": "model-based"
+    },
+    "cascade-recirculating-regulation-generalist-v2": {
+      "track": "cascade-recirculating-regulation-generalist-v2",
       "policy_scope": "generalist",
       "goal": "regulation",
       "reward_spec": "regulation-v1",

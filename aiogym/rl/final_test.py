@@ -14,6 +14,7 @@ from aiogym.benchmarks.tracks.registry import load_track
 from aiogym.benchmarks.tracks.schema import TrackSpec
 from aiogym.evaluation.statistics import build_final_statistical_report
 from aiogym.evaluation.provenance import code_commit, package_version
+from aiogym._internal.serialization import file_sha256, stable_json_hash
 from aiogym._internal.validation import seed_sequence
 
 
@@ -144,17 +145,9 @@ class FinalTestLock:
             )
             self._write(state)
             raise
-        canonical = json.dumps(
-            report,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        )
         state.update({
             "status": "artifact_pending",
-            "report_hash": hashlib.sha256(
-                canonical.encode("utf-8")
-            ).hexdigest(),
+            "report_hash": stable_json_hash(report),
             "artifact_path": str(output.resolve()),
             "failure_stage": None,
             "failure": None,
@@ -237,7 +230,7 @@ class FinalTestLock:
         artifact_path = Path(str(state.get("artifact_path", "")))
         if not artifact_path.is_file():
             raise ValueError("complete final test artifact is missing")
-        actual = _file_sha256(artifact_path)
+        actual = file_sha256(artifact_path)
         if actual != state.get("artifact_sha256"):
             raise ValueError("complete final test artifact hash mismatch")
 
@@ -334,14 +327,6 @@ def _non_empty(name: str, value) -> str:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _fsync_directory(path: Path) -> None:

@@ -7,6 +7,8 @@ import json
 import math
 from concurrent.futures import ProcessPoolExecutor
 
+from aiogym._internal.config import parse_count
+from aiogym._internal.validation import nonnegative_int
 from aiogym.benchmarks.tracks.registry import load_track
 from aiogym.rewards.registry import get_reward_spec
 from aiogym.generation.factory import make_episode_sampler
@@ -21,6 +23,7 @@ from .collector_adapters import (
     make_collector_behavior,
 )
 from .config import DatasetCollectionConfig
+from .profiles import build_collection_config
 from .quality import write_quality_report
 from .schema import DatasetEpisode
 from .writer import DatasetWriter
@@ -33,16 +36,91 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
             "Collect a reproducible episode-oriented AIO-Gym Dataset v2."
         ),
     )
-    parser.add_argument("--config", required=True)
+    parser.add_argument("target", nargs="?")
+    parser.add_argument("--config")
+    parser.add_argument("--profile", default=None)
+    parser.add_argument("--transitions", default=None)
+    parser.add_argument("--workers", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--output", default=None)
+    parser.add_argument("--dataset-id", default=None)
+    parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--resume", action="store_true")
     return parser
 
 
 def main(argv=None, prog: str | None = None) -> int:
-    args = build_parser(prog).parse_args(argv)
-    config = DatasetCollectionConfig.load(args.config)
+    parser = build_parser(prog)
+    args = parser.parse_args(argv)
+    requested_target = None
+    profile_id = None
+    if args.config is not None:
+        if any(
+            value is not None
+            for value in (
+                args.target,
+                args.profile,
+                args.transitions,
+                args.workers,
+                args.seed,
+                args.output,
+                args.dataset_id,
+            )
+        ):
+            parser.error(
+                "--config is mutually exclusive with guided collection fields"
+            )
+        config = DatasetCollectionConfig.load(args.config)
+    else:
+        if args.target is None:
+            parser.error("guided mode requires TARGET")
+        requested_target = args.target
+        transitions = (
+            None
+            if args.transitions is None
+            else parse_count(args.transitions, option="--transitions")
+        )
+        config, profile = build_collection_config(
+            args.target,
+            args.profile or "quick",
+            base_seed=nonnegative_int(
+                "--seed", 0 if args.seed is None else args.seed
+            ),
+            transitions=transitions,
+            workers=args.workers,
+            output=args.output,
+            dataset_id=args.dataset_id,
+        )
+        profile_id = profile.id
+    if args.dry_run:
+        print(
+            json.dumps(
+                {
+                    "dry_run": True,
+                    "requested_target": requested_target,
+                    "profile_id": profile_id,
+                    "track_id": config.track_id,
+                    "config_hash": config.config_hash,
+                    "target_transitions": config.target_transitions,
+                    "workers": config.workers,
+                    "config": config.as_dict(),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
     result = collect_dataset(config, resume=bool(args.resume))
-    print(json.dumps(result, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                **result,
+                "requested_target": requested_target,
+                "profile_id": profile_id,
+            },
+            sort_keys=True,
+        )
+    )
     return 0
 
 
@@ -260,7 +338,7 @@ def _collector_for_index(
         (
             f"{_identity_namespace(config)}:{config.base_seed}:"
             f"{int(episode_index)}"
-        ).encode("utf-8")
+        ).encode()
     ).digest()
     draw = int.from_bytes(digest[:8], "big") / float(2**64)
     threshold = draw * total

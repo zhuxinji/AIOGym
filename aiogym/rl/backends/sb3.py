@@ -2,15 +2,17 @@
 """Stable-Baselines3 training and checkpoint selection backend."""
 from __future__ import annotations
 
-import hashlib
-import json
+import math
 import os
 import shutil
 import time
 from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
+
 from aiogym.controllers.adapters import PolicyController
+from aiogym._internal.serialization import stable_json_hash
 
 from ..checkpoints import (
     CheckpointManager,
@@ -25,7 +27,7 @@ from ..episode_env import make_track_training_env
 from ..statistics import NormalizedActionWrapper
 from ..utd import sb3_update_schedule
 from ..validation import CompleteValidationCallback, evaluate_validation_policy
-from . import BackendResult
+from .contracts import BackendResult
 from .sb3_algorithms import (
     get_algorithm_adapter,
     load_algorithm_checkpoint,
@@ -176,8 +178,106 @@ def evaluate_training_policy(
         "track_split": "validation",
         "seed_namespace": evaluation["seed_namespace"],
         "case_values": list(aggregate["case_values"]),
+        "case_ids": [
+            str(result["case_id"])
+            for result in evaluation.get("results") or []
+        ],
         "validation_plan_hash": resolved_plan.plan_hash,
+        "training_diagnostics": _sb3_training_diagnostics(model),
     }
+
+
+def _sb3_training_diagnostics(model) -> dict:
+    """Read deterministic optimizer diagnostics without changing RNG state."""
+
+    diagnostics = {
+        "optimizer_updates": int(getattr(model, "_n_updates", 0)),
+        "logger": {},
+        "replay": None,
+        "critic_q": None,
+    }
+    try:
+        logger = model.logger
+    except (AttributeError, RuntimeError):
+        logger = None
+    values = dict(getattr(logger, "name_to_value", {}) or {})
+    for source, target in (
+        ("train/actor_loss", "actor_loss"),
+        ("train/critic_loss", "critic_loss"),
+        ("train/ent_coef", "ent_coef"),
+        ("train/ent_coef_loss", "ent_coef_loss"),
+        ("train/learning_rate", "learning_rate"),
+        ("train/n_updates", "n_updates"),
+    ):
+        value = values.get(source)
+        if isinstance(value, (int, float, np.integer, np.floating)) and math.isfinite(
+            float(value)
+        ):
+            diagnostics["logger"][target] = float(value)
+
+    replay = getattr(model, "replay_buffer", None)
+    size_resolver = getattr(replay, "size", None)
+    replay_size = int(size_resolver()) if callable(size_resolver) else 0
+    if replay is None or replay_size <= 0:
+        return diagnostics
+    diagnostics["replay"] = {
+        "size": replay_size,
+        "capacity": int(getattr(replay, "buffer_size", replay_size)),
+    }
+    observations = getattr(replay, "observations", None)
+    actions = getattr(replay, "actions", None)
+    critic = getattr(model, "critic", None)
+    policy = getattr(model, "policy", None)
+    if observations is None or actions is None or not callable(critic):
+        return diagnostics
+    if policy is None or not callable(getattr(policy, "obs_to_tensor", None)):
+        return diagnostics
+
+    sample_count = min(256, replay_size)
+    indices = np.linspace(
+        0,
+        replay_size - 1,
+        num=sample_count,
+        dtype=np.int64,
+    )
+    observations = np.asarray(observations[indices])
+    actions = np.asarray(actions[indices])
+    if observations.ndim >= 3:
+        observations = observations[:, 0]
+    if actions.ndim >= 3:
+        actions = actions[:, 0]
+    try:
+        import torch
+
+        observation_tensor, _ = policy.obs_to_tensor(observations)
+        action_tensor = torch.as_tensor(
+            actions,
+            device=observation_tensor.device,
+            dtype=observation_tensor.dtype,
+        )
+        with torch.no_grad():
+            heads = critic(observation_tensor, action_tensor)
+        if not isinstance(heads, (list, tuple)):
+            heads = (heads,)
+        flattened = torch.cat(
+            [head.detach().reshape(-1) for head in heads],
+            dim=0,
+        ).cpu().numpy()
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return diagnostics
+    if flattened.size == 0 or not np.all(np.isfinite(flattened)):
+        return diagnostics
+    diagnostics["critic_q"] = {
+        "sample_count": sample_count,
+        "head_count": len(heads),
+        "mean": float(np.mean(flattened)),
+        "std": float(np.std(flattened)),
+        "abs_mean": float(np.mean(np.abs(flattened))),
+        "abs_max": float(np.max(np.abs(flattened))),
+        "min": float(np.min(flattened)),
+        "max": float(np.max(flattened)),
+    }
+    return diagnostics
 
 
 def save_resumable_training_state(
@@ -334,14 +434,7 @@ def _validate_sb3_resume_contract(plan, checkpoint) -> None:
 
 
 def _mapping_hash(value) -> str:
-    canonical = json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return stable_json_hash(value)
 
 
 def make_learning_curve_callback(
@@ -418,6 +511,81 @@ def make_learning_curve_callback(
                     + ", ".join(sorted(payload))
                 )
 
+        def evaluate_checkpoint(
+            self,
+            *,
+            step: int,
+            checkpoint_id: str,
+            phase: str,
+        ):
+            """Evaluate one unique validation step and persist a new best."""
+
+            resolved_step = int(step)
+            existing_index = next(
+                (
+                    index
+                    for index in range(len(self.history) - 1, -1, -1)
+                    if int(
+                        self.history[index].get("timesteps", -1)
+                    )
+                    == resolved_step
+                ),
+                None,
+            )
+            if any(
+                record.step == resolved_step
+                for record in self.validator.selector.records
+            ):
+                if existing_index is None:
+                    raise ValueError(
+                        "validation selector/history step mismatch"
+                    )
+                row = dict(self.history[existing_index])
+                row["phase"] = str(phase)
+                return row
+
+            row = evaluate_training_policy(
+                plan,
+                self.model,
+                resolved_step,
+                phase=str(phase),
+                episode_plan=self.validation_plan,
+                validation_callback=self.validator,
+                checkpoint_id=str(checkpoint_id),
+            )
+            row["timesteps"] = resolved_step
+            if existing_index is None:
+                self.history.append(row)
+            else:
+                self.history[existing_index] = row
+            improved = (
+                self.validator.selector.best is not None
+                and self.validator.selector.best.checkpoint_id
+                == str(checkpoint_id)
+            )
+            if not improved:
+                return row
+
+            self.best_metric_value = float(row["metric_value"])
+            self.best_step = resolved_step
+            if best_checkpoint_path is None:
+                return row
+
+            self.model.save(str(best_checkpoint_path))
+            selected = selected_checkpoint_manifest(
+                best_checkpoint_path,
+                self.validator.selector.best.__dict__,
+            )
+            save_resumable_training_state(
+                plan,
+                self.model,
+                best_checkpoint_path,
+                best_validation=row,
+                validation_state=self.state_dict(),
+                selected_checkpoint=selected,
+            )
+            return row
+
         def _on_step(self) -> bool:
             for info in self.locals.get("infos", ()):
                 episode_hash = info.get("episode_spec_hash")
@@ -437,38 +605,11 @@ def make_learning_curve_callback(
                 )
             if every <= 0 or self.num_timesteps < self._next_eval:
                 return True
-            checkpoint_id = f"step-{self.num_timesteps}"
-            row = evaluate_training_policy(
-                plan,
-                self.model,
-                self.num_timesteps,
-                episode_plan=self.validation_plan,
-                validation_callback=self.validator,
-                checkpoint_id=checkpoint_id,
+            self.evaluate_checkpoint(
+                step=self.num_timesteps,
+                checkpoint_id=f"step-{self.num_timesteps}",
+                phase="eval",
             )
-            row["timesteps"] = self.num_timesteps
-            self.history.append(row)
-            improved = (
-                self.validator.selector.best is not None
-                and self.validator.selector.best.checkpoint_id
-                == checkpoint_id
-            )
-            if best_checkpoint_path is not None and improved:
-                self.best_metric_value = float(row["metric_value"])
-                self.best_step = int(self.num_timesteps)
-                self.model.save(str(best_checkpoint_path))
-                selected = selected_checkpoint_manifest(
-                    best_checkpoint_path,
-                    self.validator.selector.best.__dict__,
-                )
-                save_resumable_training_state(
-                    plan,
-                    self.model,
-                    best_checkpoint_path,
-                    best_validation=row,
-                    validation_state=self.state_dict(),
-                    selected_checkpoint=selected,
-                )
             self._next_eval += max(1, every)
             return True
 
@@ -549,38 +690,11 @@ def run_sb3(plan) -> BackendResult:
                     plan.policy_path,
                 )
         if config.resume_checkpoint:
-            initial = evaluate_training_policy(
-                plan,
-                model,
-                starting_step,
-                phase="resume",
-                episode_plan=curve_callback.validation_plan,
-                validation_callback=curve_callback.validator,
+            initial = curve_callback.evaluate_checkpoint(
+                step=starting_step,
                 checkpoint_id=f"resume-step-{starting_step}",
+                phase="resume",
             )
-            improved = (
-                curve_callback.validator.selector.best is not None
-                and curve_callback.validator.selector.best.checkpoint_id
-                == f"resume-step-{starting_step}"
-            )
-            if improved:
-                curve_callback.best_step = starting_step
-                curve_callback.best_metric_value = float(
-                    initial["metric_value"]
-                )
-                model.save(str(plan.policy_path))
-                selected_checkpoint = selected_checkpoint_manifest(
-                    plan.policy_path,
-                    curve_callback.validator.selector.best.__dict__,
-                )
-                save_resumable_training_state(
-                    plan,
-                    model,
-                    plan.policy_path,
-                    best_validation=initial,
-                    validation_state=curve_callback.state_dict(),
-                    selected_checkpoint=selected_checkpoint,
-                )
         else:
             initial = evaluate_training_policy(
                 plan,
@@ -590,7 +704,10 @@ def run_sb3(plan) -> BackendResult:
                 episode_plan=curve_callback.validation_plan,
             )
         initial["timesteps"] = starting_step
-        curve_callback.history.append(initial)
+        if not curve_callback.history or int(
+            curve_callback.history[-1].get("timesteps", -1)
+        ) != starting_step:
+            curve_callback.history.append(initial)
 
         started_at = time.monotonic()
         remaining_steps = max(
@@ -610,28 +727,39 @@ def run_sb3(plan) -> BackendResult:
         )
         collected_transitions = max(0, final_step - starting_step)
 
-        if (
-            curve_callback.history
-            and int(
-                curve_callback.history[-1].get("timesteps", -1)
-            )
-            == final_step
-        ):
-            final_curve_point = dict(curve_callback.history[-1])
-            final_curve_point["phase"] = "final"
-        else:
-            final_curve_point = evaluate_training_policy(
-                plan,
-                model,
-                final_step,
-                phase="final",
-                episode_plan=curve_callback.validation_plan,
-            )
-        final_curve_point["timesteps"] = final_step
-
-        final_checkpoint_path = (
-            plan.output_dir / f"{plan.run_name}.final.zip"
+        final_curve_point = curve_callback.evaluate_checkpoint(
+            step=final_step,
+            checkpoint_id=f"final-step-{final_step}",
+            phase="final",
         )
+
+        final_checkpoint_path, checkpoint_selection = _save_sb3_checkpoints(
+            plan, model, curve_callback, selected_checkpoint
+        )
+        return _finalize_sb3_result(
+            plan=plan,
+            config=config,
+            algorithm=algorithm,
+            replay=replay,
+            model=model,
+            curve_callback=curve_callback,
+            final_curve_point=final_curve_point,
+            final_checkpoint_path=final_checkpoint_path,
+            final_step=final_step,
+            starting_step=starting_step,
+            train_seconds=train_seconds,
+            collected_transitions=collected_transitions,
+            checkpoint_selection=checkpoint_selection,
+            vector_backend=vector_backend,
+            gamma=gamma,
+        )
+    finally:
+        if env is not None:
+            env.close()
+
+
+def _save_sb3_checkpoints(plan, model, curve_callback, selected_checkpoint):
+        final_checkpoint_path = plan.output_dir / f"{plan.run_name}.final.zip"
         model.save(str(final_checkpoint_path))
         best_validation = (
             {
@@ -670,7 +798,27 @@ def run_sb3(plan) -> BackendResult:
             checkpoint_selection = "final"
         else:
             checkpoint_selection = "best-validation"
+        return final_checkpoint_path, checkpoint_selection
 
+
+def _finalize_sb3_result(
+    *,
+    plan,
+    config,
+    algorithm,
+    replay,
+    model,
+    curve_callback,
+    final_curve_point,
+    final_checkpoint_path,
+    final_step,
+    starting_step,
+    train_seconds,
+    collected_transitions,
+    checkpoint_selection,
+    vector_backend,
+    gamma,
+):
         learning_curve = list(curve_callback.history)
         if (
             learning_curve
@@ -728,6 +876,15 @@ def run_sb3(plan) -> BackendResult:
             "train_freq": int(train_freq),
             "gradient_steps": int(gradient_steps),
             "utd_ratio": float(config.utd_ratio),
+            "effective_algorithm_kwargs": _effective_algorithm_kwargs(
+                config,
+                train_freq=train_freq,
+                gradient_steps=gradient_steps,
+                action_shape=tuple(
+                    getattr(getattr(model, "action_space", None), "shape", ())
+                    or ()
+                ),
+            ),
             "learning_curve_every": int(
                 config.evaluation["every_transitions"]
             ),
@@ -756,9 +913,64 @@ def run_sb3(plan) -> BackendResult:
             training_metadata=metadata,
             runtime=runtime,
         )
-    finally:
-        if env is not None:
-            env.close()
+
+
+def _effective_algorithm_kwargs(
+    config,
+    *,
+    train_freq,
+    gradient_steps,
+    action_shape,
+):
+    """Return the JSON form of the kwargs applied by the SB3 adapter."""
+
+    algorithm = config.as_dict()["algorithm"]
+    common = {
+        "policy": algorithm["policy"],
+        "policy_kwargs": algorithm["policy_kwargs"],
+        "seed": config.training_seed,
+        "device": config.device,
+        "learning_rate": algorithm["learning_rate"],
+        "gamma": algorithm["gamma"],
+        "tensorboard_log": algorithm["tensorboard_log"],
+        "verbose": algorithm["verbose"],
+    }
+    if config.algorithm_id == "ppo":
+        return {
+            **common,
+            "n_steps": algorithm["n_steps"],
+            "batch_size": algorithm["batch_size"],
+            "gae_lambda": algorithm["gae_lambda"],
+            "clip_range": algorithm["clip_range"],
+            "n_epochs": algorithm["n_epochs"],
+            "ent_coef": algorithm["ent_coef"],
+            "vf_coef": algorithm["vf_coef"],
+            "max_grad_norm": algorithm["max_grad_norm"],
+        }
+    effective = {
+        **common,
+        "batch_size": algorithm["batch_size"],
+        "train_freq": int(train_freq),
+        "gradient_steps": int(gradient_steps),
+        "buffer_size": config.replay["capacity"],
+        "learning_starts": config.replay["learning_starts"],
+        "tau": algorithm["tau"],
+    }
+    if config.algorithm_id == "sac":
+        effective.update(
+            ent_coef=algorithm["ent_coef"],
+            target_entropy=algorithm["target_entropy"],
+        )
+    else:
+        effective.update(
+            action_noise=algorithm["action_noise"],
+            action_noise_sigma=algorithm["action_noise_sigma"],
+            action_noise_shape=[int(size) for size in action_shape],
+            policy_delay=algorithm["policy_delay"],
+            target_policy_noise=algorithm["target_policy_noise"],
+            target_noise_clip=algorithm["target_noise_clip"],
+        )
+    return effective
 
 
 def _materialize_selected_checkpoint(manifest, destination: Path):

@@ -355,6 +355,11 @@ class ProcessModelContract:
             scales.append(max(float(scale if scale is not None else 1.0), 1e-12))
         return scales
 
+    def integral_observation_limits(self):
+        """Return per-output integral-error saturation and normalization limits."""
+
+        return list(self.controlled_output_scales())
+
     def dynamics_disturbance_specs(self):
         specs = []
         defaults = self.disturbance_defaults()

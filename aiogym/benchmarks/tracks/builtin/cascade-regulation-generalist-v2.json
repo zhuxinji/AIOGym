@@ -1,0 +1,158 @@
+{
+  "schema_version": "aiogym.benchmark_track.v1",
+  "id": "cascade-regulation-generalist-v2",
+  "description": "Split-isolated v2 cascade regulation protocol with fixed-bounds normalized observations and unmeasured robustness disturbances.",
+  "scenario": "cascade",
+  "goal": "regulation",
+  "reward_spec": "regulation-v1",
+  "scorecard_spec": "process-control-v1",
+  "policy_scope": "generalist",
+  "policy_contract": {
+    "action_mode": "actuator",
+    "control_dt": 0.5,
+    "disturbance_obs": false,
+    "previous_action_obs": false,
+    "normalize_observations": true,
+    "tracking_error_obs": false,
+    "case_id_obs": false
+  },
+  "training": {
+    "distribution_id": "cascade-regulation-training-l2-v2",
+    "cases": [
+      {
+        "base_case": "commissioning",
+        "variant_id": "training-contract-v2",
+        "overrides": {
+          "environment": {"disturbance_obs": false, "previous_action_obs": false, "normalize_observations": true, "tracking_error_obs": false}
+        },
+        "weight": 1.0
+      },
+      {
+        "base_case": "temperature-step",
+        "variant_id": "training-contract-v2",
+        "overrides": {
+          "environment": {"disturbance_obs": false, "previous_action_obs": false, "normalize_observations": true, "tracking_error_obs": false}
+        },
+        "weight": 1.0
+      }
+    ],
+    "seed_spec": {"namespace": "cascade-regulation-training-v2"}
+  },
+  "validation": {
+    "cases": [
+      {
+        "base_case": "commissioning",
+        "variant_id": "validation-offset-v2",
+        "overrides": {
+          "environment": {"disturbance_obs": false, "previous_action_obs": false, "normalize_observations": true, "tracking_error_obs": false},
+          "initialization": {"state": [0.13, 21.0, 0.13, 21.0, 0.13, 21.0], "basis": "deterministic common +0.01 m and +1 degC offset from the validated commissioning start"},
+          "setpoints": {
+            "initial": [0.45, 0.45, 0.45, 25.0, 30.0, 35.0],
+            "schedule": [
+              {"at_step": 440, "values": [0.45, 0.45, 0.45, 30.0, 40.0, 50.0], "description": "validated intermediate thermal target at a v2-specific event time"},
+              {"at_step": 860, "values": [0.45, 0.45, 0.45, 35.0, 50.0, 65.0], "description": "validated nominal production target at a v2-specific event time"}
+            ]
+          }
+        }
+      },
+      {
+        "base_case": "temperature-step",
+        "variant_id": "validation-offset-v2",
+        "overrides": {
+          "environment": {"disturbance_obs": false, "previous_action_obs": false, "normalize_observations": true, "tracking_error_obs": false},
+          "initialization": {"state": [0.47, 37.0, 0.43, 48.0, 0.46, 67.0], "basis": "deterministic moderate opposed offset for v2 validation"},
+          "setpoints": {
+            "initial": [0.45, 0.45, 0.45, 35.0, 50.0, 65.0],
+            "schedule": [
+              {"at_step": 240, "values": [0.48, 0.44, 0.46, 38.0, 49.0, 66.0], "description": "mixed level and temperature validation step"},
+              {"at_step": 960, "values": [0.44, 0.48, 0.45, 34.0, 54.0, 64.0], "description": "reversed validation step"},
+              {"at_step": 1800, "values": [0.45, 0.45, 0.45, 35.0, 50.0, 65.0], "description": "return to nominal targets"}
+            ]
+          }
+        }
+      }
+    ],
+    "seed_spec": {"namespace": "cascade-regulation-validation-v2"}
+  },
+  "test": {
+    "cases": [
+      {
+        "base_case": "commissioning",
+        "variant_id": "heldout-v2",
+        "overrides": {
+          "environment": {"disturbance_obs": false, "previous_action_obs": false, "normalize_observations": true, "tracking_error_obs": false},
+          "initialization": {"state": [0.12, 20.0, 0.12, 20.0, 0.12, 20.0], "basis": "validated commissioning start retained because lower-inventory held-out offsets violate the zero-state-violation gate"},
+          "setpoints": {
+            "initial": [0.45, 0.45, 0.45, 25.0, 30.0, 35.0],
+            "schedule": [
+              {"at_step": 520, "values": [0.45, 0.45, 0.45, 30.0, 40.0, 50.0], "description": "validated intermediate thermal target at a held-out event time"},
+              {"at_step": 1080, "values": [0.45, 0.45, 0.45, 35.0, 50.0, 65.0], "description": "validated nominal production target at a held-out event time"}
+            ]
+          }
+        },
+        "group": "startup"
+      },
+      {
+        "base_case": "temperature-step",
+        "variant_id": "heldout-v2",
+        "overrides": {
+          "environment": {"disturbance_obs": false, "previous_action_obs": false, "normalize_observations": true, "tracking_error_obs": false},
+          "initialization": {"state": [0.41, 31.0, 0.49, 54.0, 0.42, 61.0], "basis": "deterministic held-out opposed regulation offset"},
+          "setpoints": {
+            "initial": [0.45, 0.45, 0.45, 35.0, 50.0, 65.0],
+            "schedule": [
+              {"at_step": 360, "values": [0.42, 0.48, 0.46, 32.0, 55.0, 68.0], "description": "held-out mixed-direction target"},
+              {"at_step": 1260, "values": [0.47, 0.43, 0.49, 39.0, 47.0, 70.0], "description": "held-out reversed target"},
+              {"at_step": 2160, "values": [0.45, 0.45, 0.45, 35.0, 50.0, 65.0], "description": "return to nominal targets"}
+            ]
+          }
+        },
+        "group": "reference"
+      },
+      {
+        "base_case": "disturbance-rejection",
+        "variant_id": "heldout-nominal-v2",
+        "overrides": {
+          "environment": {"disturbance_obs": false, "previous_action_obs": false, "normalize_observations": true, "tracking_error_obs": false},
+          "initialization": {"state": [0.42, 32.0, 0.48, 53.0, 0.41, 61.0], "basis": "shared feasible offset for the v2 unmeasured-disturbance pair"},
+          "disturbances": [],
+          "acceptance": {"required_checks": ["deterministic_disturbance_schedule", "disturbance_hidden_from_controller", "finite_recovery_rollout", "protection_event_accounting"]}
+        },
+        "group": "disturbance",
+        "pair_id": "cascade-unmeasured-disturbance-v2",
+        "base_case_id": "disturbance-rejection",
+        "condition": "nominal"
+      },
+      {
+        "base_case": "disturbance-rejection",
+        "variant_id": "heldout-shifted-v2",
+        "overrides": {
+          "environment": {"disturbance_obs": false, "previous_action_obs": false, "normalize_observations": true, "tracking_error_obs": false},
+          "initialization": {"state": [0.42, 32.0, 0.48, 53.0, 0.41, 61.0], "basis": "shared feasible offset for the v2 unmeasured-disturbance pair"},
+          "disturbances": [
+            {"at_step": 260, "name": "pump_flow_factor", "value": 0.72, "description": "28% held-out feed-pump capacity loss"},
+            {"at_step": 460, "name": "pump_flow_factor", "value": 1.0, "description": "feed-pump capacity restored"},
+            {"at_step": 680, "name": "heater_efficiency", "value": 0.75, "description": "25% held-out common heater efficiency loss"},
+            {"at_step": 900, "name": "heater_efficiency", "value": 1.0, "description": "heater efficiency restored"},
+            {"at_step": 1080, "name": "t_amb", "value": 16.0, "description": "held-out cool ambient step"},
+            {"at_step": 1300, "name": "t_amb", "value": 20.0, "description": "ambient temperature restored"}
+          ],
+          "acceptance": {"required_checks": ["deterministic_disturbance_schedule", "disturbance_hidden_from_controller", "finite_recovery_rollout", "protection_event_accounting"]}
+        },
+        "group": "disturbance",
+        "pair_id": "cascade-unmeasured-disturbance-v2",
+        "base_case_id": "disturbance-rejection",
+        "condition": "shifted"
+      }
+    ],
+    "seed_spec": {"namespace": "cascade-regulation-test-v2"}
+  },
+  "ranking": {
+    "id": "cascade-regulation-ranking-v2",
+    "primary_utility": "negative_regulation_cost_rate",
+    "safety_gate": "zero-hard-failure-v1",
+    "case_score": "fixed-anchor-v1",
+    "track_aggregation": "weighted-geometric-mean-v1",
+    "anchor_id": "cascade-regulation-anchors-v3"
+  }
+}

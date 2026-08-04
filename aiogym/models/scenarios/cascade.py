@@ -385,6 +385,9 @@ class CascadeModel(ProcessModelContract):
         # to ``display_outputs``.
         return [x[0], x[2], x[4], x[1], x[3], x[5]]
 
+    def integral_observation_limits(self):
+        return [8.0, 8.0, 8.0, 300.0, 300.0, 300.0]
+
     # ---- KPI support ----
     energy_scored = True
 

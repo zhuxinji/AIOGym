@@ -52,7 +52,7 @@ validation split. Locked test evaluation is available only through
 env = aiogym.make_env(
     "quadruple",
     case="minimum-phase",
-    reward_spec="regulation-v1",
+    reward_spec="regulation",
 )
 observation, info = env.reset(seed=7)
 observation, reward, terminated, truncated, info = env.step(action)
@@ -89,20 +89,37 @@ partial episode is discarded and restarted from the next assigned episode.
 
 ## CLI
 
-The stable workflow commands are:
+The stable workflow commands support guided selectors and exact config-first
+forms:
 
 ```text
+aiogym list tracks
+aiogym list rewards
+aiogym list profiles
+aiogym describe track TARGET
+aiogym describe reward REWARD
+aiogym collect TARGET --profile quick
+aiogym train TARGET ALGORITHM --profile quick
 aiogym collect --config FILE
 aiogym train --config FILE
+aiogym evaluate RUN
 aiogym evaluate --checkpoint PATH --algorithm ID --track TRACK
+aiogym benchmark --run RUN
 aiogym benchmark --config FILE
 aiogym final-test --config FILE
 ```
 
 `benchmark` accepts an official Track, the PID/MPC baselines, and at most one
 learned checkpoint through `--checkpoint`, `--algorithm`, `--sha256`, and
-`--name`. Backend-specific checkpoint flags and direct scenario/Case/reward
-overrides are not supported.
+`--name`, or one self-describing run manifest through `--run`. Backend-specific
+checkpoint flags and direct scenario/Case/reward overrides are not supported.
+
+Selectors are ergonomic inputs only. Resolved configs and artifacts contain
+canonical Track and RewardSpec IDs. `quick-v1` is a tutorial/smoke profile;
+formal experiments should use an audited config until a verified baseline
+profile is registered. Guided profile declarations are installed package
+resources; files retained under the repository's `configs/` tree are examples,
+not the installed profile source.
 
 `final-test` is the only ordinary command that can consume a test split. Its
 configuration binds the Track hash, checkpoint digests, seed list, and

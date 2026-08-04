@@ -18,10 +18,10 @@
     },
     "cascade_recirculating": {
       "loops": [
-        {"u_index": 0, "y_index": 0, "pid": [6.0, 0.2, 0.0], "bias": 0.05},
-        {"u_index": 1, "y_index": 1, "pid": [6.0, 0.2, 0.0], "bias": 0.048650425541052},
-        {"u_index": 2, "y_index": 2, "pid": [6.0, 0.2, 0.0], "bias": 0.048650425541052},
-        {"u_index": 3, "y_index": 3, "pid": [0.08, 0.005, 0.0], "bias": 0.6059299191840791}
+        {"u_index": 0, "y_index": 0, "pid": [6.0, 0.2, 0.0], "bias": 0.4507771067833858},
+        {"u_index": 1, "y_index": 1, "pid": [6.0, 0.2, 0.0], "bias": 0.2268046058132572},
+        {"u_index": 2, "y_index": 2, "pid": [6.0, 0.2, 0.0], "bias": 0.2268046058132572},
+        {"u_index": 3, "y_index": 3, "pid": [0.08, 0.005, 0.0], "bias": 0.609065572060349}
       ],
       "demand_u_index": null,
       "holds": []
@@ -94,6 +94,13 @@
     },
     "cascade-recirculating-regulation-generalist-v1": {
       "track": "cascade-recirculating-regulation-generalist-v1",
+      "policy_scope": "generalist",
+      "goal": "regulation",
+      "reward_spec": "regulation-v1",
+      "access_level": "measurement-and-setpoint"
+    },
+    "cascade-recirculating-regulation-generalist-v2": {
+      "track": "cascade-recirculating-regulation-generalist-v2",
       "policy_scope": "generalist",
       "goal": "regulation",
       "reward_spec": "regulation-v1",

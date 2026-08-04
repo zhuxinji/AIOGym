@@ -2,7 +2,6 @@
 """RLPD training, replay accounting, and checkpoint selection backend."""
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shutil
@@ -11,6 +10,8 @@ import time
 from pathlib import Path
 
 import numpy as np
+
+from aiogym._internal.serialization import stable_json_hash
 
 from ..checkpoints import (
     selected_checkpoint_manifest,
@@ -30,7 +31,7 @@ from ..validation import (
     CompleteValidationCallback,
     evaluate_validation_policy,
 )
-from . import BackendResult
+from .contracts import BackendResult
 
 
 def make_training_env(
@@ -141,6 +142,12 @@ def _training_evaluation(agent, plan):
 
 
 def run_rlpd(plan) -> BackendResult:
+    """Stable backend boundary for the internal RLPD training pipeline."""
+
+    return _execute_rlpd_training(plan)
+
+
+def _execute_rlpd_training(plan) -> BackendResult:
     """Train RLPD and return a selected native checkpoint only."""
 
     config = plan.config
@@ -592,14 +599,7 @@ def _validate_rlpd_resume_contract(plan, state) -> None:
 
 
 def _stable_mapping_hash(value) -> str:
-    canonical = json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return stable_json_hash(value)
 
 
 def _rlpd_validation_state(callback, next_boundary: int) -> dict:

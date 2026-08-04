@@ -12,7 +12,7 @@ from aiogym._internal.serialization import write_json_artifact
 from aiogym._internal.config import parse_csv_ints
 from aiogym._internal.validation import seed_sequence
 from aiogym.benchmarks.evaluation import evaluate_policy_on_track
-from aiogym.benchmarks.tracks.registry import list_tracks, load_track
+from aiogym.benchmarks.tracks.registry import load_track
 from aiogym.controllers.checkpoints import (
     SUPPORTED_POLICY_ALGORITHMS,
     checkpoint_sha256,
@@ -21,6 +21,7 @@ from aiogym.controllers.checkpoints import (
 )
 from aiogym.controllers.registry import make_controller
 from aiogym.models.registry import make_model
+from aiogym.rl.run_reference import load_run_reference
 
 
 BENCHMARK_CONFIG_SCHEMA_VERSION = "aiogym.benchmark_run.v1"
@@ -47,8 +48,9 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         prog=prog,
         description="Compare controllers on one official validation Track.",
     )
-    parser.add_argument("track", nargs="?", choices=list_tracks())
+    parser.add_argument("track", nargs="?")
     parser.add_argument("--config")
+    parser.add_argument("--run")
     parser.add_argument(
         "--controllers",
         default=",".join(DEFAULT_CONTROLLERS),
@@ -82,19 +84,56 @@ def main(argv=None, prog: str | None = None) -> int:
         return 0
     args = parser.parse_args(raw_args)
     if args.config:
-        if args.track is not None:
-            parser.error("--config and positional TRACK are mutually exclusive")
+        if args.track is not None or args.run is not None:
+            parser.error(
+                "--config is mutually exclusive with positional TRACK and --run"
+            )
         try:
             _apply_config(args, _load_config(args.config))
         except (FileNotFoundError, KeyError, TypeError, ValueError) as exc:
             parser.error(str(exc))
-    if args.track is None:
-        parser.error("provide --config FILE or an official TRACK")
     try:
-        track = load_track(args.track)
+        run_reference = None
+        if args.run is not None:
+            if any(
+                value is not None
+                for value in (
+                    args.checkpoint,
+                    args.algorithm_id,
+                    args.checkpoint_sha256,
+                    args.checkpoint_name,
+                )
+            ):
+                raise ValueError(
+                    "--run is mutually exclusive with --checkpoint, "
+                    "--algorithm, --sha256, and --name"
+                )
+            run_reference = load_run_reference(args.run)
+        if args.track is None and run_reference is None:
+            raise ValueError("provide --config, TRACK, or --run RUN")
+        track = load_track(
+            args.track if args.track is not None else run_reference.track_id
+        )
+        if run_reference is not None and (
+            track.id != run_reference.track_id
+            or track.track_hash != run_reference.track_hash
+        ):
+            raise ValueError("TRACK does not match --run Track identity")
         seeds = _resolve_seed_input(args.seeds)
         controllers = _baseline_controllers(args.controllers, track.scenario)
-        if args.checkpoint:
+        if run_reference is not None:
+            name = run_reference.algorithm_id
+            spec = learned_policy_spec_for_track(
+                run_reference.policy_path,
+                run_reference.algorithm_id,
+                run_reference.policy_sha256,
+                track,
+            )
+            controllers[name] = load_policy_checkpoint(
+                spec,
+                device=args.device,
+            )
+        elif args.checkpoint:
             if not args.algorithm_id:
                 raise ValueError("--checkpoint requires --algorithm")
             name = args.checkpoint_name or args.algorithm_id

@@ -19,11 +19,11 @@
     "noise_pct": 0.01
   },
   "initialization": {
-    "state": [0.36, 28.0, 0.37, 27.5, 0.38, 26.5],
+    "state": [0.22, 28.0, 0.23, 27.5, 0.27, 26.5],
     "basis": "feasible bounded offset from the model-consistent nominal equilibrium"
   },
   "setpoints": {
-    "initial": [0.4, 0.4, 0.4, 30.0, 28.932991890738368, 27.57566937897707],
+    "initial": [0.24, 0.24, 0.24, 30.0, 28.97128161165881, 27.654664660905787],
     "schedule": []
   },
   "disturbances": [
@@ -35,8 +35,8 @@
     {"at_step": 1200, "name": "t_amb", "value": 20.0, "description": "ambient restored"}
   ],
   "constraints": [
-    {"name": "tank_levels", "bounds": [0.0, 0.5], "unit": "m"},
-    {"name": "tank_temperatures", "bounds": [0.0, 92.0], "unit": "degC"}
+    {"name": "tank_levels", "bounds": [0.0, 0.4], "unit": "m"},
+    {"name": "tank_temperatures", "bounds": [0.0, 80.0], "unit": "degC"}
   ],
   "acceptance": {
     "required_checks": [

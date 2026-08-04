@@ -1,0 +1,60 @@
+{
+  "schema_version": "aiogym.rl_training_config.v3",
+  "track_id": "quadruple-regulation-generalist-v2",
+  "algorithm_id": "sac",
+  "training_seed": 0,
+  "budget": {
+    "unit": "environment_transitions",
+    "value": 100000
+  },
+  "n_envs": 1,
+  "device": "cpu",
+  "algorithm": {
+    "batch_size": 256,
+    "gamma": 0.99,
+    "learning_rate": 0.0003,
+    "policy": "MlpPolicy",
+    "policy_kwargs": {
+      "activation_fn": "relu",
+      "net_arch": {
+        "pi": [256, 256],
+        "qf": [256, 256]
+      }
+    },
+    "rollout_vector_steps": 1,
+    "subproc_start_method": "spawn",
+    "tau": 0.005,
+    "ent_coef": "auto",
+    "target_entropy": "auto",
+    "tensorboard_log": null,
+    "torch_threads": 2,
+    "utd_ratio": 1.0,
+    "vector_backend": "dummy",
+    "verbose": 1
+  },
+  "replay": {
+    "capacity": 300000,
+    "learning_starts": 1000
+  },
+  "evaluation": {
+    "every_transitions": 2000
+  },
+  "checkpointing": {
+    "every_transitions": 10000
+  },
+  "output": {
+    "directory": "runs/pilots/quadruple/sac-v2",
+    "name": "quadruple-sac-pilot-v2",
+    "onnx": false,
+    "save_rollout": true,
+    "strict_export": false
+  },
+  "validation_seeds": [5000],
+  "resume_mode": "restart_episode",
+  "resume_checkpoint": null,
+  "dataset_id": null,
+  "dataset_path": null,
+  "dataset_hash": null,
+  "curriculum_id": null,
+  "migration_metadata": null
+}

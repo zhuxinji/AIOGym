@@ -3,7 +3,7 @@
   "name": "safety-recovery",
   "scenario": "cascade-recirculating",
   "status": "benchmark-designed",
-  "description": "Non-terminal recovery case using the revised 0.50 m geometry, starting with Tank 1 passive overflow, L3 high-level protection, and Tank 3 P101 low-level protection active.",
+  "description": "Non-terminal recovery case using the V2.0 0.40 m geometry, starting with Tank 1 passive overflow, the P101 high-level interlock, and Tank 3 P101 low-level protection active.",
   "environment": {
     "control_dt": 0.1,
     "episode_steps": 600,
@@ -19,23 +19,23 @@
     "noise_pct": 0.01
   },
   "initialization": {
-    "state": [0.49, 30.0, 0.46, 28.932991890738368, 0.04, 27.57566937897707],
+    "state": [0.37, 30.0, 0.28, 28.97128161165881, 0.07, 27.654664660905787],
     "basis": "AIO-Gym software safety-recovery condition; not a prescribed plant test"
   },
   "setpoints": {
-    "initial": [0.4, 0.4, 0.4, 30.0, 28.932991890738368, 27.57566937897707],
+    "initial": [0.24, 0.24, 0.24, 30.0, 28.97128161165881, 27.654664660905787],
     "schedule": []
   },
   "disturbances": [],
   "constraints": [
-    {"name": "hard_level_bounds", "bounds": [0.0, 0.5], "unit": "m"},
+    {"name": "hard_level_bounds", "bounds": [0.0, 0.4], "unit": "m"},
     {"name": "H1_hard_temperature", "bounds": [0.0, 100.0], "unit": "degC"}
   ],
   "acceptance": {
     "required_checks": [
       "passive_overflow_without_immediate_termination",
       "P101_low_level_interlock",
-      "L3_high_level_interlock",
+      "P101_high_level_interlock",
       "structured_protection_events",
       "hard_boundary_separation"
     ]

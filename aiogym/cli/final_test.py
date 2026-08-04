@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -15,6 +14,7 @@ from aiogym.controllers.checkpoints import (
 )
 from aiogym.rl.final_test import FinalTestLock
 from aiogym._internal.validation import seed_sequence
+from aiogym._internal.serialization import stable_json_hash
 
 
 FINAL_TEST_CONFIG_SCHEMA_VERSION = "aiogym.final_test.v1"
@@ -163,14 +163,7 @@ def _load_config(path: str | Path) -> dict:
 
 
 def _stable_hash(value) -> str:
-    canonical = json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return stable_json_hash(value)
 
 
 __all__ = [

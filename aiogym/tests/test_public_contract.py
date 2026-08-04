@@ -106,7 +106,7 @@ def test_import_has_no_gymnasium_registration_side_effect():
 
 def test_environment_factory_has_one_resolved_seedless_contract():
     from aiogym._environment.spec import ResolvedEnvSpec, resolve_env_spec
-    from aiogym._environment.runtime import _AIOGymEnv
+    from aiogym._environment.env import _AIOGymEnv
 
     direct = resolve_env_spec(
         "quadruple",

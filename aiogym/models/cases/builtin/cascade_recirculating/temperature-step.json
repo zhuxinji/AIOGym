@@ -19,28 +19,28 @@
     "noise_pct": 0.01
   },
   "initialization": {
-    "state": [0.4, 30.0, 0.4, 28.932991890738368, 0.4, 27.57566937897707],
+    "state": [0.24, 30.0, 0.24, 28.97128161165881, 0.24, 27.654664660905787],
     "basis": "model-consistent 30 degC Tank 1 equilibrium"
   },
   "setpoints": {
-    "initial": [0.4, 0.4, 0.4, 30.0, 28.932991890738368, 27.57566937897707],
+    "initial": [0.24, 0.24, 0.24, 30.0, 28.97128161165881, 27.654664660905787],
     "schedule": [
       {
         "at_step": 120,
-        "values": [0.4, 0.4, 0.4, 35.0, 33.399487836107554, 31.363504068465605],
+        "values": [0.24, 0.24, 0.24, 35.0, 33.456922417488215, 31.481996991358674],
         "description": "raise the single heated-stage target while preserving the passive T1 >= T2 >= T3 profile"
       },
       {
         "at_step": 1200,
-        "values": [0.4, 0.4, 0.4, 30.0, 28.932991890738368, 27.57566937897707],
+        "values": [0.24, 0.24, 0.24, 30.0, 28.97128161165881, 27.654664660905787],
         "description": "return to the nominal thermal profile"
       }
     ]
   },
   "disturbances": [],
   "constraints": [
-    {"name": "tank_levels", "bounds": [0.0, 0.5], "unit": "m"},
-    {"name": "tank_temperatures", "bounds": [0.0, 92.0], "unit": "degC"}
+    {"name": "tank_levels", "bounds": [0.0, 0.4], "unit": "m"},
+    {"name": "tank_temperatures", "bounds": [0.0, 80.0], "unit": "degC"}
   ],
   "acceptance": {
     "required_checks": [

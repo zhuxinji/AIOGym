@@ -1,9 +1,9 @@
 """Environment throughput profiling without optional system dependencies."""
 from __future__ import annotations
 
-import resource
 from dataclasses import dataclass
-from time import perf_counter
+import sys
+from time import perf_counter, process_time
 from typing import Callable
 
 import numpy as np
@@ -18,8 +18,8 @@ class EnvironmentProfile:
     step_seconds: float
     single_env_steps_per_second: float
     vector_transitions_per_second: float
-    memory_megabytes: float
-    memory_megabytes_per_worker: float
+    memory_megabytes: float | None
+    memory_megabytes_per_worker: float | None
     ode_integration_seconds: float
     reward_metric_seconds: float
     info_construction_seconds: float
@@ -27,7 +27,7 @@ class EnvironmentProfile:
     dispatch_overhead_seconds: float
     cpu_utilization: float
 
-    def as_dict(self) -> dict[str, float | int]:
+    def as_dict(self) -> dict[str, float | int | None]:
         return {
             "n_envs": self.n_envs,
             "transitions": self.transitions,
@@ -71,8 +71,7 @@ def profile_environments(
         "info_construction_seconds": 0.0,
         "observation_seconds": 0.0,
     }
-    cpu_started = perf_counter()
-    usage_started = resource.getrusage(resource.RUSAGE_SELF)
+    cpu_started = process_time()
     start = perf_counter()
     try:
         for index, env in enumerate(envs):
@@ -104,14 +103,7 @@ def profile_environments(
             if callable(close):
                 close()
     elapsed = perf_counter() - start
-    usage_finished = resource.getrusage(resource.RUSAGE_SELF)
-    cpu_seconds = (
-        usage_finished.ru_utime
-        + usage_finished.ru_stime
-        - usage_started.ru_utime
-        - usage_started.ru_stime
-    )
-    cpu_wall_seconds = perf_counter() - cpu_started
+    cpu_seconds = process_time() - cpu_started
     memory_mb = _resident_memory_megabytes()
     vector_rate = completed / elapsed if elapsed > 0.0 else float("inf")
     step_rate = completed / step_seconds if step_seconds > 0.0 else float("inf")
@@ -125,21 +117,37 @@ def profile_environments(
         single_env_steps_per_second=step_rate,
         vector_transitions_per_second=vector_rate,
         memory_megabytes=memory_mb,
-        memory_megabytes_per_worker=memory_mb / n_envs,
+        memory_megabytes_per_worker=(
+            None if memory_mb is None else memory_mb / n_envs
+        ),
         **component_totals,
         dispatch_overhead_seconds=max(0.0, step_seconds - measured_components),
         cpu_utilization=(
-            cpu_seconds / cpu_wall_seconds if cpu_wall_seconds > 0.0 else 0.0
+            cpu_seconds / elapsed if elapsed > 0.0 else 0.0
         ),
     )
 
 
-def _resident_memory_megabytes() -> float:
-    usage = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
-    # macOS reports bytes; Linux reports KiB.
-    if usage > 10_000_000:
-        return usage / (1024.0 * 1024.0)
-    return usage / 1024.0
+def _rss_to_megabytes(usage: float, platform: str) -> float | None:
+    """Convert explicit platform ``ru_maxrss`` units without heuristics."""
+
+    if platform == "darwin":
+        return float(usage) / (1024.0 * 1024.0)
+    if platform.startswith(("linux", "freebsd")):
+        return float(usage) / 1024.0
+    return None
+
+
+def _resident_memory_megabytes(platform: str | None = None) -> float | None:
+    resolved_platform = sys.platform if platform is None else platform
+    if resolved_platform.startswith("win"):
+        return None
+    try:
+        import resource
+    except ModuleNotFoundError:
+        return None
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    return _rss_to_megabytes(float(usage.ru_maxrss), resolved_platform)
 
 
 __all__ = ["EnvironmentProfile", "profile_environments"]

@@ -7,7 +7,10 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from ..evaluation.metrics.tracking import normalized_tracking_errors
+from .._internal.control_math import (
+    normalized_action,
+    normalized_tracking_errors,
+)
 from .scalarizers import fixed_penalty_scalarizer
 from .specs import (
     RewardResult,
@@ -15,7 +18,7 @@ from .specs import (
     StageRewardContext,
     StageRewardOverride,
 )
-from .terms import normalized_action, raw_cost_channels, transition_terms
+from .terms import raw_cost_channels, transition_terms
 
 
 def canonical_stage_reward(

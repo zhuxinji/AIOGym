@@ -55,6 +55,7 @@ def calibrate_anchor_manifest(
             )
             samples = []
             eligibility = []
+            ineligibility_reasons = []
             try:
                 horizon = float(env.control_dt * env.episode_steps)
                 for seed in seeds:
@@ -80,10 +81,19 @@ def calibrate_anchor_manifest(
                     eligibility.append(
                         bool(result.get("ranking_eligible", False))
                     )
+                    ineligibility_reasons.append(
+                        list(
+                            dict(result.get("safety_gate") or {}).get(
+                                "reasons",
+                                (),
+                            )
+                        )
+                    )
             finally:
                 env.close()
             utilities[controller_id] = samples
             utilities[f"{controller_id}:eligible"] = eligibility
+            utilities[f"{controller_id}:reasons"] = ineligibility_reasons
             frozen_controllers[controller_id] = _frozen_controller_metadata(
                 controller_id,
                 controller,
@@ -98,9 +108,26 @@ def calibrate_anchor_manifest(
             ],
         )
         if not quality["passed"]:
+            safety_details = []
+            for controller_id in (
+                bad_controller_id,
+                reference_controller_id,
+            ):
+                reasons = utilities[f"{controller_id}:reasons"]
+                nonempty = [
+                    {"seed": seed, "reasons": row}
+                    for seed, row in zip(seeds, reasons)
+                    if row
+                ]
+                if nonempty:
+                    safety_details.append(
+                        f"{controller_id} safety={nonempty}"
+                    )
             raise ValueError(
                 f"anchor quality failed for {case.case_id!r}: "
-                + "; ".join(quality["failure_reasons"])
+                + "; ".join(
+                    [*quality["failure_reasons"], *safety_details]
+                )
             )
         bad_utility = quality["bad_mean"]
         reference_utility = quality["reference_mean"]

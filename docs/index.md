@@ -6,6 +6,8 @@
 - [Architecture](architecture.md) — package boundaries and runtime flow.
 - [Model infrastructure](model_infrastructure.md) — model and Case contracts.
 - [Capabilities](capabilities.md) — scenarios, controllers, and evidence.
+- [Repository maintenance](maintenance.md) — anchor audit, calibration, and
+  environment profiling commands for maintainers.
 - [Benchmark semantics ADR](adr/0001-benchmark-semantics-v2.md) — redesign
   decision and invariants.
 - Scenario notes:

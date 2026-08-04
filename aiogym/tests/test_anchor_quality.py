@@ -12,9 +12,9 @@ from aiogym.benchmarks.anchors.quality import (
     anchor_quality_statistics,
     validate_anchor_gap,
 )
+from aiogym.benchmarks.anchors.audit import audit_builtin_anchors
 from aiogym.benchmarks.ranking import fixed_anchor_score
 from aiogym.benchmarks.tracks.registry import list_tracks, load_track
-from aiogym.tools.audit_anchors import audit_builtin_anchors
 
 
 LEGACY_DEGENERATE_ANCHORS = (
@@ -93,7 +93,7 @@ def test_official_track_anchor_quality(track_id):
 def test_anchor_audit_covers_every_builtin_fixed_anchor_case():
     rows = audit_builtin_anchors()
 
-    assert len(rows) == 14
+    assert len(rows) == 33
     assert all(row["quality_passed"] for row in rows)
     assert all(row["absolute_gap"] >= 1e-8 for row in rows)
     assert all(row["relative_gap"] >= 1e-4 for row in rows)

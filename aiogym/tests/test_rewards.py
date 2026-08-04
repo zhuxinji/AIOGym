@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from aiogym import make_env as public_make_env
+from aiogym.evaluation.metrics.tracking import tracking_step_metrics
 from aiogym.tests._env import make_test_env as make_env
 from aiogym.rewards import get_reward_spec, list_reward_specs
 from aiogym.rewards.scalarizers import RewardScaleWrapper
@@ -70,6 +71,36 @@ def test_reward_decomposition_is_exact(spec):
         - result.terminal_failure_cost
     )
     assert result.info["reward_spec_id"] == spec
+
+
+def test_cascade_regulation_reward_matches_official_error_integral():
+    env = make_env(
+        "cascade",
+        case="temperature-step",
+        reward_spec="regulation-v1",
+    )
+    try:
+        env.reset(seed=0)
+        action = np.asarray(env.model.default_action(), dtype=np.float32)
+        _, reward, terminated, _, info = env.step(action)
+        tracking = tracking_step_metrics(
+            info,
+            {"y_sp": info["y_sp"]},
+            time_sec=0.0,
+            dt=env.control_dt,
+            env=env,
+        )
+    finally:
+        env.close()
+
+    assert not terminated
+    assert reward == pytest.approx(-info["regulation_cost"])
+    assert info["regulation_slew_cost"] == 0.0
+    assert info["regulation_effort_cost"] == 0.0
+    assert all(value == 0.0 for value in info["applied_cost_penalties"].values())
+    assert info["regulation_cost"] == pytest.approx(
+        tracking["tracking_mse"]
+    )
 
 
 def test_reward_scale_wrapper_changes_only_returned_scalar():

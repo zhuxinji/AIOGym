@@ -16,7 +16,7 @@ from aiogym._internal.validation import seed_sequence
 
 
 VALIDATION_PLAN_SCHEMA_VERSION = "aiogym.validation_plan.v1"
-VALIDATION_STATE_SCHEMA_VERSION = "aiogym.validation_state.v1"
+VALIDATION_STATE_SCHEMA_VERSION = "aiogym.validation_state.v2"
 
 
 @dataclass(frozen=True)
@@ -123,15 +123,45 @@ class CheckpointSelectionRecord:
     official_score: float
     iqm_value: float
     worst_case_value: float
+    anchor_margin_count: int
+    positive_anchor_margin_count: int
+    worst_anchor_margin: float
+    mean_anchor_margin: float
     intervention_cost: float
     rejection_reasons: tuple[str, ...]
 
     @property
-    def selection_key(self) -> tuple[float, float, float]:
+    def selection_key(self) -> tuple[float, ...]:
         sign = 1.0 if self.metric_direction == "maximize" else -1.0
+        if self.anchor_margin_count:
+            fully_above_bad = (
+                self.positive_anchor_margin_count
+                == self.anchor_margin_count
+            )
+            if fully_above_bad:
+                primary = self.official_score
+                secondary = self.worst_anchor_margin
+                tertiary = self.mean_anchor_margin
+            else:
+                primary = self.worst_anchor_margin
+                secondary = self.mean_anchor_margin
+                tertiary = self.official_score
+            return (
+                1.0,
+                float(self.positive_anchor_margin_count),
+                primary,
+                secondary,
+                tertiary,
+                sign * self.iqm_value,
+                -self.intervention_cost,
+            )
         return (
+            0.0,
+            0.0,
             self.official_score,
             sign * self.iqm_value,
+            0.0,
+            0.0,
             -self.intervention_cost,
         )
 
@@ -161,6 +191,17 @@ class EligibilityAwareSelector:
         )
         if values.size == 0 or not np.all(np.isfinite(values)):
             raise ValueError("validation case values must be finite and non-empty")
+        anchor_margins = np.asarray(
+            aggregate.get("case_anchor_margins") or (),
+            dtype=np.float64,
+        )
+        if anchor_margins.size and (
+            anchor_margins.shape != values.shape
+            or not np.all(np.isfinite(anchor_margins))
+        ):
+            raise ValueError(
+                "validation anchor margins must match finite case values"
+            )
         direction = str(aggregate["metric_direction"])
         if direction not in {"minimize", "maximize"}:
             raise ValueError("validation metric direction is invalid")
@@ -203,6 +244,20 @@ class EligibilityAwareSelector:
                 float(np.max(values))
                 if direction == "minimize"
                 else float(np.min(values))
+            ),
+            anchor_margin_count=int(anchor_margins.size),
+            positive_anchor_margin_count=int(
+                np.count_nonzero(anchor_margins > 0.0)
+            ),
+            worst_anchor_margin=(
+                float(np.min(anchor_margins))
+                if anchor_margins.size
+                else 0.0
+            ),
+            mean_anchor_margin=(
+                float(np.mean(anchor_margins))
+                if anchor_margins.size
+                else 0.0
             ),
             intervention_cost=intervention_cost,
             rejection_reasons=reasons,
@@ -462,6 +517,8 @@ def _selection_record_from_state(
         "official_score",
         "iqm_value",
         "worst_case_value",
+        "worst_anchor_margin",
+        "mean_anchor_margin",
         "intervention_cost",
     )
     for name in numeric_names:
@@ -473,6 +530,24 @@ def _selection_record_from_state(
         if not np.isfinite(float(value)):
             raise ValueError(f"selector {name} must be finite")
         payload[name] = float(value)
+    for name in (
+        "anchor_margin_count",
+        "positive_anchor_margin_count",
+    ):
+        value = payload[name]
+        if isinstance(value, bool) or not isinstance(
+            value, (int, np.integer)
+        ):
+            raise TypeError(f"selector {name} must be an integer")
+        if int(value) < 0:
+            raise ValueError(f"selector {name} must be non-negative")
+        payload[name] = int(value)
+    if payload["positive_anchor_margin_count"] > payload[
+        "anchor_margin_count"
+    ]:
+        raise ValueError(
+            "selector positive anchor margin count exceeds Case count"
+        )
     reasons = payload["rejection_reasons"]
     if not isinstance(reasons, (list, tuple)) or not all(
         isinstance(reason, str) for reason in reasons

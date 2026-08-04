@@ -19,7 +19,7 @@ import aiogym
 env = aiogym.make_env(
     "cascade",
     case="continuous-benchmark",
-    reward_spec="economic-v1",
+    reward_spec="economic",
 )
 ```
 
@@ -29,3 +29,11 @@ Goal or RewardSpec choices.
 
 Official Tracks include a regulation generalist, an economic specialist, and a
 recovery diagnostic. Use `aiogym.list_tracks()` for their canonical IDs.
+
+For new regulation experiments, use
+`cascade-regulation-generalist-v2`. It freezes finite fixed-bounds observation
+normalization, treats disturbances as unmeasured, keeps validation/test Case
+identities disjoint, and binds reviewed v3 anchors. The v1 regulation Track is
+retained for compatibility and diagnostics. These software contracts do not
+upgrade the Cascade parameter profile beyond `legacy-unverified`, and the
+economic Track is outside the v2 regulation experiment protocol.

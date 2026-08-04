@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
-import json
 import os
 import pickle
 import random
@@ -13,6 +11,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import numpy as np
+
+from aiogym._internal.serialization import file_sha256, stable_json_hash
 
 from .config import RLTrainingConfig
 
@@ -118,15 +118,7 @@ class TrainingCheckpoint:
         config = RLTrainingConfig.from_mapping(raw_config)
         expected_hash = data.pop("config_hash")
         if config.config_hash != expected_hash:
-            legacy_canonical = json.dumps(
-                raw_config,
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-            )
-            legacy_hash = hashlib.sha256(
-                legacy_canonical.encode("utf-8")
-            ).hexdigest()
+            legacy_hash = stable_json_hash(raw_config, ensure_ascii=False)
             if (
                 raw_config.get("schema_version")
                 != "aiogym.rl_training_config.v2"
@@ -288,14 +280,6 @@ def validate_resume_config(
             "resume training contract changes Track/distribution, algorithm, "
             "observation/action, replay, dataset, or seed contract"
         )
-
-
-def file_sha256(path: str | Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def selected_checkpoint_manifest(

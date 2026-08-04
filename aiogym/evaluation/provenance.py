@@ -3,12 +3,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import multiprocessing
+import platform
 import subprocess
+import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Mapping
 
 from aiogym.rewards.registry import get_reward_spec
+from aiogym._internal.serialization import stable_json_hash
 
 
 ARTIFACT_PROVENANCE_SCHEMA_VERSION = "aiogym.artifact_provenance.v1"
@@ -17,15 +21,7 @@ ARTIFACT_PROVENANCE_SCHEMA_VERSION = "aiogym.artifact_provenance.v1"
 def stable_hash(value: Any) -> str:
     """Hash one JSON-compatible value with stable ordering."""
 
-    payload = json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-        default=str,
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return stable_json_hash(value, default=str)
 
 
 def reward_spec_hash(reward_spec_id: str) -> str:
@@ -37,10 +33,61 @@ def seed_namespace_hash(namespace: str) -> str:
 
 
 def package_version() -> str:
+    from aiogym import __version__
+
+    return __version__
+
+
+def _installed_version(distribution: str) -> str | None:
     try:
-        return version("aiogym")
+        return version(distribution)
     except PackageNotFoundError:
-        return "0.1.0"
+        return None
+
+
+def runtime_environment(
+    *,
+    vector_backend: str | None = None,
+    multiprocessing_start_method: str | None = None,
+) -> dict[str, Any]:
+    """Return JSON-safe runtime metadata without importing optional packages."""
+
+    torch = sys.modules.get("torch")
+    cuda_available = None
+    cuda_runtime = None
+    device_name = None
+    torch_threads = None
+    if torch is not None:
+        cuda_available = bool(torch.cuda.is_available())
+        cuda_runtime = getattr(getattr(torch, "version", None), "cuda", None)
+        torch_threads = int(torch.get_num_threads())
+        if cuda_available:
+            device_name = str(torch.cuda.get_device_name(0))
+    resolved_start_method = multiprocessing_start_method
+    if resolved_start_method is None:
+        resolved_start_method = multiprocessing.get_start_method(allow_none=True)
+    payload = {
+        "python_version": platform.python_version(),
+        "platform": platform.platform(),
+        "operating_system": platform.system(),
+        "machine": platform.machine(),
+        "aiogym_version": package_version(),
+        "numpy_version": _installed_version("numpy"),
+        "gymnasium_version": _installed_version("gymnasium"),
+        "torch_version": _installed_version("torch"),
+        "stable_baselines3_version": _installed_version("stable-baselines3"),
+        "casadi_version": _installed_version("casadi"),
+        "onnx_version": _installed_version("onnx"),
+        "onnxruntime_version": _installed_version("onnxruntime"),
+        "cuda_available": cuda_available,
+        "cuda_runtime": cuda_runtime,
+        "device_name": device_name,
+        "torch_threads": torch_threads,
+        "vector_backend": vector_backend,
+        "multiprocessing_start_method": resolved_start_method,
+    }
+    json.dumps(payload, allow_nan=False)
+    return payload
 
 
 def code_commit() -> str | None:
@@ -145,6 +192,7 @@ def track_provenance(
         "model_access_level": access_level,
         "code_commit": code_commit(),
         "package_version": package_version(),
+        "runtime_environment": runtime_environment(),
         "custom_override_hash": stable_hash(dict(custom_overrides or {})),
         "eligibility": eligibility_record(
             eligible=eligible,
@@ -172,6 +220,7 @@ __all__ = [
     "eligibility_record",
     "package_version",
     "reward_spec_hash",
+    "runtime_environment",
     "seed_namespace_hash",
     "stable_hash",
     "track_provenance",

@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import hashlib
-import json
 import math
 from types import MappingProxyType
 from typing import Any, Callable, Literal, Mapping, Sequence
+
+from aiogym._internal.serialization import stable_json_hash
 
 
 GoalName = Literal["regulation", "economic"]
@@ -117,14 +117,7 @@ class RewardSpec:
     def spec_hash(self) -> str:
         """SHA-256 identity of the complete canonical reward definition."""
 
-        canonical = json.dumps(
-            self.as_dict(),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-            allow_nan=False,
-        )
-        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        return stable_json_hash(self.as_dict())
 
     @property
     def canonical(self) -> bool:

@@ -1,6 +1,11 @@
 """Setpoint-tracking metrics for evaluation."""
 from __future__ import annotations
 
+from aiogym._internal.control_math import (
+    normalized_tracking_error_sum,
+    normalized_tracking_errors,
+)
+
 
 def tracking_step_metrics(info, setpoint, time_sec: float, dt: float, env):
     y = list(info["y"])
@@ -46,20 +51,15 @@ def tracking_step_metrics(info, setpoint, time_sec: float, dt: float, env):
     }
 
 
-def normalized_tracking_error_sum(model, y, y_sp) -> float:
-    return float(sum(abs(err) for err in normalized_tracking_errors(model, y, y_sp)))
-
-
 def raw_tracking_errors(y, y_sp):
     """Return signed controlled-output errors without range normalization."""
 
     return [float(value) - float(setpoint) for value, setpoint in zip(y, y_sp)]
 
 
-def normalized_tracking_errors(model, y, y_sp):
-    errors = []
-    scales = list(model.controlled_output_scales())
-    for i, (value, setpoint) in enumerate(zip(y, y_sp)):
-        scale = scales[i] if i < len(scales) else 1.0
-        errors.append((float(value) - float(setpoint)) / max(float(scale), 1e-12))
-    return errors
+__all__ = [
+    "normalized_tracking_error_sum",
+    "normalized_tracking_errors",
+    "raw_tracking_errors",
+    "tracking_step_metrics",
+]

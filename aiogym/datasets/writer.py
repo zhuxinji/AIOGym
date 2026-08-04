@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 import os
 import re
@@ -11,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+
+from aiogym._internal.serialization import file_sha256, stable_json_hash
 
 from .schema import DATASET_SCHEMA_VERSION, DatasetEpisode
 
@@ -277,16 +278,7 @@ class DatasetWriter:
 def manifest_with_hash(manifest: dict) -> dict:
     payload = copy.deepcopy(dict(manifest))
     payload.pop("manifest_hash", None)
-    canonical = json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    )
-    payload["manifest_hash"] = hashlib.sha256(
-        canonical.encode("utf-8")
-    ).hexdigest()
+    payload["manifest_hash"] = stable_json_hash(payload)
     return payload
 
 
@@ -302,14 +294,6 @@ def load_manifest(path: str | Path) -> dict:
         raise ValueError("dataset manifest hash mismatch")
     manifest.pop("manifest_hash", None)
     return manifest
-
-
-def file_sha256(path: str | Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _atomic_write_json(path: Path, data: dict) -> None:

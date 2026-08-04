@@ -6,7 +6,6 @@ import aiogym
 from aiogym.tests._env import make_test_env
 from aiogym.evaluation.goal_specs import goal_spec
 from aiogym.evaluation.metric_catalog import (
-    EVALUATION_SCHEMA_VERSION,
     METRIC_DEFINITIONS,
     SCORECARD_GROUPS,
     metric_definitions,

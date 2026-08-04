@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import copy
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
 from aiogym import load_track
+from aiogym._internal.serialization import file_sha256
 from aiogym.evaluation.statistics import build_final_statistical_report
 from aiogym.rl.config import RLTrainingConfig
 from aiogym.rl.final_test import FinalTestLock
@@ -130,6 +133,278 @@ def test_validation_callback_state_round_trip():
     restored.load_state_dict(callback.state_dict())
     assert restored.selector.best.checkpoint_id == "step-10"
     assert len(restored.history) == 1
+
+
+def _sb3_curve_harness(tmp_path, monkeypatch, outcomes):
+    from aiogym.rl.backends import sb3 as sb3_backend
+
+    track = load_track("quadruple-regulation-generalist-v1")
+    plan = SimpleNamespace(
+        track=track,
+        config=SimpleNamespace(
+            evaluation={"every_transitions": 100},
+            validation_seeds=(5000,),
+        ),
+    )
+    pending = list(outcomes)
+    resumable_states = []
+
+    def evaluate(
+        plan,
+        model,
+        step,
+        phase="eval",
+        *,
+        validation_callback,
+        checkpoint_id,
+        **kwargs,
+    ):
+        values, eligible = pending.pop(0)
+        result = _validation_evaluation(
+            track,
+            values=values,
+            eligible=eligible,
+        )
+        validation_callback.selector.consider(
+            checkpoint_id,
+            result,
+            step=step,
+        )
+        return {
+            "step": int(step),
+            "phase": phase,
+            **result["aggregate"],
+            "track_id": track.id,
+            "track_split": "validation",
+            "seed_namespace": track.seed_namespace("validation"),
+            "case_values": list(result["aggregate"]["case_values"]),
+            "validation_plan_hash": validation_callback.plan.plan_hash,
+        }
+
+    class FakeModel:
+        def __init__(self):
+            self.saved = []
+
+        def save(self, path):
+            target = str(path)
+            self.saved.append(target)
+            with open(target, "wb") as stream:
+                stream.write(f"checkpoint-{len(self.saved)}".encode())
+
+    monkeypatch.setattr(sb3_backend, "evaluate_training_policy", evaluate)
+    monkeypatch.setattr(
+        sb3_backend,
+        "save_resumable_training_state",
+        lambda *args, **kwargs: resumable_states.append(kwargs),
+    )
+    policy = tmp_path / "selected.zip"
+    callback = sb3_backend.make_learning_curve_callback(plan, policy)
+    callback.model = FakeModel()
+    return callback, policy, resumable_states, pending
+
+
+@pytest.mark.rl
+def test_sb3_final_checkpoint_can_replace_periodic_best(tmp_path, monkeypatch):
+    callback, policy, states, pending = _sb3_curve_harness(
+        tmp_path,
+        monkeypatch,
+        [([2.0, 2.2], True), ([1.0, 1.2], True)],
+    )
+    callback.evaluate_checkpoint(
+        step=100,
+        checkpoint_id="step-100",
+        phase="eval",
+    )
+    callback.evaluate_checkpoint(
+        step=150,
+        checkpoint_id="final-step-150",
+        phase="final",
+    )
+    assert callback.validator.selector.best.checkpoint_id == "final-step-150"
+    assert callback.best_step == 150
+    assert policy.is_file()
+    assert states[-1]["selected_checkpoint"]["selection_record"]["step"] == 150
+    assert pending == []
+
+
+@pytest.mark.rl
+def test_sb3_worse_final_checkpoint_preserves_periodic_best(
+    tmp_path,
+    monkeypatch,
+):
+    callback, _, _, _ = _sb3_curve_harness(
+        tmp_path,
+        monkeypatch,
+        [([1.0, 1.2], True), ([2.0, 2.2], True)],
+    )
+    callback.evaluate_checkpoint(
+        step=100,
+        checkpoint_id="step-100",
+        phase="eval",
+    )
+    callback.evaluate_checkpoint(
+        step=150,
+        checkpoint_id="final-step-150",
+        phase="final",
+    )
+    assert callback.validator.selector.best.checkpoint_id == "step-100"
+    assert callback.best_step == 100
+    assert len(callback.model.saved) == 1
+
+
+@pytest.mark.rl
+def test_sb3_final_step_on_boundary_is_not_evaluated_twice(
+    tmp_path,
+    monkeypatch,
+):
+    callback, _, _, pending = _sb3_curve_harness(
+        tmp_path,
+        monkeypatch,
+        [([1.0, 1.2], True)],
+    )
+    callback.evaluate_checkpoint(
+        step=100,
+        checkpoint_id="step-100",
+        phase="eval",
+    )
+    row = callback.evaluate_checkpoint(
+        step=100,
+        checkpoint_id="final-step-100",
+        phase="final",
+    )
+    assert row["phase"] == "final"
+    assert len(callback.history) == 1
+    assert len(callback.validator.selector.records) == 1
+    assert pending == []
+
+
+@pytest.mark.rl
+def test_sb3_ineligible_final_checkpoint_cannot_be_selected(
+    tmp_path,
+    monkeypatch,
+):
+    callback, _, _, _ = _sb3_curve_harness(
+        tmp_path,
+        monkeypatch,
+        [([2.0, 2.2], True), ([0.1, 0.2], False)],
+    )
+    callback.evaluate_checkpoint(
+        step=100,
+        checkpoint_id="step-100",
+        phase="eval",
+    )
+    callback.evaluate_checkpoint(
+        step=150,
+        checkpoint_id="final-step-150",
+        phase="final",
+    )
+    assert callback.validator.selector.best.checkpoint_id == "step-100"
+    assert callback.validator.selector.records[-1].rejection_reasons == (
+        "hard_termination",
+    )
+
+
+@pytest.mark.rl
+def test_sb3_resume_and_final_checkpoint_ids_are_unique(
+    tmp_path,
+    monkeypatch,
+):
+    callback, _, _, _ = _sb3_curve_harness(
+        tmp_path,
+        monkeypatch,
+        [([2.0, 2.2], True), ([1.0, 1.2], True)],
+    )
+    callback.evaluate_checkpoint(
+        step=125,
+        checkpoint_id="resume-step-125",
+        phase="resume",
+    )
+    callback.evaluate_checkpoint(
+        step=175,
+        checkpoint_id="final-step-175",
+        phase="final",
+    )
+    ids = [
+        record.checkpoint_id
+        for record in callback.validator.selector.records
+    ]
+    assert ids == ["resume-step-125", "final-step-175"]
+    assert len(ids) == len(set(ids))
+
+
+@pytest.mark.rl
+def test_sb3_selected_manifest_hash_matches_selected_policy(
+    tmp_path,
+    monkeypatch,
+):
+    callback, policy, states, _ = _sb3_curve_harness(
+        tmp_path,
+        monkeypatch,
+        [([1.0, 1.2], True)],
+    )
+    callback.evaluate_checkpoint(
+        step=150,
+        checkpoint_id="final-step-150",
+        phase="final",
+    )
+    selected = states[-1]["selected_checkpoint"]
+    assert selected["sha256"] == file_sha256(policy)
+    assert selected["selection_record"] == (
+        callback.validator.selector.best.__dict__
+    )
+
+
+@pytest.mark.rl
+def test_sb3_learning_curve_contains_each_step_once(tmp_path, monkeypatch):
+    callback, _, _, _ = _sb3_curve_harness(
+        tmp_path,
+        monkeypatch,
+        [([2.0, 2.2], True), ([1.0, 1.2], True)],
+    )
+    callback.evaluate_checkpoint(
+        step=100,
+        checkpoint_id="step-100",
+        phase="eval",
+    )
+    callback.evaluate_checkpoint(
+        step=200,
+        checkpoint_id="step-200",
+        phase="eval",
+    )
+    callback.evaluate_checkpoint(
+        step=200,
+        checkpoint_id="final-step-200",
+        phase="final",
+    )
+    steps = [row["timesteps"] for row in callback.history]
+    assert steps == [100, 200]
+    assert len(steps) == len(set(steps))
+
+
+@pytest.mark.rl
+def test_sb3_best_fields_match_selector_best(tmp_path, monkeypatch):
+    callback, _, _, _ = _sb3_curve_harness(
+        tmp_path,
+        monkeypatch,
+        [
+            ([3.0, 3.2], True),
+            ([1.0, 1.2], True),
+            ([2.0, 2.2], True),
+        ],
+    )
+    for step, checkpoint_id, phase in (
+        (100, "step-100", "eval"),
+        (200, "step-200", "eval"),
+        (250, "final-step-250", "final"),
+    ):
+        callback.evaluate_checkpoint(
+            step=step,
+            checkpoint_id=checkpoint_id,
+            phase=phase,
+        )
+    best = callback.validator.selector.best
+    assert callback.best_step == best.step == 200
+    assert callback.best_metric_value == best.metric_value == 1.1
 
 
 def test_hpo_does_not_override_reward_or_track():

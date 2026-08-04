@@ -17,7 +17,6 @@ from aiogym.generation.seed_tree import (
 )
 from aiogym.generation.specs import (
     DISTRIBUTION_SCHEMA_VERSION,
-    EPISODE_SPEC_SCHEMA_VERSION,
     DistributionSpec,
     EpisodeSpec,
 )

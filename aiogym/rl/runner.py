@@ -2,15 +2,24 @@
 from __future__ import annotations
 
 import json
-import hashlib
 import os
 import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Sequence
 
-from aiogym._internal.serialization import write_json_artifact
+import numpy as np
+
+from aiogym._internal.serialization import (
+    file_sha256,
+    stable_json_hash,
+    write_json_artifact,
+)
 from aiogym._internal.validation import seed_sequence
+from aiogym.evaluation.statistics import (
+    interquartile_mean,
+    stratified_bootstrap_ci,
+)
 
 from .backends import run_backend, validate_backend_result
 from .config import RLTrainingConfig
@@ -134,9 +143,9 @@ def run_experiment(
         )
         _atomic_json(run_result_path, result.as_dict())
         claim.complete(
-            run_result_hash=_file_sha256(run_result_path),
+            run_result_hash=file_sha256(run_result_path),
             artifact_hash=(
-                _file_sha256(artifact_path) if artifact_path.is_file() else None
+                file_sha256(artifact_path) if artifact_path.is_file() else None
             ),
         )
     except BaseException as exc:
@@ -208,9 +217,10 @@ def run_seed_sweep(
             "seeds": list(resolved_seeds),
             "runs": [result.as_dict() for result in results],
             "validation_summary": _summarize_validations(results),
+            "training_seed_statistics": _training_seed_statistics(results),
         }
         write_json_artifact(summary_path, summary, overwrite=overwrite)
-        claim.complete(summary_hash=_file_sha256(summary_path))
+        claim.complete(summary_hash=file_sha256(summary_path))
     except BaseException as exc:
         claim.fail(exc)
         raise
@@ -255,6 +265,128 @@ def _summarize_validations(results) -> dict[str, Any]:
     }
 
 
+def _training_seed_statistics(results) -> dict[str, Any]:
+    """Summarize validation with independent training seeds as rows."""
+
+    evaluations = [result.validation for result in results]
+    populated = [
+        evaluation
+        for evaluation in evaluations
+        if evaluation.get("aggregate")
+    ]
+    if not populated:
+        return {}
+    if len(populated) != len(results):
+        raise ValueError(
+            "every training-seed run must contain a validation aggregate"
+        )
+
+    identity = None
+    case_ids = None
+    case_hashes = None
+    matrix = []
+    run_values = []
+    official_scores = []
+    eligibility = []
+    selected_steps = []
+    training_seeds = []
+    for result, evaluation in zip(results, populated):
+        aggregate = dict(evaluation["aggregate"])
+        rows = list(evaluation.get("results") or ())
+        current_case_ids = tuple(str(row["case_id"]) for row in rows)
+        current_case_hashes = tuple(
+            str(row.get("resolved_case_hash", "")) for row in rows
+        )
+        case_values = [float(value) for value in aggregate["case_values"]]
+        if not current_case_ids or len(current_case_ids) != len(case_values):
+            raise ValueError(
+                "validation results must preserve ordered Case rows matching "
+                "aggregate.case_values"
+            )
+        current_identity = (
+            str(result.track_id),
+            str(result.track_hash),
+            str(evaluation.get("track_id")),
+            str(evaluation.get("track_hash")),
+            str(result.validation_plan_hash),
+            str(evaluation.get("episode_plan_hash")),
+            str(aggregate["metric"]),
+            str(aggregate["metric_direction"]),
+        )
+        if identity is None:
+            identity = current_identity
+            case_ids = current_case_ids
+            case_hashes = current_case_hashes
+        elif (
+            current_identity != identity
+            or current_case_ids != case_ids
+            or current_case_hashes != case_hashes
+        ):
+            raise ValueError(
+                "training-seed validations must share Track/hash, validation "
+                "plan/hash, metric, and ordered Cases"
+            )
+        if (
+            current_identity[0] != current_identity[2]
+            or current_identity[1] != current_identity[3]
+            or current_identity[4] != current_identity[5]
+        ):
+            raise ValueError(
+                "run identity does not match its validation identity"
+            )
+        matrix.append(case_values)
+        run_values.append(float(aggregate["metric_value"]))
+        official_scores.append(float(aggregate.get("official_score", 0.0)))
+        eligibility.append(bool(aggregate.get("ranking_eligible", True)))
+        selected_step = result.backend.get("selected_checkpoint_step")
+        if selected_step is None:
+            selected_step = result.backend.get("final_step")
+        selected_steps.append(
+            None if selected_step is None else int(selected_step)
+        )
+        training_seeds.append(int(result.training_seed))
+
+    case_matrix = np.asarray(matrix, dtype=np.float64)
+    run_array = np.asarray(run_values, dtype=np.float64)
+    score_array = np.asarray(official_scores, dtype=np.float64)
+    if not (
+        np.all(np.isfinite(case_matrix))
+        and np.all(np.isfinite(run_array))
+        and np.all(np.isfinite(score_array))
+    ):
+        raise ValueError("training-seed statistics require finite values")
+    direction = identity[-1]
+    if direction not in {"minimize", "maximize"}:
+        raise ValueError("validation metric direction is invalid")
+    worst_index = int(
+        np.argmax(run_array) if direction == "minimize" else np.argmin(run_array)
+    )
+    return {
+        "unit": "independent_training_seed",
+        "training_seeds": training_seeds,
+        "metric": identity[-2],
+        "metric_direction": direction,
+        "case_ids": list(case_ids),
+        "case_matrix": case_matrix.tolist(),
+        "run_metric_values": run_array.tolist(),
+        "mean": float(np.mean(run_array)),
+        "std": float(np.std(run_array, ddof=1)) if len(run_array) > 1 else 0.0,
+        "median": float(np.median(run_array)),
+        "iqm": interquartile_mean(case_matrix),
+        "iqm_bootstrap": stratified_bootstrap_ci(case_matrix),
+        "official_score_mean": float(np.mean(score_array)),
+        "official_score_std": (
+            float(np.std(score_array, ddof=1)) if len(score_array) > 1 else 0.0
+        ),
+        "ranking_eligibility_rate": float(np.mean(eligibility)),
+        "worst_training_seed": {
+            "training_seed": training_seeds[worst_index],
+            "metric_value": float(run_array[worst_index]),
+        },
+        "selected_checkpoint_steps": selected_steps,
+    }
+
+
 def _compact_validation(evaluation) -> dict[str, Any]:
     if not evaluation or not evaluation.get("aggregate"):
         return {}
@@ -265,6 +397,19 @@ def _compact_validation(evaluation) -> dict[str, Any]:
         "base_seeds": list(evaluation.get("base_seeds") or ()),
         "episode_plan_hash": evaluation.get("episode_plan_hash"),
         "case_count": evaluation.get("case_count"),
+        "results": [
+            {
+                name: row.get(name)
+                for name in (
+                    "case_id",
+                    "resolved_case_hash",
+                    "ranking_utility",
+                    "official_score",
+                    "ranking_eligible",
+                )
+            }
+            for row in evaluation.get("results", ())
+        ],
         "aggregate": aggregate,
     }
 
@@ -320,22 +465,8 @@ def _clear_file_outputs(plan, run_result_path: Path) -> None:
             path.unlink()
 
 
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
 def _mapping_sha256(value: dict[str, Any]) -> str:
-    payload = json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return stable_json_hash(value)
 
 
 __all__ = [

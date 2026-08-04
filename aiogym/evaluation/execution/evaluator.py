@@ -54,7 +54,41 @@ def evaluate_controller(agent, env, episodes: int = 1, seed: int = 0,
                         episode_specs: Sequence | None = None,
                         _rollout_capture: dict | None = None,
                         rollout_steps: int | None = None):
-    """Evaluate any supported controller/policy on an environment from ``make_env``.
+    """Stable evaluator entry point delegating to the internal rollout pipeline."""
+
+    return _execute_controller_evaluation(
+        agent,
+        env,
+        episodes=episodes,
+        seed=seed,
+        include_episodes=include_episodes,
+        seed_list=seed_list,
+        goal_specification=goal_specification,
+        safety_mode=safety_mode,
+        safety_gate_spec=safety_gate_spec,
+        initial_safety_debt=initial_safety_debt,
+        seed_namespace=seed_namespace,
+        worker_index=worker_index,
+        episode_specs=episode_specs,
+        _rollout_capture=_rollout_capture,
+        rollout_steps=rollout_steps,
+    )
+
+
+def _execute_controller_evaluation(
+        agent, env, episodes: int = 1, seed: int = 0,
+        include_episodes: bool = False,
+        seed_list: Sequence[int] | None = None,
+        *, goal_specification: GoalSpec | str | None = None,
+        safety_mode: str | None = None,
+        safety_gate_spec: SafetyGateSpec | None = None,
+        initial_safety_debt: bool | None = None,
+        seed_namespace: str | None = None,
+        worker_index: int = 0,
+        episode_specs: Sequence | None = None,
+        _rollout_capture: dict | None = None,
+        rollout_steps: int | None = None):
+    """Execute resolution, rollout, aggregation, and safety-gate phases.
 
     Returns aggregate metrics plus the goal/controller metadata needed to
     reproduce the benchmark.

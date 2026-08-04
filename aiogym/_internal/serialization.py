@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import tempfile
 from datetime import datetime, timezone
@@ -10,6 +11,68 @@ from typing import Any
 
 
 JSON_WRITE_CLAIM_SCHEMA_VERSION = "aiogym.json_write_claim.v1"
+
+
+def canonical_json_bytes(
+    value: Any,
+    *,
+    default=None,
+    ensure_ascii: bool = True,
+    allow_nan: bool = False,
+    sort_keys: bool = True,
+) -> bytes:
+    """Encode a JSON value using the repository's compact canonical form."""
+
+    return json.dumps(
+        value,
+        sort_keys=sort_keys,
+        separators=(",", ":"),
+        ensure_ascii=ensure_ascii,
+        allow_nan=allow_nan,
+        default=default,
+    ).encode("utf-8")
+
+
+def stable_json_hash(value: Any, **kwargs) -> str:
+    return hashlib.sha256(canonical_json_bytes(value, **kwargs)).hexdigest()
+
+
+def file_sha256(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def atomic_write_json(
+    path: str | Path,
+    value: Any,
+    *,
+    overwrite: bool = False,
+    sort_keys: bool = True,
+) -> Path:
+    """Atomically write ordinary JSON without the artifact claim protocol."""
+
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists() and not overwrite:
+        raise FileExistsError(f"JSON target already exists: {target}")
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, indent=2, sort_keys=sort_keys, allow_nan=False)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, target)
+        _fsync_directory(target.parent)
+        return target
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def jsonable(value):

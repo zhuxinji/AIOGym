@@ -10,7 +10,6 @@ from aiogym.catalog import (
     list_controllers,
     list_scenarios,
 )
-from aiogym.benchmarks.tracks.registry import list_tracks
 
 
 def _benchmark(argv):
@@ -80,8 +79,72 @@ def _list_cases(args):
     _print_items(list_cases(args.scenario))
 
 
-def _list_tracks(_args):
-    _print_items(list_tracks())
+def _list_tracks(args):
+    from aiogym.cli.describe import render_track_catalog
+
+    print(render_track_catalog(ids=args.ids, json_output=args.json_output))
+
+
+def _list_rewards(args):
+    from aiogym.cli.describe import render_reward_catalog
+
+    print(render_reward_catalog(json_output=args.json_output))
+
+
+def _list_profiles(args):
+    from aiogym.cli.describe import render_profile_catalog
+
+    try:
+        output = render_profile_catalog(
+            kind=args.kind,
+            target=args.target,
+            algorithm=args.algorithm,
+            json_output=args.json_output,
+        )
+    except (FileNotFoundError, TypeError, ValueError) as exc:
+        args.selected_parser.error(str(exc))
+    print(output)
+
+
+def _describe_track(args):
+    from aiogym.cli.describe import render_track_description
+
+    try:
+        output = render_track_description(
+            args.target,
+            json_output=args.json_output,
+        )
+    except (FileNotFoundError, TypeError, ValueError) as exc:
+        args.selected_parser.error(str(exc))
+    print(output)
+
+
+def _describe_reward(args):
+    from aiogym.cli.describe import render_reward_description
+
+    try:
+        output = render_reward_description(
+            args.reward,
+            json_output=args.json_output,
+        )
+    except (FileNotFoundError, TypeError, ValueError) as exc:
+        args.selected_parser.error(str(exc))
+    print(output)
+
+
+def _describe_profile(args):
+    from aiogym.cli.describe import render_profile_description
+
+    try:
+        output = render_profile_description(
+            args.profile,
+            target=args.target,
+            algorithm=args.algorithm,
+            json_output=args.json_output,
+        )
+    except (FileNotFoundError, TypeError, ValueError) as exc:
+        args.selected_parser.error(str(exc))
+    print(output)
 
 
 def _list_controllers(_args):
@@ -139,7 +202,49 @@ def build_parser():
     cases.set_defaults(handler=_list_cases, selected_parser=cases)
 
     tracks = list_commands.add_parser("tracks", help="official benchmark tracks")
+    track_output = tracks.add_mutually_exclusive_group()
+    track_output.add_argument(
+        "--ids",
+        action="store_true",
+        help="print canonical IDs only",
+    )
+    track_output.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="print structured JSON",
+    )
     tracks.set_defaults(handler=_list_tracks, selected_parser=tracks)
+
+    rewards = list_commands.add_parser(
+        "rewards",
+        help="canonical reward specifications",
+    )
+    rewards.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="print structured JSON",
+    )
+    rewards.set_defaults(handler=_list_rewards, selected_parser=rewards)
+
+    profiles = list_commands.add_parser(
+        "profiles",
+        help="versioned training and collection profiles",
+    )
+    profiles.add_argument(
+        "--kind",
+        choices=("training", "collection"),
+    )
+    profiles.add_argument("--target")
+    profiles.add_argument("--algorithm")
+    profiles.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="print structured JSON",
+    )
+    profiles.set_defaults(handler=_list_profiles, selected_parser=profiles)
 
     controllers = list_commands.add_parser("controllers", help="registered controllers")
     controllers.set_defaults(handler=_list_controllers, selected_parser=controllers)
@@ -149,6 +254,63 @@ def build_parser():
         help="stable training algorithms",
     )
     algorithms.set_defaults(handler=_list_algorithms, selected_parser=algorithms)
+
+    describe = commands.add_parser(
+        "describe",
+        help="describe a canonical resource",
+    )
+    describe.set_defaults(selected_parser=describe)
+    describe_commands = describe.add_subparsers(
+        dest="describe_resource",
+        metavar="RESOURCE",
+    )
+
+    describe_track = describe_commands.add_parser(
+        "track",
+        help="describe an official Track",
+    )
+    describe_track.add_argument("target")
+    describe_track.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+    )
+    describe_track.set_defaults(
+        handler=_describe_track,
+        selected_parser=describe_track,
+    )
+
+    describe_reward = describe_commands.add_parser(
+        "reward",
+        help="describe a canonical reward",
+    )
+    describe_reward.add_argument("reward")
+    describe_reward.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+    )
+    describe_reward.set_defaults(
+        handler=_describe_reward,
+        selected_parser=describe_reward,
+    )
+
+    describe_profile = describe_commands.add_parser(
+        "profile",
+        help="describe a versioned profile",
+    )
+    describe_profile.add_argument("profile")
+    describe_profile.add_argument("--target")
+    describe_profile.add_argument("--algorithm")
+    describe_profile.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+    )
+    describe_profile.set_defaults(
+        handler=_describe_profile,
+        selected_parser=describe_profile,
+    )
 
     for name, help_text in _COMMAND_HELP.items():
         delegated = commands.add_parser(name, help=help_text, add_help=False)

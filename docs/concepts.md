@@ -34,13 +34,17 @@ Built-ins live under `aiogym/models/cases/builtin/<scenario>/`.
 
 A RewardSpec defines the scalar reward used by learning:
 
-- `regulation-v1`
-- `economic-v1`
+- `regulation` resolves to canonical `regulation-v1`;
+- `economic` resolves to canonical `economic-v1`.
 
 Both use the canonical reward engine and expose a decomposition in transition
 info. Reward selection does not change state evolution. A
 `RewardScaleWrapper` can rescale the returned scalar without changing scorecard
 measurements.
+
+Run `aiogym describe reward regulation` or `aiogym describe reward economic`
+to inspect every reward term, cost channel, weight, and consuming Track. Human
+descriptions are display metadata and do not participate in RewardSpec hashes.
 
 ## Goal and Scorecard
 

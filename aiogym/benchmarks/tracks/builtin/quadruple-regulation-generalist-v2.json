@@ -1,0 +1,176 @@
+{
+  "schema_version": "aiogym.benchmark_track.v1",
+  "id": "quadruple-regulation-generalist-v2",
+  "description": "Split-isolated v2 regulation protocol across principal quadruple-tank regimes and held-out robustness cases.",
+  "scenario": "quadruple",
+  "goal": "regulation",
+  "reward_spec": "regulation-v1",
+  "scorecard_spec": "process-control-v1",
+  "policy_scope": "generalist",
+  "policy_contract": {
+    "action_mode": "actuator",
+    "control_dt": 1.0,
+    "disturbance_obs": false,
+    "previous_action_obs": true,
+    "normalize_observations": true,
+    "tracking_error_obs": true,
+    "observation_mode": "full_state",
+    "temporal_observation": "single_step",
+    "history_length": 1,
+    "include_action_history": false,
+    "recurrent_state_shape": [],
+    "case_id_obs": false
+  },
+  "training": {
+    "distribution_id": "quadruple-regulation-training-l2-v1",
+    "cases": [
+      {"case": "minimum-phase", "weight": 1.0},
+      {"case": "nonminimum-phase", "weight": 1.0}
+    ],
+    "seed_spec": {"namespace": "quadruple-regulation-training-v2"}
+  },
+  "validation": {
+    "cases": [
+      {
+        "base_case": "minimum-phase",
+        "variant_id": "validation-offset-v2",
+        "overrides": {
+          "initialization": {
+            "state": [12.6629675195507, 12.483158403008971, 1.6339411322567796, 1.409044702533737],
+            "basis": "deterministic medium held-inventory offset for v2 validation"
+          },
+          "setpoints": {
+            "initial": [12.2629675195507, 12.783158403008972],
+            "schedule": [
+              {"at_step": 180, "values": [13.0129675195507, 12.033158403008972], "description": "opposed 0.75 cm v2 validation move"},
+              {"at_step": 420, "values": [11.5129675195507, 13.533158403008972], "description": "reversed 0.75 cm v2 validation move"}
+            ]
+          }
+        }
+      },
+      {
+        "base_case": "nonminimum-phase",
+        "variant_id": "validation-offset-v2",
+        "overrides": {
+          "initialization": {
+            "state": [12.091864220183484, 13.616812925360237, 4.730260670665678, 4.986334403669725],
+            "basis": "deterministic medium opposed lower-tank offset for v2 validation"
+          },
+          "setpoints": {
+            "initial": [12.441864220183483, 13.166812925360238],
+            "schedule": [
+              {"at_step": 240, "values": [13.191864220183483, 12.666812925360238], "description": "asymmetric nonminimum-phase v2 validation move"}
+            ]
+          }
+        }
+      }
+    ],
+    "seed_spec": {"namespace": "quadruple-regulation-validation-v2"}
+  },
+  "test": {
+    "cases": [
+      {
+        "base_case": "minimum-phase",
+        "variant_id": "heldout-v2",
+        "overrides": {
+          "initialization": {
+            "state": [11.6129675195507, 13.333158403008972, 1.6339411322567796, 1.409044702533737],
+            "basis": "deterministic held-out lower-tank offset for v2 test"
+          },
+          "setpoints": {
+            "initial": [12.2629675195507, 12.783158403008972],
+            "schedule": [
+              {"at_step": 210, "values": [11.2629675195507, 13.533158403008972], "description": "held-out opposed v2 test move"},
+              {"at_step": 450, "values": [13.0129675195507, 12.033158403008972], "description": "held-out reversed v2 test move"}
+            ]
+          }
+        },
+        "group": "nominal-id"
+      },
+      {
+        "base_case": "nonminimum-phase",
+        "variant_id": "heldout-v2",
+        "overrides": {
+          "initialization": {
+            "state": [13.041864220183483, 12.666812925360238, 4.730260670665678, 4.986334403669725],
+            "basis": "deterministic held-out opposed lower-tank offset for v2 test"
+          },
+          "setpoints": {
+            "initial": [12.441864220183483, 13.166812925360238],
+            "schedule": [
+              {"at_step": 300, "values": [11.541864220183483, 13.816812925360238], "description": "held-out nonminimum-phase v2 test move"}
+            ]
+          }
+        },
+        "group": "dynamics"
+      },
+      {
+        "base_case": "zero-boundary-stress",
+        "variant_id": "heldout-v2",
+        "overrides": {
+          "initialization": {
+            "state": [12.733018696232188, 12.40768126254797, 3.0891699531729735, 3.1703505807009074],
+            "basis": "deterministic held-out offset at the transmission-zero boundary"
+          },
+          "setpoints": {
+            "initial": [12.283018696232189, 12.757681262547969],
+            "schedule": [
+              {"at_step": 260, "values": [11.533018696232189, 13.257681262547969], "description": "held-out opposed demand at the zero boundary"}
+            ]
+          }
+        },
+        "group": "stress"
+      },
+      {
+        "base_case": "disturbance-rejection",
+        "variant_id": "heldout-nominal-v2",
+        "overrides": {
+          "initialization": {
+            "state": [11.7, 12.2, 1.5, 1.3],
+            "basis": "shared feasible offset for the v2 hidden-disturbance pair"
+          },
+          "disturbances": [],
+          "acceptance": {
+            "required_checks": ["deterministic_disturbance_schedule", "disturbance_hidden_from_controller", "finite_recovery_rollout", "constraint_accounting"]
+          }
+        },
+        "group": "disturbance",
+        "pair_id": "quadruple-hidden-disturbance-v2",
+        "base_case_id": "disturbance-rejection",
+        "condition": "nominal"
+      },
+      {
+        "base_case": "disturbance-rejection",
+        "variant_id": "heldout-shifted-v2",
+        "overrides": {
+          "initialization": {
+            "state": [11.7, 12.2, 1.5, 1.3],
+            "basis": "shared feasible offset for the v2 hidden-disturbance pair"
+          },
+          "disturbances": [
+            {"at_step": 180, "name": "pump_flow_factor", "value": 0.78, "description": "22% held-out common pump-capacity loss"},
+            {"at_step": 360, "name": "pump_flow_factor", "value": 1.0, "description": "pump capacity restored"},
+            {"at_step": 500, "name": "outlet_area_factor", "value": 0.85, "description": "15% held-out common outlet restriction"},
+            {"at_step": 720, "name": "outlet_area_factor", "value": 1.0, "description": "outlet area restored"}
+          ],
+          "acceptance": {
+            "required_checks": ["deterministic_disturbance_schedule", "disturbance_hidden_from_controller", "finite_recovery_rollout", "constraint_accounting"]
+          }
+        },
+        "group": "disturbance",
+        "pair_id": "quadruple-hidden-disturbance-v2",
+        "base_case_id": "disturbance-rejection",
+        "condition": "shifted"
+      }
+    ],
+    "seed_spec": {"namespace": "quadruple-regulation-test-v2"}
+  },
+  "ranking": {
+    "id": "quadruple-regulation-ranking-v2",
+    "primary_utility": "negative_regulation_cost_rate",
+    "safety_gate": "zero-hard-failure-v1",
+    "case_score": "fixed-anchor-v1",
+    "track_aggregation": "weighted-geometric-mean-v1",
+    "anchor_id": "quadruple-regulation-anchors-v3"
+  }
+}

@@ -1,12 +1,13 @@
 """Verified, lazy loading for learned-policy checkpoints."""
 from __future__ import annotations
 
-import hashlib
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from aiogym._internal.serialization import file_sha256
 
 
 SUPPORTED_POLICY_ALGORITHMS = (
@@ -136,7 +137,7 @@ def checkpoint_sha256(path: str | Path) -> str:
     checkpoint = Path(path)
     if not checkpoint.is_file():
         raise FileNotFoundError(f"checkpoint not found: {checkpoint}")
-    return _file_sha256(checkpoint)
+    return file_sha256(checkpoint)
 
 
 def load_policy_checkpoint(
@@ -171,7 +172,7 @@ def load_policy_checkpoint(
     )
     if not spec.path.is_file():
         raise FileNotFoundError(f"checkpoint not found: {spec.path}")
-    actual_sha256 = _file_sha256(spec.path)
+    actual_sha256 = file_sha256(spec.path)
     if actual_sha256 != spec.sha256:
         raise ValueError(
             f"checkpoint SHA256 mismatch for {spec.path}: "
@@ -436,14 +437,6 @@ def _attach_checkpoint_metadata(
         }
 
     controller.metadata = metadata
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 __all__ = [

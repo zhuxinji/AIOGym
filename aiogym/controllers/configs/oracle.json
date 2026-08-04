@@ -16,8 +16,10 @@
   },
   "scenarios": {
     "cascade_recirculating": {
-      "horizon": 4,
-      "warm_start": true
+      "horizon": 12,
+      "warm_start": true,
+      "solve_every": 6,
+      "ipopt_max_iter": 100
     }
   },
   "profiles": {
@@ -30,6 +32,13 @@
     },
     "cascade-recirculating-regulation-generalist-v1": {
       "track": "cascade-recirculating-regulation-generalist-v1",
+      "policy_scope": "generalist",
+      "goal": "regulation",
+      "reward_spec": "regulation-v1",
+      "access_level": "model-based"
+    },
+    "cascade-recirculating-regulation-generalist-v2": {
+      "track": "cascade-recirculating-regulation-generalist-v2",
       "policy_scope": "generalist",
       "goal": "regulation",
       "reward_spec": "regulation-v1",

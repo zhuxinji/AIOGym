@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import json
 import math
+from copy import deepcopy
 
 import numpy as np
+import pytest
 
 from aiogym.benchmarks import load_track
+from aiogym.benchmarks.tracks.schema import TrackSpec
 from aiogym.generation import load_distribution
 from aiogym.generation.cascade import (
     CASCADE_PRODUCT_FLOW_M3S,
     CascadeTrainingSampler,
+    cascade_case_conditioned_training_distribution,
     validate_cascade_episode,
 )
 from aiogym.models.registry import apply_model_params, make_model
@@ -17,6 +21,7 @@ from aiogym.rl.episode_env import make_track_training_base_env
 
 
 TRACK_ID = "cascade-regulation-generalist-v1"
+V2_TRACK_ID = "cascade-regulation-generalist-v2"
 
 
 def test_cascade_l0_l2_are_registered_and_deterministic():
@@ -27,6 +32,75 @@ def test_cascade_l0_l2_are_registered_and_deterministic():
         first = CascadeTrainingSampler(distribution).sample(91)
         second = CascadeTrainingSampler(distribution).sample(91)
         assert first.as_dict() == second.as_dict()
+
+
+def test_cascade_v1_distribution_identity_remains_immutable():
+    distribution = load_distribution("cascade-regulation-training-l2-v1")
+    assert distribution.distribution_hash == (
+        "1032928566d244c5bddac8e94254b8edb711e2a8993709814db3f2d25a8d2c11"
+    )
+
+
+def test_case_conditioned_v2_covers_both_declared_training_modes():
+    distribution = cascade_case_conditioned_training_distribution()
+    registered = load_distribution("cascade-regulation-training-l2-v2")
+    assert registered == distribution
+    assert distribution.episode_steps == 2640
+    assert distribution.declaration["mixture_weights"] == {
+        "commissioning": 0.5,
+        "temperature-step": 0.5,
+    }
+
+    sampler = CascadeTrainingSampler(distribution)
+    episodes = [sampler.sample(91, episode_index=index) for index in range(200)]
+    by_mode = {
+        mode: [episode for episode in episodes if mode in episode.difficulty_tags]
+        for mode in ("commissioning", "temperature-step")
+    }
+    assert all(by_mode.values())
+    assert {
+        len(episode.reference_schedule)
+        for episode in by_mode["commissioning"]
+    } == {3}
+    assert {
+        len(episode.reference_schedule)
+        for episode in by_mode["temperature-step"]
+    } == {5}
+    assert all(
+        validate_cascade_episode(episode)["passed"] for episode in episodes
+    )
+    assert len({episode.resolved_hash for episode in episodes}) == len(episodes)
+
+
+def test_cascade_v2_track_binds_case_conditioned_distribution_weights():
+    track = load_track(V2_TRACK_ID)
+    distribution = track.training_distribution()
+    declared_weights = {
+        case.case_id.split(":", 1)[0]: case.weight
+        for case in track.resolved_cases("training")
+    }
+    total = sum(declared_weights.values())
+    normalized = {
+        case_id: weight / total
+        for case_id, weight in declared_weights.items()
+    }
+    assert track.train_distribution_id == (
+        "cascade-regulation-training-l2-v2"
+    )
+    assert distribution.declaration["mixture_weights"] == normalized
+
+
+def test_cascade_v2_rejects_track_distribution_weight_drift():
+    declaration = deepcopy(
+        load_track(V2_TRACK_ID, validate_policy_contract=False).declaration
+    )
+    declaration["training"]["cases"][0]["weight"] = 3.0
+    track = TrackSpec(declaration)
+    with pytest.raises(
+        ValueError,
+        match="distribution weights do not match",
+    ):
+        track.training_distribution()
 
 
 def test_cascade_distribution_is_feasible_for_100_fixed_seeds():

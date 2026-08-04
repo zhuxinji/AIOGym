@@ -4,13 +4,23 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.coverage
+htmlcov/
 .mypy_cache/
 .ruff_cache/
+.pyright/
 *.egg-info/
 build/
 dist/
 output/
 tmp/
+venv/
+.env
+runs/*
+!runs/.gitignore
+/datasets/
+checkpoints/
+*.log
 
 # Node / OS
 node_modules/

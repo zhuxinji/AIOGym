@@ -32,20 +32,25 @@ _LEVELS = ("L0", "L1", "L2")
 def cascade_recirculating_training_distribution(
     level: str = "L2",
     *,
+    version: str = "v2",
     control_dt: float = 0.5,
     episode_steps: int = 1600,
 ) -> DistributionSpec:
     """Build a versioned recirculating-cascade regulation distribution."""
 
     selected = _normalize_level(level)
+    selected_version = str(version).lower()
+    if selected_version not in {"v1", "v2"}:
+        raise ValueError("recirculating cascade distribution version must be v1 or v2")
     varying_state = selected != "L0"
     varying_plant = selected == "L2"
+    v2_realism = selected_version == "v2" and varying_plant
     return DistributionSpec(
         {
             "schema_version": DISTRIBUTION_SCHEMA_VERSION,
             "distribution_id": (
                 "cascade-recirculating-regulation-training-"
-                f"{selected.lower()}-v1"
+                f"{selected.lower()}-{selected_version}"
             ),
             "scenario_id": "cascade-recirculating",
             "goal": "regulation",
@@ -102,8 +107,32 @@ def cascade_recirculating_training_distribution(
                     "heat_loss_factor",
                 ],
             },
-            "sensor_distribution": {"kind": "identity"},
-            "actuator_distribution": {"kind": "identity"},
+            "sensor_distribution": (
+                {
+                    "kind": "sensor_dynamics_v1",
+                    "noise_fraction": [0.001] * 6,
+                    "bias_fraction": [0.0] * 6,
+                    "drift_fraction_per_second": [0.0] * 6,
+                    "delay_steps": 1,
+                    "quantization_fraction": [0.0005] * 6,
+                    "dropout_probability": 0.0,
+                }
+                if v2_realism
+                else {"kind": "identity"}
+            ),
+            "actuator_distribution": (
+                {
+                    "kind": "actuator_dynamics_v1",
+                    "efficiency": [1.0, 1.0, 1.0, 1.0],
+                    "bias": [0.0, 0.0, 0.0, 0.0],
+                    "delay_steps": 1,
+                    "deadband": [0.005, 0.01, 0.01, 0.0],
+                    "time_constant_seconds": [1.0, 2.0, 2.0, 0.25],
+                    "slew_rate_per_second": [0.5, 0.25, 0.25, 2.0],
+                }
+                if v2_realism
+                else {"kind": "identity"}
+            ),
             "economic_context_distribution": {
                 "kind": "fixed",
                 "context": copy.deepcopy(
@@ -114,8 +143,8 @@ def cascade_recirculating_training_distribution(
             },
             "mixture_weights": {"equilibrium_regulation": 1.0},
             "curriculum_id": (
-                "cascade-recirculating-regulation-curriculum-v1:"
-                f"{selected}"
+                "cascade-recirculating-regulation-curriculum-"
+                f"{selected_version}:{selected}"
             ),
         }
     )
@@ -448,11 +477,13 @@ def _sample_equilibrium(
 
     def candidate() -> dict[str, Any]:
         return {
-            "circulation_flow": float(rng.uniform(6.5e-5, 9.0e-5)),
+            "circulation_flow": float(
+                rng.uniform(5.0 / 60000.0, 8.0 / 60000.0)
+            ),
             "tank_1_temperature": float(rng.uniform(27.0, 35.0)),
             "levels": [
                 float(value)
-                for value in rng.uniform(0.34, 0.42, size=3)
+                for value in rng.uniform(0.18, 0.30, size=3)
             ],
         }
 

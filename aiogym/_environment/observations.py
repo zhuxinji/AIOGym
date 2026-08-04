@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import numpy as np
 
-from .config import I_TEMP_MAX
-
 
 class ObservationRuntimeMixin:
     def _split(self, action):
@@ -60,7 +58,10 @@ class ObservationRuntimeMixin:
         if self.previous_action_obs:
             o += previous_action
         if self.integral_obs:
-            o = o + [iy / I_TEMP_MAX for iy in self._iy]
+            o += [
+                value / limit
+                for value, limit in zip(self._iy, self._integral_limits)
+            ]
         return np.asarray(o, dtype=np.float32)
 
     @staticmethod
@@ -106,7 +107,16 @@ class ObservationRuntimeMixin:
         y = list(out["y"])
         errors = [self.y_sp[i] - y[i] if i < len(y) else 0.0 for i in range(len(self.y_sp))]
         dt = self.control_dt
-        self._iy = [float(np.clip(self._iy[i] + errors[i] * dt, -I_TEMP_MAX, I_TEMP_MAX)) for i in range(len(errors))]
+        self._iy = [
+            float(
+                np.clip(
+                    self._iy[index] + error * dt,
+                    -self._integral_limits[index],
+                    self._integral_limits[index],
+                )
+            )
+            for index, error in enumerate(errors)
+        ]
     def _setpoint_bounds(self):
         bounds = []
         for row in self.model.setpoint_schema():

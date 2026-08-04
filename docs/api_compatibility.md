@@ -11,10 +11,10 @@ directly instead of shipping parallel aliases.
 | task, suite, and protocol catalogs | Case v2 and official Tracks |
 | reward/objective dual configuration | RewardSpec for training, Track goal for ranking |
 | `policy`, `sb3`, and `onnx` controller registry IDs | `aiogym.controllers.checkpoints` |
-| backend trainer modules and their argument parsers | `aiogym train --config FILE` |
+| backend trainer modules and their argument parsers | `aiogym train TARGET ALGORITHM` or `aiogym train --config FILE` |
 | legacy Transition v1 and Dataset migration | collect and consume Dataset v2 |
 | legacy evaluation artifact migration | regenerate current evaluation artifacts |
-| benchmark backend-specific checkpoint flags | `--checkpoint`, `--algorithm`, `--sha256`, `--name` |
+| benchmark backend-specific checkpoint flags | `--run`, or `--checkpoint`, `--algorithm`, `--sha256`, `--name` |
 | direct scenario/Case benchmark mode | an official Track or benchmark config |
 
 There is deliberately no compatibility package in the wheel. Archived beta

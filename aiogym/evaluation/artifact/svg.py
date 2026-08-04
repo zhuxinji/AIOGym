@@ -536,17 +536,23 @@ def plot_constraint_timeline(rollouts: list[dict], path: str, scenario: str) -> 
     _write_text(path, "\n".join(parts))
 
 
-def plot_learning_curve(curve: list[dict], path: str, title: str) -> None:
-    """Plot numeric RL training history rows as a compact SVG curve sheet."""
+def plot_learning_curve(
+    curve: list[dict],
+    path: str,
+    title: str,
+    *,
+    case_ids: list[str] | None = None,
+) -> None:
+    """Plot meaningful RL validation metrics without mixing metadata units."""
 
     curve = _deduplicate_learning_curve(curve)
-    series_keys = _learning_curve_keys(curve)
+    series = _learning_curve_series(curve, case_ids or [])
     width, height = 1100, 640
     left, top, w, h = 86, 96, 920, 380
     colors = ["#2563eb", "#059669", "#d97706", "#dc2626", "#7c3aed", "#475569", "#0f766e", "#be123c"]
     parts = [_svg_header(width, height), _svg_text(42, 46, f"{title} learning curve", size=22, weight="700")]
     parts.extend(_svg_axes(left, top, w, h))
-    if not curve or not series_keys:
+    if not curve or not series:
         parts.append(_svg_text(left + w / 2, top + h / 2, "No learning-curve rows", size=15, anchor="middle", fill="#64748b"))
         parts.append("</svg>")
         _write_text(path, "\n".join(parts))
@@ -557,35 +563,114 @@ def plot_learning_curve(curve: list[dict], path: str, title: str) -> None:
     xlo, xhi = min(0.0, min(xs)), max(xs)
     if xlo == xhi:
         xhi = xlo + 1.0
-    all_ys = [float(row[key]) for row in curve for key in series_keys if _is_number(row.get(key))]
-    ylo, yhi = _trajectory_axis_limits(all_ys)
-    if all(key.startswith("tracking_") and key.endswith("cost") for key in series_keys):
+    all_ys = [value for _, values in series for value in values if value is not None]
+    use_log_scale = bool(all_ys) and all(value > 0.0 for value in all_ys) and any(
+        isinstance(row.get("case_values"), list) for row in curve
+    )
+    plot_ys = [math.log10(value) for value in all_ys] if use_log_scale else all_ys
+    ylo, yhi = _trajectory_axis_limits(plot_ys)
+    series_keys = _learning_curve_keys(curve)
+    if not use_log_scale and all(
+        key.startswith("tracking_") and key.endswith("cost")
+        for key in series_keys
+    ):
         ylo = max(0.0, ylo)
-    if series_keys == ["return"] and all(value <= 0 for value in all_ys):
+    if not use_log_scale and series_keys == ["return"] and all(value <= 0 for value in all_ys):
         yhi = 0.0
+    metric = next((str(row.get("metric")) for row in curve if row.get("metric")), "validation metric")
+    readable_metric = _metric_label(metric).replace("_", " ")
+    scale_label = f"{readable_metric} (log scale)" if use_log_scale else readable_metric
+    parts.append(_svg_text(left, top - 18, scale_label, size=13, fill="#475569"))
 
-    for i, key in enumerate(series_keys):
-        ys = [float(row[key]) if _is_number(row.get(key)) else None for row in curve]
+    for i, (label, ys) in enumerate(series):
         clean_xs = [x for x, y in zip(xs, ys) if y is not None]
         clean_ys = [y for y in ys if y is not None]
         if not clean_xs:
             continue
+        rendered_ys = (
+            [math.log10(value) for value in clean_ys]
+            if use_log_scale
+            else clean_ys
+        )
         color = colors[i % len(colors)]
-        points = _polyline_points(clean_xs, clean_ys, xlo, xhi, ylo, yhi, left, top, w, h)
+        points = _polyline_points(clean_xs, rendered_ys, xlo, xhi, ylo, yhi, left, top, w, h)
         parts.append(f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="2.5"/>')
+        for xv, yv in zip(clean_xs, rendered_ys):
+            px = left + (xv - xlo) / (xhi - xlo) * w
+            py = _map_y(yv, ylo, yhi, top, h)
+            parts.append(
+                f'<circle cx="{px:.2f}" cy="{py:.2f}" r="3.5" '
+                f'fill="white" stroke="{color}" stroke-width="2"/>'
+            )
         lx = 42 + (i % 3) * 310
-        ly = 530 + (i // 3) * 26
+        ly = 570 + (i // 3) * 26
         parts.append(f'<line x1="{lx}" y1="{ly}" x2="{lx + 28}" y2="{ly}" stroke="{color}" stroke-width="3"/>')
-        label = "reward" if key == "return" else _metric_label(key)
         parts.append(_svg_text(lx + 36, ly + 4, label, size=12, fill="#334155"))
 
-    parts.append(_svg_text(left - 12, top + 8, _fmt(yhi), size=10, anchor="end", fill="#64748b"))
-    parts.append(_svg_text(left - 12, top + h, _fmt(ylo), size=10, anchor="end", fill="#64748b"))
+    axis_yhi = 10**yhi if use_log_scale else yhi
+    axis_ylo = 10**ylo if use_log_scale else ylo
+    parts.append(_svg_text(left - 12, top + 8, _fmt(axis_yhi), size=10, anchor="end", fill="#64748b"))
+    parts.append(_svg_text(left - 12, top + h, _fmt(axis_ylo), size=10, anchor="end", fill="#64748b"))
     parts.append(_svg_text(left, top + h + 30, _fmt(xlo), size=10, anchor="middle", fill="#64748b"))
     parts.append(_svg_text(left + w, top + h + 30, _fmt(xhi), size=10, anchor="middle", fill="#64748b"))
     parts.append(_svg_text(left + w / 2, top + h + 52, x_key, size=13, anchor="middle", fill="#334155"))
     parts.append("</svg>")
     _write_text(path, "\n".join(parts))
+
+
+def _learning_curve_series(
+    curve: list[dict], case_ids: list[str]
+) -> list[tuple[str, list[float | None]]]:
+    """Return comparable validation series, excluding numeric metadata."""
+
+    max_case_count = max(
+        (
+            len(row["case_values"])
+            for row in curve
+            if isinstance(row.get("case_values"), list)
+        ),
+        default=0,
+    )
+    if max_case_count:
+        metric = next(
+            (str(row.get("metric")) for row in curve if row.get("metric")),
+            "metric_value",
+        )
+        series = [
+            (
+                f"aggregate {_metric_label(metric).replace('_', ' ')}",
+                [
+                    float(row["metric_value"])
+                    if _is_number(row.get("metric_value"))
+                    else None
+                    for row in curve
+                ],
+            )
+        ]
+        for index in range(max_case_count):
+            label = case_ids[index] if index < len(case_ids) else f"Case {index + 1}"
+            values = []
+            for row in curve:
+                case_values = row.get("case_values")
+                value = (
+                    case_values[index]
+                    if isinstance(case_values, list) and index < len(case_values)
+                    else None
+                )
+                values.append(float(value) if _is_number(value) else None)
+            series.append((label, values))
+        return series
+
+    return [
+        (
+            "reward" if key == "return" else _metric_label(key),
+            [
+                float(row[key]) if _is_number(row.get(key)) else None
+                for row in curve
+            ],
+        )
+        for key in _learning_curve_keys(curve)
+    ]
 
 
 def _deduplicate_learning_curve(curve: list[dict]) -> list[dict]:
@@ -626,16 +711,13 @@ def _learning_curve_keys(curve: list[dict]) -> list[str]:
         "constraint_violation_count",
         "constraint_violation_severity",
     ]
-    skip = {"step", "timesteps", "time", "phase", "metric", "metric_direction"}
     keys = {
         key
-        for row in curve
-        for key, value in row.items()
-        if key not in skip and _is_number(value)
+        for key in preferred
+        if any(_is_number(row.get(key)) for row in curve)
     }
     ordered = [key for key in preferred if key in keys]
-    ordered.extend(sorted(keys.difference(preferred)))
-    return ordered[:8]
+    return ordered
 
 
 def state_series(index: int, label: str | None = None, dashed: bool = False):

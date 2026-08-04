@@ -1,7 +1,6 @@
 """Schema and policy-contract validation for benchmark tracks."""
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 from collections.abc import Mapping
@@ -10,6 +9,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+
+from aiogym._internal.serialization import canonical_json_bytes, stable_json_hash
 
 from aiogym.models.cases import (
     case_profile_hash,
@@ -90,17 +91,11 @@ _RANKING_FIELDS = frozenset(
 
 
 def _canonical_json(value: Mapping[str, Any]) -> str:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    )
+    return canonical_json_bytes(value).decode("utf-8")
 
 
 def _mapping_hash(value: Mapping[str, Any]) -> str:
-    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+    return stable_json_hash(value)
 
 
 @dataclass(frozen=True)
@@ -204,9 +199,7 @@ class TrackSpec:
 
     @property
     def track_hash(self) -> str:
-        return hashlib.sha256(
-            self._canonical_json.encode("utf-8")
-        ).hexdigest()
+        return stable_json_hash(self.declaration)
 
     def seed_namespace(self, split: str) -> str:
         _require_split(split)
@@ -246,6 +239,42 @@ class TrackSpec:
             raise ValueError(
                 "training distribution control_dt does not match Track"
             )
+        reference_distribution = distribution.declaration[
+            "reference_distribution"
+        ]
+        if reference_distribution.get("case_conditioned") is True:
+            cases = self.resolved_cases("training")
+            case_weights = {}
+            for case in cases:
+                case_name = case.case_id.split(":", 1)[0]
+                if case_name in case_weights:
+                    raise ValueError(
+                        "case-conditioned training requires unique Case names"
+                    )
+                case_weights[case_name] = float(case.weight)
+            total = sum(case_weights.values())
+            normalized = {
+                name: weight / total for name, weight in case_weights.items()
+            }
+            mixture = {
+                str(name): float(weight)
+                for name, weight in distribution.declaration[
+                    "mixture_weights"
+                ].items()
+            }
+            if set(mixture) != set(normalized) or any(
+                not math.isclose(
+                    mixture[name],
+                    normalized[name],
+                    rel_tol=0.0,
+                    abs_tol=1e-12,
+                )
+                for name in normalized
+            ):
+                raise ValueError(
+                    "case-conditioned distribution weights do not match "
+                    "Track training Case weights"
+                )
         return distribution
 
     def resolved_cases(self, split: str) -> tuple[ResolvedTrackCase, ...]:

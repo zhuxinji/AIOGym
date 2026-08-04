@@ -130,7 +130,12 @@ def plot_results(run_dir: str | Path) -> dict[str, str]:
     learning_curve = payload.get("learning_curve") or []
     if learning_curve:
         curve_path = figures_dir / "learning_curve.svg"
-        plot_learning_curve(learning_curve, str(curve_path), title)
+        plot_learning_curve(
+            learning_curve,
+            str(curve_path),
+            title,
+            case_ids=_learning_curve_case_ids(payload, learning_curve),
+        )
         figures["learning_curve"] = str(curve_path)
         artifact_figures["learning_curve_figure"] = str(curve_path)
     payload.setdefault("artifacts", {})
@@ -208,7 +213,11 @@ def _resolved_rollouts(
             evaluation_case = evaluation_case.get("name")
         identity = {
             "scenario": evaluation.get("scenario") or payload.get("scenario"),
-            "case": evaluation_case or payload.get("case"),
+            "case": (
+                evaluation_case
+                or rollout.get("case_id")
+                or payload.get("case")
+            ),
             "goal": evaluation.get("goal") or payload.get("goal"),
         }
         for key, value in identity.items():
@@ -216,3 +225,20 @@ def _resolved_rollouts(
                 rollout[key] = value
         resolved.append(rollout)
     return resolved
+
+
+def _learning_curve_case_ids(
+    payload: Mapping[str, Any], curve: list[dict[str, Any]]
+) -> list[str]:
+    """Resolve ordered validation Case ids for legacy and current curves."""
+
+    for row in curve:
+        case_ids = row.get("case_ids")
+        if isinstance(case_ids, list) and case_ids:
+            return [str(case_id) for case_id in case_ids]
+    track_evaluation = payload.get("track_evaluation") or {}
+    return [
+        str(result["case_id"])
+        for result in track_evaluation.get("results") or []
+        if result.get("case_id")
+    ]

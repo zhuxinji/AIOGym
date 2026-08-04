@@ -1,8 +1,6 @@
 """Resolution boundary for the single public environment factory."""
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -11,6 +9,7 @@ from types import MappingProxyType
 from typing import Any
 
 from aiogym._internal.config import load_config, resolve_auto_events
+from aiogym._internal.serialization import stable_json_hash
 from aiogym._internal.identifiers import canonical_scenario_id
 from aiogym.models.registry import make_model
 from aiogym.models.cases import resolve_environment_options
@@ -21,6 +20,7 @@ from .config import DIRECT_ENV_DEFAULTS
 
 
 ENV_SPEC_HASH_SCHEMA_VERSION = "aiogym.resolved_env_spec.v2"
+MDP_HASH_SCHEMA_VERSION = "aiogym.resolved_env_mdp.v1"
 
 
 _CONFIG_FIELDS = frozenset(
@@ -60,6 +60,8 @@ class ResolvedEnvSpec:
     model_params: Mapping[str, Any]
     info_level: str
     profile_timing: bool = False
+    mdp_hash: str = field(init=False)
+    runtime_hash: str = field(init=False)
     spec_hash: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -77,19 +79,19 @@ class ResolvedEnvSpec:
                     name,
                     _freeze(deepcopy(dict(value))),
                 )
+        runtime_hash = stable_json_hash(self.hash_payload())
+        object.__setattr__(self, "mdp_hash", stable_json_hash(self.mdp_hash_payload()))
+        object.__setattr__(self, "runtime_hash", runtime_hash)
+        object.__setattr__(self, "spec_hash", runtime_hash)
+
+    def mdp_hash_payload(self) -> dict[str, Any]:
+        """Return policy/trajectory semantics without instrumentation settings."""
+
         payload = self.hash_payload()
-        canonical = json.dumps(
-            payload,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-            allow_nan=False,
-        )
-        object.__setattr__(
-            self,
-            "spec_hash",
-            hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
-        )
+        payload["hash_schema"] = MDP_HASH_SCHEMA_VERSION
+        payload.pop("info_level")
+        payload.pop("profile_timing")
+        return payload
 
     def hash_payload(self) -> dict[str, Any]:
         """Return the complete versioned identity hashed by ``spec_hash``."""
@@ -283,6 +285,7 @@ def _thaw(value):
 
 __all__ = [
     "ENV_SPEC_HASH_SCHEMA_VERSION",
+    "MDP_HASH_SCHEMA_VERSION",
     "ResolvedEnvSpec",
     "resolve_env_spec",
 ]

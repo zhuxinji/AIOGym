@@ -1,0 +1,17 @@
+{
+  "schema_version": "aiogym.collection_profile.v1",
+  "id": "quick-v1",
+  "selector": "quick",
+  "description": "Nominal-PID tutorial collection.",
+  "track_id": "cascade-regulation-generalist-v1",
+  "config_template": {
+    "schema_version": "aiogym.dataset_collection.v1",
+    "track_id": "cascade-regulation-generalist-v1",
+    "split": "training",
+    "base_seed": 0,
+    "target_transitions": 1600,
+    "workers": 1,
+    "collectors": [{"id": "nominal_pid", "weight": 1.0}],
+    "complete_episode_overshoot": true
+  }
+}

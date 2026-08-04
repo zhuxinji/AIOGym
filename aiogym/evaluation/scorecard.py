@@ -6,6 +6,8 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from aiogym._internal.control_math import normalized_action
+
 from .metric_catalog import SCORECARD_GROUPS
 from .metrics.service import service_availability
 
@@ -126,8 +128,8 @@ def group_scorecard(values: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _action_integrals(model, action, previous_action, dt):
-    current = _normalized_action(model, action)
-    previous = _normalized_action(model, previous_action)
+    current = normalized_action(model, action)
+    previous = normalized_action(model, previous_action)
     if current.shape != previous.shape:
         raise ValueError("current and previous actions must have the same shape")
     if current.size == 0:
@@ -135,24 +137,6 @@ def _action_integrals(model, action, previous_action, dt):
     slew = float(dt * np.mean(((current - previous) / dt) ** 2))
     effort = float(dt * np.mean(current**2))
     return slew, effort
-
-
-def _normalized_action(model, action):
-    values = np.asarray(model.action_vector(action), dtype=np.float64)
-    rows = list(model.action_schema())
-    lows = np.asarray(
-        [float(row.get("low", 0.0)) for row in rows],
-        dtype=np.float64,
-    )
-    highs = np.asarray(
-        [float(row.get("high", 1.0)) for row in rows],
-        dtype=np.float64,
-    )
-    if values.size != lows.size:
-        return values
-    return (values - lows) / np.maximum(highs - lows, 1e-12)
-
-
 __all__ = [
     "ScorecardAccumulator",
     "flatten_scorecard",

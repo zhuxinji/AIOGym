@@ -1,7 +1,6 @@
 """Canonical configuration for all reinforcement-learning trainers."""
 from __future__ import annotations
 
-import hashlib
 import json
 import warnings
 from collections.abc import Mapping
@@ -11,6 +10,7 @@ from types import MappingProxyType
 from typing import Any
 
 from aiogym._internal.validation import seed_sequence
+from aiogym._internal.serialization import canonical_json_bytes, stable_json_hash
 
 
 RL_TRAINING_CONFIG_SCHEMA_VERSION = "aiogym.rl_training_config.v3"
@@ -24,9 +24,12 @@ _ALGORITHM_FIELDS = {
             "gamma",
             "learning_rate",
             "policy",
+            "policy_kwargs",
             "rollout_vector_steps",
             "subproc_start_method",
             "tau",
+            "ent_coef",
+            "target_entropy",
             "tensorboard_log",
             "torch_threads",
             "utd_ratio",
@@ -40,6 +43,12 @@ _ALGORITHM_FIELDS = {
             "gamma",
             "learning_rate",
             "policy",
+            "policy_kwargs",
+            "action_noise",
+            "action_noise_sigma",
+            "policy_delay",
+            "target_policy_noise",
+            "target_noise_clip",
             "rollout_vector_steps",
             "subproc_start_method",
             "tau",
@@ -57,6 +66,13 @@ _ALGORITHM_FIELDS = {
             "learning_rate",
             "n_steps",
             "policy",
+            "policy_kwargs",
+            "gae_lambda",
+            "clip_range",
+            "n_epochs",
+            "ent_coef",
+            "vf_coef",
+            "max_grad_norm",
             "subproc_start_method",
             "tensorboard_log",
             "torch_threads",
@@ -108,9 +124,15 @@ _ALGORITHM_DEFAULTS = {
         "gamma": 0.99,
         "learning_rate": 3e-4,
         "policy": "MlpPolicy",
+        "policy_kwargs": {
+            "activation_fn": "relu",
+            "net_arch": {"pi": [256, 256], "qf": [256, 256]},
+        },
         "rollout_vector_steps": 1,
-        "subproc_start_method": "fork",
+        "subproc_start_method": "spawn",
         "tau": 0.005,
+        "ent_coef": "auto",
+        "target_entropy": "auto",
         "tensorboard_log": None,
         "torch_threads": 2,
         "utd_ratio": 1.0,
@@ -122,8 +144,17 @@ _ALGORITHM_DEFAULTS = {
         "gamma": 0.99,
         "learning_rate": 3e-4,
         "policy": "MlpPolicy",
+        "policy_kwargs": {
+            "activation_fn": "relu",
+            "net_arch": {"pi": [256, 256], "qf": [256, 256]},
+        },
+        "action_noise": "normal",
+        "action_noise_sigma": 0.1,
+        "policy_delay": 2,
+        "target_policy_noise": 0.2,
+        "target_noise_clip": 0.5,
         "rollout_vector_steps": 1,
-        "subproc_start_method": "fork",
+        "subproc_start_method": "spawn",
         "tau": 0.005,
         "tensorboard_log": None,
         "torch_threads": 2,
@@ -137,7 +168,17 @@ _ALGORITHM_DEFAULTS = {
         "learning_rate": 3e-4,
         "n_steps": 2048,
         "policy": "MlpPolicy",
-        "subproc_start_method": "fork",
+        "policy_kwargs": {
+            "activation_fn": "tanh",
+            "net_arch": {"pi": [256, 256], "vf": [256, 256]},
+        },
+        "gae_lambda": 0.95,
+        "clip_range": 0.2,
+        "n_epochs": 10,
+        "ent_coef": 0.0,
+        "vf_coef": 0.5,
+        "max_grad_norm": 0.5,
+        "subproc_start_method": "spawn",
         "tensorboard_log": None,
         "torch_threads": 2,
         "vector_backend": "subproc",
@@ -280,11 +321,34 @@ class RLTrainingConfig:
             self.replay,
             _REPLAY_FIELDS[algorithm_id],
         )
+        if algorithm_id in {"sac", "td3", "ppo"}:
+            policy_kwargs = self.algorithm.get("policy_kwargs")
+            if policy_kwargs is not None:
+                _validate_policy_kwargs(algorithm_id, policy_kwargs)
+        if algorithm_id == "td3":
+            action_noise = self.algorithm.get("action_noise")
+            if action_noise is not None and action_noise not in {
+                "normal",
+                "none",
+            }:
+                raise ValueError(
+                    "algorithm.action_noise must be one of: normal, none"
+                )
         for name, allowed in _WORKFLOW_FIELDS.items():
             _reject_unknown_mapping_fields(
                 name,
                 getattr(self, name),
                 allowed,
+            )
+        start_method = self.algorithm.get("subproc_start_method")
+        if start_method is not None and start_method not in {
+            "spawn",
+            "forkserver",
+            "fork",
+        }:
+            raise ValueError(
+                "algorithm.subproc_start_method must be one of: "
+                "spawn, forkserver, fork"
             )
         utd_ratio = self.utd_ratio
         if self.algorithm_id == "rlpd" and (
@@ -401,16 +465,13 @@ class RLTrainingConfig:
         }
 
     def canonical_json(self) -> str:
-        return json.dumps(
-            self.as_dict(),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        )
+        return canonical_json_bytes(
+            self.as_dict(), ensure_ascii=False
+        ).decode("utf-8")
 
     @property
     def config_hash(self) -> str:
-        return hashlib.sha256(self.canonical_json().encode("utf-8")).hexdigest()
+        return stable_json_hash(self.as_dict(), ensure_ascii=False)
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "RLTrainingConfig":
@@ -539,6 +600,56 @@ def _reject_unknown_mapping_fields(
         raise ValueError(
             f"unknown {name} field(s): " + ", ".join(unknown)
         )
+
+
+def _validate_policy_kwargs(
+    algorithm_id: str,
+    value: Mapping[str, Any],
+) -> None:
+    if not isinstance(value, Mapping):
+        raise TypeError("algorithm.policy_kwargs must be a mapping")
+    _reject_unknown_mapping_fields(
+        "algorithm.policy_kwargs",
+        value,
+        frozenset({"activation_fn", "net_arch"}),
+    )
+    activation = value.get("activation_fn")
+    if activation not in {"relu", "tanh", "elu"}:
+        raise ValueError(
+            "algorithm.policy_kwargs.activation_fn must be one of: "
+            "elu, relu, tanh"
+        )
+    net_arch = value.get("net_arch")
+    if not isinstance(net_arch, Mapping):
+        raise TypeError(
+            "algorithm.policy_kwargs.net_arch must be a mapping"
+        )
+    expected = (
+        frozenset({"pi", "vf"})
+        if algorithm_id == "ppo"
+        else frozenset({"pi", "qf"})
+    )
+    if set(net_arch) != expected:
+        raise ValueError(
+            "algorithm.policy_kwargs.net_arch requires exactly: "
+            + ", ".join(sorted(expected))
+        )
+    for name, layers in net_arch.items():
+        if not isinstance(layers, (list, tuple)) or not layers:
+            raise ValueError(
+                f"algorithm.policy_kwargs.net_arch.{name} must be a "
+                "non-empty sequence"
+            )
+        if any(
+            isinstance(size, bool)
+            or not isinstance(size, int)
+            or size <= 0
+            for size in layers
+        ):
+            raise ValueError(
+                f"algorithm.policy_kwargs.net_arch.{name} layer sizes "
+                "must be positive integers"
+            )
 
 
 def _freeze_json(value):

@@ -96,3 +96,41 @@ def test_environment_and_training_provenance_include_reward_spec_hash():
     assert provenance["reward_spec_hash"] == get_reward_spec(
         track.reward_spec_id
     ).spec_hash
+
+
+def test_mdp_hash_excludes_runtime_instrumentation_only():
+    base = {
+        "scenario": "quadruple",
+        "reward_spec": "regulation-v1",
+        "environment": {"profile_timing": False},
+    }
+    first = resolve_env_spec(config={**base, "info_level": "minimal"})
+    second = resolve_env_spec(
+        config={
+            **base,
+            "info_level": "full",
+            "environment": {"profile_timing": True},
+        }
+    )
+    assert first.mdp_hash == second.mdp_hash
+    assert first.runtime_hash != second.runtime_hash
+    assert first.spec_hash == first.runtime_hash
+
+
+@pytest.mark.parametrize(
+    "environment",
+    (
+        {"integral_obs": True},
+        {"model_params": {"gamma": [0.6, 0.4]}},
+    ),
+)
+def test_mdp_hash_changes_with_policy_or_transition_semantics(environment):
+    baseline = resolve_env_spec("quadruple", reward_spec="regulation-v1")
+    changed = resolve_env_spec(
+        config={
+            "scenario": "quadruple",
+            "reward_spec": "regulation-v1",
+            "environment": environment,
+        }
+    )
+    assert changed.mdp_hash != baseline.mdp_hash

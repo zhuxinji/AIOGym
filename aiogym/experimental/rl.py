@@ -1,4 +1,9 @@
-"""Experimental constrained, recurrent, and safety-aware RL components."""
+"""Usable constrained, recurrent, and safety-aware research components.
+
+This module is intentionally outside the v1 stable compatibility promise and
+may change in a minor release. It must be imported explicitly as
+``aiogym.experimental.rl``.
+"""
 
 from aiogym.rl.constrained import (
     LAGRANGIAN_SAC_STATE_SCHEMA_VERSION,

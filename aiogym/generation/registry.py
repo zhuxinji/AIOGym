@@ -75,6 +75,7 @@ def _ensure_builtin_distributions() -> None:
     )
     from .cascade import (
         CascadeTrainingSampler,
+        cascade_case_conditioned_training_distribution,
         cascade_training_distribution,
     )
     from .cascade_recirculating import (
@@ -100,11 +101,6 @@ def _ensure_builtin_distributions() -> None:
             cascade_training_distribution,
             CascadeTrainingSampler,
         ),
-        (
-            "cascade-recirculating-regulation-training",
-            cascade_recirculating_training_distribution,
-            CascadeRecirculatingTrainingSampler,
-        ),
     )
     for prefix, distribution_builder, sampler_type in families:
         for level in ("L0", "L1", "L2"):
@@ -119,6 +115,33 @@ def _ensure_builtin_distributions() -> None:
                     split=split,
                 ),
             )
+    for version in ("v1", "v2"):
+        for level in ("L0", "L1", "L2"):
+            distribution_id = (
+                "cascade-recirculating-regulation-training-"
+                f"{level.lower()}-{version}"
+            )
+            register_distribution(
+                distribution_id,
+                lambda level=level, version=version: (
+                    cascade_recirculating_training_distribution(
+                        level,
+                        version=version,
+                    )
+                ),
+                lambda distribution, split: CascadeRecirculatingTrainingSampler(
+                    distribution,
+                    split=split,
+                ),
+            )
+    register_distribution(
+        "cascade-regulation-training-l2-v2",
+        cascade_case_conditioned_training_distribution,
+        lambda distribution, split: CascadeTrainingSampler(
+            distribution,
+            split=split,
+        ),
+    )
     _BUILTINS_REGISTERED = True
 
 

@@ -16,6 +16,7 @@ from aiogym.controllers.checkpoints import (
 from aiogym._internal.config import parse_csv_ints
 from aiogym._internal.serialization import write_json_artifact
 from aiogym._internal.validation import seed_sequence
+from aiogym.rl.run_reference import load_run_reference
 
 
 def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
@@ -23,12 +24,13 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
         prog=prog,
         description="Evaluate a frozen checkpoint on validation only.",
     )
-    parser.add_argument("--checkpoint", required=True)
-    parser.add_argument("--track", required=True)
+    parser.add_argument("run", nargs="?")
+    parser.add_argument("--checkpoint")
+    parser.add_argument("--track")
     parser.add_argument(
         "--algorithm",
         choices=SUPPORTED_POLICY_ALGORITHMS,
-        required=True,
+        required=False,
     )
     parser.add_argument(
         "--sha256",
@@ -51,15 +53,42 @@ def build_parser(prog: str | None = None) -> argparse.ArgumentParser:
 
 
 def main(argv=None, prog: str | None = None) -> int:
-    args = build_parser(prog).parse_args(argv)
-    checkpoint = Path(args.checkpoint)
+    parser = build_parser(prog)
+    args = parser.parse_args(argv)
+    run_reference = None
+    if args.run is not None:
+        if any(
+            value is not None
+            for value in (
+                args.checkpoint,
+                args.track,
+                args.algorithm,
+                args.checkpoint_sha256,
+            )
+        ):
+            parser.error(
+                "RUN is mutually exclusive with --checkpoint, --track, "
+                "--algorithm, and --sha256"
+            )
+        run_reference = load_run_reference(args.run)
+        checkpoint = run_reference.policy_path
+        track = load_track(run_reference.track_id)
+        algorithm_id = run_reference.algorithm_id
+        digest = run_reference.policy_sha256
+    else:
+        if not args.checkpoint or not args.track or not args.algorithm:
+            parser.error(
+                "provide RUN or --checkpoint FILE --track TRACK --algorithm ALGO"
+            )
+        checkpoint = Path(args.checkpoint)
+        track = load_track(args.track)
+        algorithm_id = args.algorithm
+        digest = args.checkpoint_sha256 or checkpoint_sha256(checkpoint)
     if not checkpoint.is_file():
         raise FileNotFoundError(checkpoint)
-    track = load_track(args.track)
-    digest = args.checkpoint_sha256 or checkpoint_sha256(checkpoint)
     policy_spec = learned_policy_spec_for_track(
         checkpoint,
-        args.algorithm,
+        algorithm_id,
         digest,
         track,
     )
@@ -93,6 +122,11 @@ def main(argv=None, prog: str | None = None) -> int:
                 "case_count": result["case_count"],
                 "aggregate": result["aggregate"],
                 "checkpoint_sha256": digest,
+                "run_reference": (
+                    None
+                    if run_reference is None
+                    else str(run_reference.manifest_path)
+                ),
                 "output": args.output,
                 "next_command": "aiogym final-test --config FILE",
             },

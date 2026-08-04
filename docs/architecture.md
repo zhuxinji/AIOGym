@@ -28,7 +28,7 @@ aiogym/
 ├── _environment/               private environment implementation
 │   ├── factory.py              implementation behind public make_env()
 │   ├── spec.py                 immutable ResolvedEnvSpec + resolver
-│   ├── runtime.py              sole concrete Gymnasium environment
+│   ├── env.py                  sole concrete Gymnasium environment
 │   ├── builder.py              Track-specific resolved-spec builders
 │   └── realism.py              EpisodeSpec sensor/actuator execution
 ├── models/
@@ -43,6 +43,10 @@ aiogym/
 │   ├── registry.py             canonical registry
 │   ├── canonical.py            reward engine
 │   └── terms.py                stage terms and cost channels
+├── _internal/
+│   ├── control_math.py         shared action/tracking normalization
+│   └── serialization.py        canonical JSON, hashes, atomic JSON
+├── resources/profiles/         installed guided profile declarations
 ├── controllers/                contracts, adapters, PID, MPC, Oracle
 ├── evaluation/
 │   ├── goal_specs.py           GoalSpec
@@ -85,6 +89,16 @@ aiogym/
 ## Dependency direction
 
 - Models do not import evaluation or controllers.
+- Models and rewards share neutral control math without importing evaluation:
+
+  ```text
+  models ───────────────┐
+                        v
+  _internal.control_math
+         │              │
+         v              v
+      rewards       evaluation
+  ```
 - Cases configure a model/environment but do not select Goal or RewardSpec.
 - Rewards consume model transition context but do not define benchmark ranking.
 - Evaluation consumes environment and controller contracts.
@@ -127,6 +141,23 @@ aiogym/
   schemas.
 - Live execution accepts current schemas only; legacy compatibility readers are
   not shipped.
+
+## Identity and release boundaries
+
+- `ResolvedEnvSpec.runtime_hash` includes instrumentation such as `info_level`
+  and profiling; the v1-compatible `spec_hash` is an alias for that digest.
+  `mdp_hash` excludes instrumentation while retaining transition,
+  observation, action, reward, event, and model semantics. Existing Dataset
+  and policy schemas still bind `env_spec_hash`; migrating compatibility checks
+  to `mdp_hash` requires a future schema version.
+- Guided training and collection profiles have one source of truth under
+  installed `aiogym/resources/profiles/`; `quick` remains tutorial-scale.
+- `LagrangianSAC` is an experimental direct-call research component available
+  from `aiogym.experimental.rl`. It is not in stable training config, CLI, or
+  SB3 adapter discovery.
+- Release wheels and sdists are built from clean source and checked for required
+  runtime modules, installed profile resources, stale `runtime.py`, tests, and
+  generated artifacts before wheel-only smoke tests run outside the source tree.
 
 ## Extension points
 

@@ -33,16 +33,17 @@ def test_parameter_profile_separates_design_value_from_provisional_values():
 
     assert profile["status"] == "design-provisional"
     assert profile["parameters"]["heater_power"]["status"] == "design-specified"
-    assert profile["parameters"]["area"]["status"] == "design-range-derived"
-    assert profile["parameters"]["height_max"]["status"] == "design-range-derived"
-    assert profile["parameters"]["pump_power_max"]["status"] == "design-range-informed"
-    assert profile["parameters"]["pump_flow_max"]["status"] == "legacy-unverified"
-    assert profile["parameters"]["area"]["value"] == pytest.approx([0.04, 0.04, 0.15])
-    assert profile["parameters"]["height_max"]["value"] == pytest.approx([0.5, 0.5, 0.5])
-    assert np.multiply(profile["parameters"]["area"]["value"], 0.4) == pytest.approx(
-        [0.016, 0.016, 0.060]
+    assert profile["parameters"]["area"]["status"] == "design-specified-provisional"
+    assert profile["parameters"]["height_max"]["status"] == "design-specified-provisional"
+    assert profile["parameters"]["pump_power_max"]["status"] == "design-specified-provisional"
+    assert profile["parameters"]["pump_flow_max"]["status"] == "design-specified-provisional"
+    assert profile["parameters"]["area"]["value"] == pytest.approx([0.075] * 3)
+    assert profile["parameters"]["height_max"]["value"] == pytest.approx([0.4] * 3)
+    assert np.multiply(profile["parameters"]["area"]["value"], 0.24) == pytest.approx(
+        [0.018, 0.018, 0.018]
     )
-    assert profile["references"][0]["drawing"] == "L-001"
+    assert profile["parameters"]["pump_flow_max"]["value"] * 60000 == pytest.approx(25.0)
+    assert profile["references"][0]["revision"] == "V2.0-baseline"
     assert "非最终施工图" in profile["references"][0]["limitations"]
 
 
@@ -58,9 +59,9 @@ def test_nominal_closed_loop_conserves_total_liquid_volume():
 
 def test_pump_recirculates_tank3_temperature_into_tank1():
     model = make_model("cascade-recirculating")
-    action = [0.05, 0.0, 0.0, 0.0]
-    cold_return = [0.40, 30.0, 0.40, 25.0, 0.40, 20.0]
-    hot_return = [0.40, 30.0, 0.40, 25.0, 0.40, 40.0]
+    action = [0.5, 0.0, 0.0, 0.0]
+    cold_return = [0.24, 30.0, 0.24, 25.0, 0.24, 20.0]
+    hot_return = [0.24, 30.0, 0.24, 25.0, 0.24, 40.0]
 
     cold_dx = model.dynamics(cold_return, action, model.disturbance_defaults())
     hot_dx = model.dynamics(hot_return, action, model.disturbance_defaults())
@@ -94,9 +95,24 @@ def test_foundational_model_metadata_and_environment_step_are_finite():
     assert info["H1_electric_power_w"] <= 2000.0
 
 
+def test_v2_physical_io_contract_exposes_transmitters_switches_and_flow_meters():
+    model = make_model("cascade-recirculating")
+    physical_io = model.metadata()["physical_io"]
+
+    analog_names = {row["name"] for row in physical_io["analog_measurements"]}
+    digital_names = {row["name"] for row in physical_io["digital_inputs"]}
+    assert analog_names == {
+        "LT101", "LT201", "LT301", "TT101", "TT201", "TT301", "FT12", "FT23"
+    }
+    assert digital_names == {
+        "LSL101", "LSL201", "LSL301", "LSH101", "LSH201", "LSH301"
+    }
+    assert physical_io["network"].startswith("Modbus RTU")
+
+
 def test_maximum_declared_actuator_power_matches_foundational_budget():
     model = make_model("cascade-recirculating")
-    assert model.energy_kw([1.0, 1.0, 1.0, 1.0]) == pytest.approx(2.5)
+    assert model.energy_kw([1.0, 1.0, 1.0, 1.0]) == pytest.approx(2.37)
 
 
 def test_declared_default_is_a_model_consistent_closed_loop_equilibrium():
@@ -111,8 +127,8 @@ def test_declared_default_is_a_model_consistent_closed_loop_equilibrium():
     assert equilibrium["feasible"]
     assert equilibrium["y_sp"] == pytest.approx(model.default_setpoint_vector())
     assert equilibrium["action"] == pytest.approx(model.default_action())
-    assert equilibrium["circulation_flow_m3s"] == pytest.approx(8.0e-5)
-    assert equilibrium["ideal_energy_kw"] == pytest.approx(1.2368598383681584)
+    assert equilibrium["circulation_flow_m3s"] == pytest.approx(5.0 / 60000.0)
+    assert equilibrium["ideal_energy_kw"] == pytest.approx(1.2520223701170998)
     assert model.ideal_energy_kw(
         equilibrium["state"], equilibrium["y_sp"], model.disturbance_defaults(),
         [0.0, 0.0, 0.0, 0.0],
@@ -129,7 +145,7 @@ def test_random_internal_points_satisfy_independent_mass_and_energy_balances():
     for _ in range(200):
         state = []
         for _tank in range(3):
-            state.extend((rng.uniform(0.06, 0.44), rng.uniform(15.0, 85.0)))
+            state.extend((rng.uniform(0.09, 0.33), rng.uniform(15.0, 75.0)))
         action = rng.uniform(0.0, 1.0, 4).tolist()
         disturbance = {
             "t_amb": rng.uniform(5.0, 35.0),
@@ -171,7 +187,7 @@ def test_numeric_and_casadi_dynamics_match_across_internal_domain():
     for _ in range(40):
         state = []
         for _tank in range(3):
-            state.extend((rng.uniform(0.06, 0.44), rng.uniform(15.0, 85.0)))
+            state.extend((rng.uniform(0.09, 0.33), rng.uniform(15.0, 75.0)))
         action = rng.uniform(-0.25, 1.25, 4).tolist()
         disturbance = {
             "t_amb": rng.uniform(5.0, 35.0),
@@ -199,7 +215,7 @@ def test_numeric_and_casadi_dynamics_match_across_internal_domain():
 def test_numeric_and_casadi_use_the_same_action_clipping():
     ca = pytest.importorskip("casadi")
     model = make_model("cascade-recirculating")
-    state = [0.35, 35.0, 0.40, 30.0, 0.42, 25.0]
+    state = [0.25, 35.0, 0.30, 30.0, 0.32, 25.0]
     disturbance = model.disturbance_defaults()
     raw = [-2.0, 1.5, 0.2, 4.0]
     clipped = [0.0, 1.0, 0.2, 1.0]
@@ -230,7 +246,7 @@ def _integrate(model, state, action, disturbance, max_step, duration=120.0):
 
 def test_rk4_step_refinement_converges_on_smooth_nominal_trajectory():
     model = make_model("cascade-recirculating")
-    state = [0.40, 50.0, 0.40, 35.0, 0.40, 25.0]
+    state = [0.24, 50.0, 0.24, 35.0, 0.24, 25.0]
     action = model.default_action()
     disturbance = model.disturbance_defaults()
 
@@ -260,8 +276,8 @@ def _process_info(model, state, action):
 @pytest.mark.parametrize("tank_index", [0, 1])
 def test_passive_overflow_returns_mass_and_enthalpy_to_tank3(tank_index):
     model = make_model("cascade-recirculating")
-    state = [0.40, 35.0, 0.40, 30.0, 0.35, 20.0]
-    state[2 * tank_index] = 0.49
+    state = [0.24, 35.0, 0.24, 30.0, 0.25, 20.0]
+    state[2 * tank_index] = 0.37
     state[2 * tank_index + 1] = 60.0 if tank_index == 0 else 50.0
     action = [0.0, 0.0, 0.0, 0.0]
 
@@ -283,7 +299,7 @@ def test_passive_overflow_returns_mass_and_enthalpy_to_tank3(tank_index):
 
 def test_passive_overflow_is_a_protective_flow_not_a_hard_termination():
     model = make_model("cascade-recirculating")
-    state = [0.49, 40.0, 0.40, 30.0, 0.35, 25.0]
+    state = [0.37, 40.0, 0.24, 30.0, 0.25, 25.0]
     constraints = model.process_constraint_info(state, [], [], {})
     info = _process_info(model, state, [0.0, 0.0, 0.0, 0.0])
 
@@ -297,9 +313,8 @@ def test_passive_overflow_is_a_protective_flow_not_a_hard_termination():
 @pytest.mark.parametrize(
     ("state", "expected_event"),
     [
-        ([0.04, 40.0, 0.40, 30.0, 0.40, 25.0], "L2_H1_dry_fire"),
-        ([0.40, 40.0, 0.46, 30.0, 0.40, 25.0], "L3_high_level"),
-        ([0.40, 92.0, 0.40, 30.0, 0.40, 25.0], "L4_H1_over_temperature"),
+        ([0.07, 40.0, 0.24, 30.0, 0.24, 25.0], "L2_H1_dry_fire"),
+        ([0.24, 80.0, 0.24, 30.0, 0.24, 25.0], "L4_H1_over_temperature"),
     ],
 )
 def test_h1_hardwired_interlocks_remove_actual_heater_power(state, expected_event):
@@ -313,9 +328,21 @@ def test_h1_hardwired_interlocks_remove_actual_heater_power(state, expected_even
     assert model.action_energy_kw(action, state, model.disturbance_defaults()) == 0.0
 
 
+def test_tank1_or_tank2_high_level_stops_p101_without_disabling_h1():
+    model = make_model("cascade-recirculating")
+    state = [0.35, 40.0, 0.24, 30.0, 0.24, 25.0]
+    action = [1.0, 0.0, 0.0, 1.0]
+    info = _process_info(model, state, action)
+
+    assert info["P101_enabled"] is False
+    assert info["H1_enabled"] is True
+    assert info["circulation_flow_m3s"] == pytest.approx(0.0)
+    assert "L3_P101_high_level" in info["hardware_interlocks_active"]
+
+
 def test_tank3_low_level_interlock_stops_p101_without_terminating():
     model = make_model("cascade-recirculating")
-    state = [0.40, 30.0, 0.40, 28.0, 0.04, 26.0]
+    state = [0.24, 30.0, 0.24, 28.0, 0.07, 26.0]
     action = [1.0, 0.0, 0.0, 0.0]
     dx = model.dynamics(state, action, model.disturbance_defaults())
     info = _process_info(model, state, action)
@@ -333,16 +360,16 @@ def test_hard_boundaries_remain_distinct_from_passive_protection():
     model = make_model("cascade-recirculating")
 
     assert model.hard_termination_reasons(
-        [0.51, 30.0, 0.40, 28.0, 0.40, 26.0], [], [], {}
+        [0.41, 30.0, 0.24, 28.0, 0.24, 26.0], [], [], {}
     ) == ("tank_1_hard_overflow",)
     assert model.hard_termination_reasons(
-        [0.40, 30.0, 0.51, 28.0, 0.40, 26.0], [], [], {}
+        [0.24, 30.0, 0.41, 28.0, 0.24, 26.0], [], [], {}
     ) == ("tank_2_hard_overflow",)
     assert model.hard_termination_reasons(
-        [0.40, 30.0, 0.40, 28.0, 0.51, 26.0], [], [], {}
+        [0.24, 30.0, 0.24, 28.0, 0.41, 26.0], [], [], {}
     ) == ("tank_3_hard_overflow",)
     assert model.hard_termination_reasons(
-        [0.40, 100.0, 0.40, 28.0, 0.40, 26.0], [], [], {}
+        [0.24, 100.0, 0.24, 28.0, 0.24, 26.0], [], [], {}
     ) == ("temperature_hard_limit",)
 
 
@@ -350,7 +377,7 @@ def test_hard_boundaries_remain_distinct_from_passive_protection():
 def test_numeric_and_casadi_match_with_both_overflow_branches_active():
     ca = pytest.importorskip("casadi")
     model = make_model("cascade-recirculating")
-    state = [0.49, 60.0, 0.495, 45.0, 0.30, 25.0]
+    state = [0.37, 60.0, 0.375, 45.0, 0.25, 25.0]
     action = [0.08, 0.20, 0.30, 1.0]
     disturbance = {
         "t_amb": 18.0,
@@ -383,17 +410,17 @@ def test_environment_reports_passive_protection_separately_from_hard_stop():
         randomize_setpoints=False,
     )
     env.reset(seed=3)
-    env.integ.reset([0.49, 40.0, 0.40, 30.0, 0.35, 25.0])
+    env.integ.reset([0.37, 40.0, 0.24, 30.0, 0.25, 25.0])
     _, _, terminated, _, passive_info = env.step([0.0, 0.0, 0.0, 0.0])
 
     assert not terminated
     assert passive_info["safety_events"] == []
     assert "tank_1_passive_overflow" in passive_info["passive_safety_events"]
-    assert "L3_high_level" in passive_info["hardware_interlocks_active"]
+    assert "L3_P101_high_level" in passive_info["hardware_interlocks_active"]
     assert "termination_reason" not in passive_info
 
     env.reset(seed=3)
-    env.integ.reset([0.55, 40.0, 0.40, 30.0, 0.35, 25.0])
+    env.integ.reset([0.43, 40.0, 0.24, 30.0, 0.25, 25.0])
     _, _, terminated, _, hard_info = env.step([0.0, 0.0, 0.0, 0.0])
 
     assert terminated
@@ -405,6 +432,7 @@ def test_device_cases_are_explicit_and_goal_independent():
     expected = {
         "cascade-recirculating/commissioning",
         "cascade-recirculating/disturbance-rejection",
+        "cascade-recirculating/hydraulic-commissioning",
         "cascade-recirculating/safety-recovery",
         "cascade-recirculating/temperature-step",
     }
@@ -433,6 +461,22 @@ def test_commissioning_case_starts_from_a_feasible_nontrivial_offset():
     assert not terminated
     assert info["closed_loop_nominal"] is True
     assert info["tracking_error_cost"] > 1e-8
+
+
+def test_phase1_hydraulic_commissioning_physically_disables_h1():
+    case = aiogym.load_case("cascade-recirculating/hydraulic-commissioning")
+    env = make_test_env(
+        "cascade-recirculating",
+        case=case,
+        reward_spec="regulation-v1",
+    )
+    _, info = env.reset(seed=8)
+    assert env.model.p["heater_power"] == pytest.approx(0.0)
+    assert env.model.default_action()[3] == pytest.approx(0.0)
+
+    _, _, terminated, _, info = env.step([1.0, 0.2, 0.2, 1.0])
+    assert not terminated
+    assert info["H1_electric_power_w"] == pytest.approx(0.0)
 
 
 def test_temperature_step_is_visible_before_its_control_step():
@@ -477,7 +521,7 @@ def test_safety_recovery_case_starts_with_recoverable_protection_layers():
     assert not terminated
     assert "tank_1_passive_overflow" in info["passive_safety_events"]
     assert "P101_tank_3_low_level" in info["hardware_interlocks_active"]
-    assert "L3_high_level" in info["hardware_interlocks_active"]
+    assert "L3_P101_high_level" in info["hardware_interlocks_active"]
     assert info["safety_events"] == []
 
 

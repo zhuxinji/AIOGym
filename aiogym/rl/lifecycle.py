@@ -17,7 +17,7 @@ from aiogym.evaluation.artifact import check_benchmark_artifacts
 from aiogym.evaluation.execution.rollouts import rollout_controller
 from aiogym.evaluation.provenance import reward_spec_hash, seed_namespace_hash
 
-from .backends import BackendResult, validate_backend_result
+from .backends.contracts import BackendResult, validate_backend_result
 from .plan import ResolvedTrainingPlan
 from .training_artifacts import rl_payload, result_row, write_rl_artifacts
 from .validation import evaluate_validation_policy

@@ -1,7 +1,6 @@
 """Atomic ownership records for one named training run."""
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import tempfile
@@ -9,6 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+from aiogym._internal.serialization import file_sha256, stable_json_hash
 
 
 RUN_CLAIM_SCHEMA_VERSION = "aiogym.run_claim.v1"
@@ -377,14 +378,11 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _mapping_hash(value: Mapping[str, Any]) -> str:
-    payload = json.dumps(
-        dict(value), sort_keys=True, separators=(",", ":"), allow_nan=False
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return stable_json_hash(dict(value))
 
 
 def _file_hash(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    return file_sha256(path)
 
 
 def _utc_now() -> str:
