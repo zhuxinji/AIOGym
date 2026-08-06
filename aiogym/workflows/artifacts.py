@@ -53,6 +53,9 @@ def write_run_bundle(
         "plant_id": result.get("plant_id"),
         "plant_hash": result.get("plant_hash"),
         "seed": result.get("seed"),
+        "seeds": result.get("seeds"),
+        "preset": result.get("preset"),
+        "policy": result.get("policy"),
         "files": files,
     }
     write_json(targets["manifest"], manifest, overwrite=overwrite)
