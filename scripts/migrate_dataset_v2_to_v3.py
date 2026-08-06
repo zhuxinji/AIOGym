@@ -37,9 +37,20 @@ def migrate(source: Path, output: Path) -> dict:
         task_hash=task_hash,
         plant_id=f"migrated-{old_manifest['dataset_id']}",
         plant_hash=plant_hash,
-        preset="migrated-v2",
+        condition_id="migrated-v2",
+        condition_hash=stable_hash({"source": "aiogym.dataset.v2"}),
+        interface_hash=stable_hash(
+            {
+                "observation_shape": list(first_arrays["observation"].shape[1:]),
+                "action_shape": list(
+                    first_arrays["action_policy_normalized"].shape[1:]
+                ),
+            }
+        ),
+        env_hash=stable_hash({"task_hash": task_hash, "plant_hash": plant_hash}),
         policy={"id": "migrated-v2", "source_schema": "aiogym.dataset.v2"},
         base_seed=base_seed,
+        state_schema={"source": "legacy-v2", "fields": []},
         observation_schema={
             "shape": list(first_arrays["observation"].shape[1:]),
             "dtype": str(first_arrays["observation"].dtype),

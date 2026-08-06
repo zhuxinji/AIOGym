@@ -114,3 +114,59 @@ def test_evaluate_source_has_no_ranking_protocol_dependencies():
     ).read_text(encoding="utf-8")
     for retired in ("Track", "Anchor", "Scorecard", "Goal registry", "ranking"):
         assert retired not in source
+
+
+class _ContractPolicy:
+    def __init__(self, action_dim, contract):
+        self.action_dim = action_dim
+        self.contract = contract
+
+    def reset(self, seed=None):
+        del seed
+
+    def act(self, observation, context):
+        del observation, context
+        return np.zeros(self.action_dim, dtype=np.float32)
+
+    def metadata(self):
+        return {
+            "id": "contract-test",
+            "training_contract": self.contract,
+        }
+
+
+def test_checkpoint_interface_rejection_and_condition_transfer_flags():
+    source = make_env(
+        "three_tank/regulation", plant="recirculating-h1-v1"
+    )
+    try:
+        contract = source.identity.as_dict()
+        policy = _ContractPolicy(4, contract)
+    finally:
+        source.close()
+    with pytest.raises(ValueError, match="interface_hash"):
+        evaluate(
+            policy,
+            task="three_tank/regulation",
+            plant="lab-three-tank-v1",
+            seeds=(0,),
+            max_steps=1,
+        )
+
+    base = load_plant("recirculating-h1-v1").conditions["commissioning"]
+    changed = base.as_dict(include_hash=False)
+    changed["id"] = "transfer-condition"
+    changed["reference"] = [*base.reference[:3], 31.0, *base.reference[4:]]
+    result = evaluate(
+        policy,
+        task="three_tank/regulation",
+        plant="recirculating-h1-v1",
+        condition=changed,
+        seeds=(0,),
+        max_steps=1,
+    )
+    assert result["transfer_flags"] == {
+        "is_transfer": True,
+        "plant_changed": False,
+        "condition_changed": True,
+    }

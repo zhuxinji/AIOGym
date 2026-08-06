@@ -18,6 +18,7 @@ def collect(
     task: str,
     output: str | Path,
     plant=None,
+    condition=None,
     preset: str | None = None,
     policy="random",
     episodes: int = 1,
@@ -30,7 +31,8 @@ def collect(
     base_seed = _nonnegative_int("seed", seed)
     bound_env = getattr(policy, "env", None) if not isinstance(policy, str) else None
     created_env = bound_env is None
-    env = bound_env or make_env(task, plant=plant, preset=preset)
+    condition = _condition_alias(condition, preset)
+    env = bound_env or make_env(task, plant=plant, condition=condition)
     if env.task.id != task:
         raise ValueError("bound policy environment does not match collection task")
     if plant is not None and env.plant.plant_hash != load_plant(plant).plant_hash:
@@ -45,11 +47,18 @@ def collect(
             task_hash=env.task.task_hash,
             plant_id=env.plant.id,
             plant_hash=env.plant.plant_hash,
-            preset=env.preset.id,
+            condition_id=env.condition.id,
+            condition_hash=env.condition.condition_hash,
+            interface_hash=env.identity.interface_hash,
+            env_hash=env.identity.env_hash,
             policy=resolved_policy.metadata(),
             base_seed=base_seed,
+            state_schema={"fields": list(env.model.state_schema())},
             observation_schema=_space_schema(env.observation_space),
-            action_schema=_space_schema(env.action_space),
+            action_schema={
+                "fields": list(env.model.action_schema()),
+                "space": _space_schema(env.action_space),
+            },
             resume=resume,
         )
         for index in range(len(writer.manifest["episodes"]), count):
@@ -74,7 +83,10 @@ def collect(
         "task_hash": env.task.task_hash,
         "plant_id": env.plant.id,
         "plant_hash": env.plant.plant_hash,
-        "preset": env.preset.id,
+        "condition_id": env.condition.id,
+        "condition_hash": env.condition.condition_hash,
+        "interface_hash": env.identity.interface_hash,
+        "env_hash": env.identity.env_hash,
         "episodes": len(reader),
         "transitions": reader.transition_count,
         "manifest": reader.manifest,
@@ -176,6 +188,12 @@ def _nonnegative_int(name, value):
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError(f"{name} must be a non-negative integer")
     return value
+
+
+def _condition_alias(condition, preset):
+    if condition is not None and preset is not None:
+        raise TypeError("condition and deprecated preset cannot both be provided")
+    return condition if condition is not None else preset
 
 
 __all__ = ["collect"]

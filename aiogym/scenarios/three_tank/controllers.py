@@ -44,16 +44,30 @@ _MPC = {
 }
 
 
-def resolve_controller_profile(controller_id, *, plant_id, condition_id, objective):
+def resolve_controller_profile(
+    controller_id, *, plant_id, plant, condition_id, objective
+):
     del condition_id, objective
+    declaration = plant.config.plant
+    if declaration["topology"] == "open_cascade":
+        family = "open"
+    elif "parameters" in declaration and len(declaration["actuators"]) == 4:
+        family = "recirculating-h1"
+    else:
+        family = "lab"
     if controller_id == "pid":
         return {
-            "open-cascade-v1": _OPEN_PID,
-            "recirculating-h1-v1": _RECIRCULATING_PID,
-            "lab-three-tank-v1": _LAB_PID,
-        }[plant_id]
+            "open": _OPEN_PID,
+            "recirculating-h1": _RECIRCULATING_PID,
+            "lab": _LAB_PID,
+        }[family]
     if controller_id == "mpc":
-        return _MPC[plant_id]
+        key = {
+            "open": "open-cascade-v1",
+            "recirculating-h1": "recirculating-h1-v1",
+            "lab": "lab-three-tank-v1",
+        }[family]
+        return _MPC[key]
     return {}
 
 

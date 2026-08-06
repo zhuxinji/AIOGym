@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 import numpy as np
 
@@ -56,10 +57,20 @@ class RandomPolicy:
 
 
 class SB3CheckpointPolicy:
-    def __init__(self, model, *, algorithm: str, checkpoint: str | Path):
+    def __init__(
+        self,
+        model,
+        *,
+        algorithm: str,
+        checkpoint: str | Path,
+        training_contract=None,
+    ):
         self.model = model
         self.algorithm = algorithm.lower()
         self.checkpoint = str(checkpoint)
+        self.training_contract = (
+            None if training_contract is None else dict(training_contract)
+        )
 
     @classmethod
     def load(
@@ -81,7 +92,18 @@ class SB3CheckpointPolicy:
         if key not in algorithms:
             raise ValueError(f"unsupported SB3 algorithm {algorithm!r}")
         model = algorithms[key].load(str(checkpoint), device=device)
-        return cls(model, algorithm=key, checkpoint=checkpoint)
+        contract_path = Path(checkpoint).with_name("contract.json")
+        contract = (
+            json.loads(contract_path.read_text(encoding="utf-8"))
+            if contract_path.is_file()
+            else None
+        )
+        return cls(
+            model,
+            algorithm=key,
+            checkpoint=checkpoint,
+            training_contract=contract,
+        )
 
     def reset(self, seed=None):
         del seed
@@ -93,13 +115,16 @@ class SB3CheckpointPolicy:
         return np.asarray(action, dtype=np.float32)
 
     def metadata(self):
-        return {
+        metadata = {
             "id": "sb3_checkpoint",
             "kind": "learned_policy",
             "algorithm": self.algorithm,
             "checkpoint": self.checkpoint,
             "action_contract": "env.action_space",
         }
+        if self.training_contract is not None:
+            metadata["training_contract"] = dict(self.training_contract)
+        return metadata
 
 
 __all__ = ["HoldPolicy", "RandomPolicy", "SB3CheckpointPolicy"]

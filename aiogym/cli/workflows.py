@@ -10,8 +10,8 @@ from aiogym.core import jsonable
 
 def _common(parser):
     parser.add_argument("task")
-    parser.add_argument("--plant", type=Path)
-    parser.add_argument("--preset")
+    parser.add_argument("--plant")
+    parser.add_argument("--condition")
     parser.add_argument("--output", required=True, type=Path)
 
 
@@ -28,8 +28,8 @@ def _parser(command):
         parser.add_argument("task", nargs="?")
         parser.add_argument("algorithm", nargs="?")
         parser.add_argument("--config", type=Path)
-        parser.add_argument("--plant", type=Path)
-        parser.add_argument("--preset")
+        parser.add_argument("--plant")
+        parser.add_argument("--condition")
         parser.add_argument("--steps", type=int)
         parser.add_argument("--seed", type=int, default=None)
         parser.add_argument("--eval-seeds", nargs="+", type=int)
@@ -58,7 +58,7 @@ def _train_arguments(args, parser):
         "task": args.task,
         "algorithm": args.algorithm,
         "plant": args.plant,
-        "preset": args.preset,
+        "condition": args.condition,
         "steps": args.steps,
         "seed": args.seed,
         "eval_seeds": args.eval_seeds,
@@ -85,7 +85,7 @@ def main(command, argv=None):
             result = collect(
                 task=args.task,
                 plant=args.plant,
-                preset=args.preset,
+                condition=args.condition,
                 policy=args.controller,
                 episodes=args.episodes,
                 seed=args.seed,
@@ -111,7 +111,7 @@ def main(command, argv=None):
                 policy,
                 task=args.task,
                 plant=args.plant,
-                preset=args.preset,
+                condition=args.condition,
                 seeds=args.seeds,
                 max_steps=args.max_steps,
                 output=args.output,

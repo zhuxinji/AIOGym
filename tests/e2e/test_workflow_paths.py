@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 import aiogym
@@ -14,11 +15,11 @@ SMALL_POLICY = {"policy_kwargs": {"net_arch": [8, 8]}}
 PLANT = Path("aiogym/scenarios/three_tank/default-design-v1.json")
 
 
-def _sac_smoke(tmp_path, *, task, preset, plant=None):
+def _sac_smoke(tmp_path, *, task, condition, plant=None):
     result = aiogym.train(
         task=task,
         plant=plant,
-        preset=preset,
+        condition=condition,
         algorithm="sac",
         steps=2,
         seed=4,
@@ -32,7 +33,7 @@ def _sac_smoke(tmp_path, *, task, preset, plant=None):
         loaded,
         task=task,
         plant=plant,
-        preset=preset,
+        condition=condition,
         seeds=(15,),
         max_steps=2,
     )
@@ -45,17 +46,18 @@ def test_three_tank_plant_to_study_data_train_and_evaluate(tmp_path):
     plant = aiogym.load_plant(PLANT)
     study = aiogym.study(plant, robustness_samples=0, output=tmp_path / "study")
     env = aiogym.make_env(
-        "three_tank/regulation", plant=plant, preset="commissioning"
+        "three_tank/regulation", plant=plant, condition="commissioning"
     )
     try:
         pid = aiogym.make_controller("pid", env=env)
         baseline = aiogym.evaluate(pid, seeds=(7,), max_steps=2)
-        with pytest.raises(ValueError, match="unsupported for three_tank"):
-            aiogym.make_controller("mpc", env=env)
+        mpc = aiogym.make_controller("mpc", env=env)
+        mpc_result = aiogym.evaluate(mpc, seeds=(7,), max_steps=2)
+        assert np.isfinite(mpc_result["aggregate"]["return"]["mean"])
         collected = aiogym.collect(
             task="three_tank/regulation",
             plant=plant,
-            preset="commissioning",
+            condition="commissioning",
             policy=pid,
             episodes=1,
             max_steps=2,
@@ -68,7 +70,7 @@ def test_three_tank_plant_to_study_data_train_and_evaluate(tmp_path):
     trained = _sac_smoke(
         tmp_path,
         task="three_tank/regulation",
-        preset="commissioning",
+        condition="commissioning",
         plant=plant,
     )
     hashes = {
@@ -96,7 +98,7 @@ def test_quadruple_controller_data_and_sac_path(tmp_path):
             assert result["episodes"][0]["steps"] == 2
         collected = aiogym.collect(
             task="quadruple/regulation",
-            preset="minimum-phase",
+            condition="minimum-phase",
             policy=pid,
             episodes=1,
             max_steps=2,
@@ -105,7 +107,7 @@ def test_quadruple_controller_data_and_sac_path(tmp_path):
     finally:
         env.close()
     trained = _sac_smoke(
-        tmp_path, task="quadruple/regulation", preset="minimum-phase"
+        tmp_path, task="quadruple/regulation", condition="minimum-phase"
     )
     assert collected["plant_hash"] == trained["plant_hash"]
 
@@ -114,7 +116,7 @@ def test_cascade_tasks_share_plant_but_separate_objectives(tmp_path):
     regulation = aiogym.evaluate(
         "pid",
         task="cascade/regulation",
-        preset="continuous-benchmark",
+        condition="continuous-benchmark",
         seeds=(0,),
         max_steps=2,
     )
@@ -132,6 +134,6 @@ def test_cascade_tasks_share_plant_but_separate_objectives(tmp_path):
     trained = _sac_smoke(
         tmp_path,
         task="cascade/regulation",
-        preset="continuous-benchmark",
+        condition="continuous-benchmark",
     )
     assert trained["plant_hash"] == regulation["plant_hash"]

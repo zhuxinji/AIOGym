@@ -32,7 +32,22 @@ def load_plant(source: PlantConfig | str | Path | Mapping[str, Any]) -> PlantCon
     if isinstance(source, Mapping):
         raw = copy.deepcopy(dict(source))
     else:
-        raw = json.loads(Path(source).read_text(encoding="utf-8"))
+        path = Path(source)
+        if path.is_file():
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        else:
+            matches = []
+            from aiogym.core import list_scenarios
+
+            for scenario in list_scenarios():
+                plugin = get_scenario(scenario)
+                if str(source) in plugin.built_in_plants:
+                    matches.append(plugin.built_in_plants[str(source)]())
+            if len(matches) != 1:
+                raise FileNotFoundError(
+                    f"unknown or ambiguous built-in plant {str(source)!r}"
+                )
+            raw = matches[0]
     if raw.get("schema_version") == "aiogym.design_spec.v1":
         raw = convert_design_spec_v1(raw)
     return PlantConfig.from_mapping(raw)
@@ -46,10 +61,9 @@ def convert_design_spec_v1(source: str | Path | Mapping[str, Any]) -> dict[str, 
     raw.pop("design_hash", None)
     if raw.get("schema_version") != "aiogym.design_spec.v1":
         raise ValueError("source is not an aiogym.design_spec.v1 declaration")
-    from aiogym.scenarios.three_tank.spec import load_design_spec
-    from aiogym.scenarios.three_tank import design_v1_to_plant
+    from aiogym.scenarios.three_tank.migration import design_v1_to_plant_v2
 
-    return design_v1_to_plant(load_design_spec(raw))
+    return design_v1_to_plant_v2(raw)
 
 
 def validate_plant(source):
@@ -61,6 +75,8 @@ def validate_plant(source):
 def study(
     source,
     *,
+    condition=None,
+    controller="pid",
     robustness_samples: int | None = None,
     seed: int | None = None,
     output: str | Path | None = None,
@@ -79,12 +95,25 @@ def study(
         default_samples if robustness_samples is None else robustness_samples,
     )
     resolved_seed = _nonnegative_int("seed", default_seed if seed is None else seed)
-    dynamic = _dynamic_check(plant, provider, disturbances={})
+    identity_env = make_env(
+        f"{plant.scenario}/regulation", plant=plant, condition=condition
+    )
+    identity = identity_env.identity
+    identity_env.close()
+    dynamic = _dynamic_check(
+        plant,
+        provider,
+        condition=condition,
+        controller=controller,
+        disturbances={},
+    )
     checks.append(dynamic)
     robustness = _robustness_check(
         plant,
         resolved,
         provider,
+        condition=condition,
+        controller=controller,
         samples=sample_count,
         seed=resolved_seed,
     )
@@ -95,6 +124,11 @@ def study(
         "workflow": "design",
         "plant_id": plant.id,
         "plant_hash": plant.plant_hash,
+        "condition_id": identity.condition_id,
+        "condition_hash": identity.condition_hash,
+        "study_hash": plant.study_hash,
+        "interface_hash": identity.interface_hash,
+        "env_hash": identity.env_hash,
         "scenario": plant.scenario,
         "task_id": f"{plant.scenario}/regulation",
         "task_hash": get_scenario(plant.scenario).tasks["regulation"].task_hash,
@@ -177,19 +211,22 @@ def sweep(
     return result
 
 
-def _dynamic_check(plant, provider, *, disturbances):
-    env = make_env(f"{plant.scenario}/regulation", plant=plant, preset="commissioning")
+def _dynamic_check(
+    plant, provider, *, condition, controller, disturbances
+):
+    env = make_env(
+        f"{plant.scenario}/regulation", plant=plant, condition=condition
+    )
     env.set_disturbances(disturbances)
-    policy = make_controller("pid", env=env, profile="commissioning")
+    policy = make_controller(controller, env=env)
     requirements = provider.dynamic_requirements(env.plant)
-    operation = requirements["operation"]
     limits = requirements["requirements"]
     try:
         episode = rollout(env, policy, seed=0)
     finally:
         env.close()
-    target_levels = np.asarray(operation["target_levels_m"], dtype=float)
-    target_temperatures = np.asarray(operation["target_temperatures_degC"], dtype=float)
+    target_levels = np.asarray(env.condition.reference[:3], dtype=float)
+    target_temperatures = np.asarray(env.condition.reference[3:], dtype=float)
     tolerance_h = float(limits["level_tolerance_m"])
     tolerance_t = float(limits["temperature_tolerance_degC"])
     heatup_time = None
@@ -200,9 +237,9 @@ def _dynamic_check(plant, provider, *, disturbances):
     protection_events: set[str] = set()
     hard_reasons: set[str] = set()
     for transition in episode.transitions:
-        observation = np.asarray(transition.next_observation, dtype=float)
-        levels = observation[:3]
-        temperatures = observation[3:6]
+        output = np.asarray(transition.info["y"], dtype=float)
+        levels = output[:3]
+        temperatures = output[3:6]
         maximum_overshoot = max(
             maximum_overshoot,
             float(np.max(np.maximum(temperatures - target_temperatures, 0.0))),
@@ -226,7 +263,7 @@ def _dynamic_check(plant, provider, *, disturbances):
             np.abs(levels - target_levels) <= tolerance_h
         ) and np.all(np.abs(temperatures - target_temperatures) <= tolerance_t):
             heatup_time = transition.physical_time
-    final = np.asarray(episode.transitions[-1].next_observation, dtype=float)
+    final = np.asarray(episode.transitions[-1].info["y"], dtype=float)
     final_level_error = float(np.max(np.abs(final[:3] - target_levels)))
     final_temperature_error = float(
         np.max(np.abs(final[3:6] - target_temperatures))
@@ -271,13 +308,21 @@ def _dynamic_check(plant, provider, *, disturbances):
     )
 
 
-def _robustness_check(plant, resolved, provider, *, samples, seed):
+def _robustness_check(
+    plant, resolved, provider, *, condition, controller, samples, seed
+):
     rng = np.random.default_rng(seed)
     cases = []
     for index in range(samples):
         disturbances = provider.sample_disturbances(resolved, rng)
         steady = provider.steady_check(resolved, disturbances)
-        dynamic = _dynamic_check(plant, provider, disturbances=disturbances)
+        dynamic = _dynamic_check(
+            plant,
+            provider,
+            condition=condition,
+            controller=controller,
+            disturbances=disturbances,
+        )
         passed = steady.passed and dynamic.passed
         cases.append(
             {
@@ -290,7 +335,9 @@ def _robustness_check(plant, resolved, provider, *, samples, seed):
         )
     pass_count = sum(case["passed"] for case in cases)
     pass_rate = 1.0 if samples == 0 else pass_count / samples
-    required = float(resolved.parameters["requirements"]["robustness_pass_rate"])
+    required = float(
+        plant.study.get("requirements", {}).get("robustness_pass_rate", 0.0)
+    )
     passed = pass_rate >= required
     metrics = {
         "passed": passed,

@@ -28,12 +28,12 @@ def _raw_design():
 
 def test_design_v1_converts_to_generic_plant_and_shared_env_hash():
     converted = convert_design_spec_v1(DESIGN)
-    assert converted["schema_version"] == "aiogym.plant.v1"
+    assert converted["schema_version"] == "aiogym.plant.v2"
     assert converted["scenario"] == "three_tank"
     plant = load_plant(converted)
     assert load_plant(DESIGN).plant_hash == plant.plant_hash
     resolved = validate_plant(plant)
-    env = make_env("three_tank/regulation", plant=plant, preset="commissioning")
+    env = make_env("three_tank/regulation", plant=plant, condition="commissioning")
     try:
         _, info = env.reset(seed=0)
         assert resolved.plant_hash == plant.plant_hash == info["plant_hash"]
@@ -98,6 +98,9 @@ def test_sweep_changes_plant_hash_and_artifacts_are_no_overwrite(tmp_path):
     manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["plant_hash"] == written["plant_hash"]
     assert manifest["task_hash"] == written["task_hash"]
+    assert manifest["condition_hash"] == written["condition_hash"]
+    assert manifest["interface_hash"] == written["interface_hash"]
+    assert manifest["env_hash"] == written["env_hash"]
     with pytest.raises(FileExistsError):
         study(
             DESIGN,
@@ -120,3 +123,18 @@ def test_robustness_sampling_is_seeded_and_reports_same_samples():
     assert [
         row["dynamic"]["heatup_time_s"] for row in first["robustness"]["cases"]
     ] != [890.0, 890.0]
+
+
+@pytest.mark.parametrize(
+    "plant_id", ("open-cascade-v1", "recirculating-h1-v1")
+)
+def test_design_study_dispatches_both_supported_topologies(plant_id):
+    result = study(plant_id, robustness_samples=0, seed=0)
+    assert result["verdict"] == "PASS"
+    assert result["condition_id"] in {
+        "continuous-benchmark",
+        "commissioning",
+    }
+    assert len(result["study_hash"]) == 64
+    assert len(result["interface_hash"]) == 64
+    assert len(result["env_hash"]) == 64

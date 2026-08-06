@@ -20,6 +20,7 @@ def _parser(prog):
     validate.add_argument("plant", type=Path)
     run = commands.add_parser("run", help="run the scenario design study")
     run.add_argument("plant", type=Path)
+    run.add_argument("--condition")
     run.add_argument("--output", type=Path)
     run.add_argument("--samples", type=int)
     run.add_argument("--seed", type=int)
@@ -42,7 +43,12 @@ def main(argv=None, *, prog="aiogym design"):
         if args.action == "new":
             import aiogym.scenarios  # noqa: F401
 
-            result = get_scenario(args.scenario).default_plant()
+            plugin = get_scenario(args.scenario)
+            source = plugin.default_plant
+            if callable(source):
+                result = source()
+            else:
+                result = plugin.built_in_plants[source]()
             write_json(args.output, result, overwrite=args.force)
             result = {"plant": str(args.output.resolve()), **result}
         elif args.action == "validate":
@@ -56,6 +62,7 @@ def main(argv=None, *, prog="aiogym design"):
         elif args.action == "run":
             result = study(
                 args.plant,
+                condition=args.condition,
                 robustness_samples=args.samples,
                 seed=args.seed,
                 output=args.output,

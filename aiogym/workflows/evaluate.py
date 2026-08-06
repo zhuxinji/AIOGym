@@ -24,6 +24,7 @@ def evaluate(
     *,
     task: str | None = None,
     plant=None,
+    condition=None,
     preset: str | None = None,
     seeds: Sequence[int] = (0,),
     output: str | Path | None = None,
@@ -38,12 +39,32 @@ def evaluate(
         task = bound_env.task.id
     task_spec = get_task(task)
     created_env = bound_env is None
-    env = bound_env or make_env(task, plant=plant, preset=preset)
+    condition = _condition_alias(condition, preset)
+    env = bound_env or make_env(task, plant=plant, condition=condition)
     if env.task.id != task:
         raise ValueError("bound policy environment does not match requested task")
     if plant is not None and env.plant.plant_hash != load_plant(plant).plant_hash:
         raise ValueError("bound policy environment does not match requested plant")
     resolved_policy = make_controller(policy, env=env) if isinstance(policy, str) else policy
+    policy_metadata = dict(resolved_policy.metadata())
+    training_contract = policy_metadata.get("training_contract")
+    target_contract = env.identity.as_dict()
+    transfer_flags = {}
+    if training_contract is not None:
+        if training_contract.get("task_hash") != target_contract["task_hash"]:
+            raise ValueError("checkpoint task semantics are incompatible with target task")
+        if training_contract.get("interface_hash") != target_contract["interface_hash"]:
+            raise ValueError("checkpoint interface_hash is incompatible with target environment")
+        transfer_flags = {
+            "is_transfer": any(
+                training_contract.get(name) != target_contract[name]
+                for name in ("plant_hash", "condition_hash", "env_hash")
+            ),
+            "plant_changed": training_contract.get("plant_hash")
+            != target_contract["plant_hash"],
+            "condition_changed": training_contract.get("condition_hash")
+            != target_contract["condition_hash"],
+        }
     episodes = []
     try:
         for seed in resolved_seeds:
@@ -66,12 +87,18 @@ def evaluate(
         "task_hash": task_spec.task_hash,
         "plant_id": env.plant.id,
         "plant_hash": env.plant.plant_hash,
-        "preset": env.preset.id,
+        "condition_id": env.condition.id,
+        "condition_hash": env.condition.condition_hash,
+        "interface_hash": env.identity.interface_hash,
+        "env_hash": env.identity.env_hash,
         "objective": task_spec.objective,
         "primary_metric": task_spec.primary_metric,
         "metric_direction": task_spec.metric_direction,
         "seeds": list(resolved_seeds),
-        "policy": dict(resolved_policy.metadata()),
+        "policy": policy_metadata,
+        "policy_training_contract": training_contract,
+        "evaluation_environment_contract": target_contract,
+        "transfer_flags": transfer_flags,
         "episodes": episodes,
         "aggregate": aggregate,
     }
@@ -227,6 +254,12 @@ def _seeds(values):
     if len(set(result)) != len(result):
         raise ValueError("seeds must not contain duplicates")
     return tuple(result)
+
+
+def _condition_alias(condition, preset):
+    if condition is not None and preset is not None:
+        raise TypeError("condition and deprecated preset cannot both be provided")
+    return condition if condition is not None else preset
 
 
 def render_evaluation_report(result: Mapping[str, Any]) -> str:

@@ -30,7 +30,9 @@ def test_supported_algorithms_train_save_reload_and_evaluate(tmp_path, algorithm
         output=output,
     )
     checkpoint = Path(result["checkpoint"]["path"])
+    contract = Path(result["checkpoint_contract"]["path"])
     assert checkpoint.is_file()
+    assert contract.is_file()
     assert len(result["checkpoint"]["sha256"]) == 64
     assert result["evaluation"]["seeds"] == [10]
     assert np.isfinite(result["evaluation"]["aggregate"]["return"]["mean"])
@@ -43,6 +45,7 @@ def test_supported_algorithms_train_save_reload_and_evaluate(tmp_path, algorithm
         max_steps=2,
     )
     assert replay["policy"]["algorithm"] == algorithm
+    assert replay["transfer_flags"]["is_transfer"] is False
     assert np.isfinite(replay["aggregate"]["return"]["mean"])
     assert "use_sde" not in SMALL_POLICY["policy_kwargs"]
     assert (output / "manifest.json").is_file()
@@ -95,7 +98,7 @@ def test_train_config_is_small_and_seed_validation_is_explicit(tmp_path):
         "steps",
         "output",
         "plant",
-        "preset",
+        "condition",
         "seed",
         "eval_seeds",
         "algorithm_kwargs",

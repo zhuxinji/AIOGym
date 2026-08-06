@@ -49,6 +49,7 @@ def make_controller(
             plugin.resolve_controller_profile(
                 key,
                 plant_id=env.plant.id,
+                plant=env.plant,
                 condition_id=env.condition.id,
                 objective=env.task.objective,
             )

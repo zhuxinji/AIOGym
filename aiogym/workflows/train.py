@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from aiogym.controllers.policies import SB3CheckpointPolicy
-from aiogym.core import file_sha256, make_env
+from aiogym.core import file_sha256, make_env, write_json
 
 from .artifacts import write_run_bundle
 from .evaluate import evaluate
@@ -25,7 +25,7 @@ class TrainConfig:
     steps: int
     output: Path
     plant: Any = None
-    preset: str | None = None
+    condition: Any = None
     seed: int = 0
     eval_seeds: tuple[int, ...] = (100,)
     algorithm_kwargs: Mapping[str, Any] = field(default_factory=dict)
@@ -69,6 +69,7 @@ def train(
     steps: int,
     output: str | Path,
     plant=None,
+    condition=None,
     preset: str | None = None,
     seed: int = 0,
     eval_seeds: Sequence[int] = (100,),
@@ -82,7 +83,7 @@ def train(
         steps=steps,
         output=Path(output),
         plant=plant,
-        preset=preset,
+        condition=_condition_alias(condition, preset),
         seed=seed,
         eval_seeds=tuple(eval_seeds),
         algorithm_kwargs=dict(algorithm_kwargs or {}),
@@ -93,7 +94,8 @@ def train(
     config.output.mkdir(parents=True, exist_ok=True)
     model_directory = config.output / "model"
     model_directory.mkdir(parents=True, exist_ok=True)
-    env = make_env(config.task, plant=config.plant, preset=config.preset)
+    env = make_env(config.task, plant=config.plant, condition=config.condition)
+    environment_contract = env.identity.as_dict()
     algorithm_class = _algorithm_class(config.algorithm)
     kwargs = _algorithm_defaults(config.algorithm, config.steps)
     kwargs.update(copy.deepcopy(dict(config.algorithm_kwargs)))
@@ -113,6 +115,11 @@ def train(
     checkpoint = checkpoint_base.with_suffix(".zip")
     if not checkpoint.is_file():
         raise FileNotFoundError(f"SB3 did not create checkpoint: {checkpoint}")
+    contract = {
+        **environment_contract,
+        "algorithm": config.algorithm,
+    }
+    contract_path = write_json(model_directory / "contract.json", contract)
     policy = SB3CheckpointPolicy.load(
         checkpoint,
         algorithm=config.algorithm,
@@ -122,7 +129,7 @@ def train(
         policy,
         task=config.task,
         plant=config.plant,
-        preset=config.preset,
+        condition=config.condition,
         seeds=config.eval_seeds,
         max_steps=config.eval_max_steps,
     )
@@ -133,7 +140,10 @@ def train(
         "task_hash": evaluation["task_hash"],
         "plant_id": evaluation["plant_id"],
         "plant_hash": evaluation["plant_hash"],
-        "preset": evaluation["preset"],
+        "condition_id": evaluation["condition_id"],
+        "condition_hash": evaluation["condition_hash"],
+        "interface_hash": evaluation["interface_hash"],
+        "env_hash": evaluation["env_hash"],
         "algorithm": config.algorithm,
         "steps": config.steps,
         "seed": config.seed,
@@ -143,6 +153,11 @@ def train(
             "path": str(checkpoint),
             "sha256": file_sha256(checkpoint),
             "bytes": checkpoint.stat().st_size,
+        },
+        "checkpoint_contract": {
+            "path": str(contract_path),
+            "sha256": file_sha256(contract_path),
+            "contract": contract,
         },
         "evaluation": evaluation,
         "metrics": evaluation["aggregate"],
@@ -199,6 +214,12 @@ def _algorithm_defaults(algorithm, steps):
         "verbose": 0,
         "device": "cpu",
     }
+
+
+def _condition_alias(condition, preset):
+    if condition is not None and preset is not None:
+        raise TypeError("condition and deprecated preset cannot both be provided")
+    return condition if condition is not None else preset
 
 
 def render_training_report(result):

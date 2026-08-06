@@ -242,9 +242,12 @@ class ThreeTankModel:
         temperatures = values[1::2]
         context = self._model._resolved_env(disturbances)
         applied = self.default_action() if action is None else list(action)
-        return self._model.process_info(
+        info = self._model.process_info(
             values, levels, temperatures, context, applied
         )
+        info["y"] = list(self.outputs(values))
+        info["energy_kw"] = self.action_energy_kw(applied, values, context)
+        return info
 
     def action_energy_kw(self, action, state, disturbances=None):
         context = self._model._resolved_env(disturbances)

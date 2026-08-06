@@ -9,14 +9,16 @@ from aiogym.cli.main import main
 
 def test_cli_lists_only_v2_resources(capsys):
     assert main(["list", "tasks", "--scenario", "three_tank"]) == 0
-    assert capsys.readouterr().out == "three_tank/regulation\n"
+    assert capsys.readouterr().out == (
+        "three_tank/economic\nthree_tank/regulation\n"
+    )
 
 
 def test_cli_design_new_and_validate(tmp_path, capsys):
     plant = tmp_path / "plant.json"
     assert main(["design", "new", "three_tank", str(plant)]) == 0
     created = json.loads(capsys.readouterr().out)
-    assert created["schema_version"] == "aiogym.plant.v1"
+    assert created["schema_version"] == "aiogym.plant.v2"
     assert plant.is_file()
     assert main(["design", "validate", str(plant)]) == 0
     validated = json.loads(capsys.readouterr().out)
