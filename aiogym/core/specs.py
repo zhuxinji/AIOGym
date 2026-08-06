@@ -198,8 +198,25 @@ class RunResult:
         object.__setattr__(self, "metrics", _mapping(self.metrics))
 
 
+@dataclass(frozen=True)
+class CheckResult:
+    name: str
+    category: str
+    passed: bool
+    summary: str
+    metrics: Mapping[str, Any] = field(default_factory=dict)
+    warnings: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.name or not self.category:
+            raise ValueError("check name and category must be non-empty")
+        object.__setattr__(self, "metrics", _mapping(self.metrics))
+        object.__setattr__(self, "warnings", tuple(self.warnings))
+
+
 __all__ = [
     "MetricDirection",
+    "CheckResult",
     "PLANT_SCHEMA_VERSION",
     "PlantConfig",
     "PresetSpec",

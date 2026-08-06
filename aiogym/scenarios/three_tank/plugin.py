@@ -9,6 +9,7 @@ from aiogym.core import PlantConfig, PresetSpec, ResolvedPlant, ScenarioPlugin, 
 from aiogym.scenarios._legacy import regulation_reward
 
 from .model import ThreeTankModel, _legacy_design_spec
+from .study import ThreeTankStudyProvider
 
 
 _EXAMPLE = (
@@ -108,9 +109,31 @@ PLUGIN = ScenarioPlugin(
     resolve_plant=resolve_plant,
     tasks={"regulation": _task()},
     controller_defaults={
-        "pid": {"commissioning": {"profile": "commissioning"}},
+        "pid": {
+            "commissioning": {
+                "kp": [
+                    [4.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [-3.0, 3.0, 0.0, 0.0, 0.0, 0.0],
+                    [0.0, -3.0, 3.0, 0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 0.12, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 0.0, 0.12, 0.0],
+                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.12],
+                ],
+                "ki": [
+                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 0.0005, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 0.0, 0.0005, 0.0],
+                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0005],
+                ],
+                "kd": [[0.0] * 6 for _ in range(6)],
+                "bias": "default_action",
+            }
+        },
         "mpc": {},
     },
+    study_provider=ThreeTankStudyProvider(),
 )
 
 __all__ = ["PLUGIN", "default_plant", "design_v1_to_plant", "resolve_plant"]

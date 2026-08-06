@@ -93,6 +93,7 @@ class ProcessControlEnv(gym.Env):
         )
         self._state = np.asarray(model.initial_state(), dtype=float)
         self._step_index = 0
+        self.disturbances = dict(preset.config.get("disturbances", {}))
 
     @property
     def state(self) -> np.ndarray:
@@ -176,7 +177,12 @@ class ProcessControlEnv(gym.Env):
 
         def derivative(values):
             output = np.asarray(
-                self.model.dynamics(values, action, disturbances=None), dtype=float
+                self.model.dynamics(
+                    values,
+                    action,
+                    disturbances=self.disturbances,
+                ),
+                dtype=float,
             ).reshape(-1)
             if output.shape != state.shape:
                 raise ValueError("model dynamics shape does not match state shape")
@@ -232,7 +238,10 @@ class ProcessControlEnv(gym.Env):
         function = getattr(self.model, "constraint_costs", None)
         if not callable(function):
             return {}
-        return {str(key): float(value) for key, value in function(self._state).items()}
+        return {
+            str(key): float(value)
+            for key, value in function(self._state, self.disturbances).items()
+        }
 
     def _info(
         self,
@@ -242,7 +251,7 @@ class ProcessControlEnv(gym.Env):
         reward_terms: Mapping[str, float],
         constraints: Mapping[str, float],
     ) -> dict[str, Any]:
-        return {
+        info = {
             "task_id": self.task.id,
             "task_hash": self.task.task_hash,
             "plant_id": self.plant.id,
@@ -256,7 +265,18 @@ class ProcessControlEnv(gym.Env):
             "applied_action": None if applied_action is None else applied_action.copy(),
             "reward_terms": dict(reward_terms),
             "constraint_costs": dict(constraints),
+            "disturbance": dict(getattr(self, "disturbances", {})),
         }
+        step_info = getattr(self.model, "step_info", None)
+        if callable(step_info):
+            info.update(
+                step_info(
+                    self._state,
+                    applied_action,
+                    dict(getattr(self, "disturbances", {})),
+                )
+            )
+        return info
 
 
 def make_env(

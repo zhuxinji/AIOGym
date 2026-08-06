@@ -75,7 +75,20 @@ def write_json(path: str | Path, value: Any, *, overwrite: bool = False) -> Path
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists() and not overwrite:
         raise FileExistsError(f"refusing to overwrite existing artifact: {target}")
-    payload = canonical_json_bytes(value)
+    return _atomic_write(target, canonical_json_bytes(value), overwrite=overwrite)
+
+
+def write_text(path: str | Path, value: str, *, overwrite: bool = False) -> Path:
+    if not isinstance(value, str):
+        raise TypeError("text artifact value must be a string")
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists() and not overwrite:
+        raise FileExistsError(f"refusing to overwrite existing artifact: {target}")
+    return _atomic_write(target, value.encode("utf-8"), overwrite=overwrite)
+
+
+def _atomic_write(target: Path, payload: bytes, *, overwrite: bool) -> Path:
     descriptor, temporary_name = tempfile.mkstemp(
         dir=target.parent,
         prefix=f".{target.name}.",
@@ -103,4 +116,5 @@ __all__ = [
     "jsonable",
     "stable_hash",
     "write_json",
+    "write_text",
 ]

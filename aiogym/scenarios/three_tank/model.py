@@ -87,6 +87,30 @@ class ThreeTankModel:
         clamp = getattr(self._model, "clamp_state", None)
         return list(state) if clamp is None else clamp(state)
 
+    def constraint_costs(self, state, disturbances=None):
+        values = list(state)
+        levels = values[0::2]
+        temperatures = values[1::2]
+        context = self._model._resolved_env(disturbances)
+        reasons = self._model.hard_termination_reasons(
+            values, levels, temperatures, context
+        )
+        return {str(reason): 1.0 for reason in reasons}
+
+    def step_info(self, state, action, disturbances=None):
+        values = list(state)
+        levels = values[0::2]
+        temperatures = values[1::2]
+        context = self._model._resolved_env(disturbances)
+        applied = self.default_action() if action is None else list(action)
+        return self._model.process_info(
+            values, levels, temperatures, context, applied
+        )
+
+    def action_energy_kw(self, action, state, disturbances=None):
+        context = self._model._resolved_env(disturbances)
+        return self._model.action_energy_kw(action, state, context)
+
     def __getattr__(self, name: str):
         return getattr(self._model, name)
 

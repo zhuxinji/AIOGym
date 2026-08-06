@@ -1,7 +1,14 @@
 """Scenario-oriented AIO-Gym core with no optional dependency imports."""
 from .contracts import Policy, ProcessModel, ScenarioPlugin, StudyProvider
 from .env import ProcessControlEnv, make_env, resolve_plant
-from .io import canonical_json_bytes, file_sha256, jsonable, stable_hash, write_json
+from .io import (
+    canonical_json_bytes,
+    file_sha256,
+    jsonable,
+    stable_hash,
+    write_json,
+    write_text,
+)
 from .registry import (
     get_scenario,
     get_task,
@@ -12,6 +19,7 @@ from .registry import (
 )
 from .rollout import RolloutResult, Transition, rollout
 from .specs import (
+    CheckResult,
     PLANT_SCHEMA_VERSION,
     PlantConfig,
     PresetSpec,
@@ -22,6 +30,7 @@ from .specs import (
 
 __all__ = [
     "PLANT_SCHEMA_VERSION",
+    "CheckResult",
     "PlantConfig",
     "Policy",
     "PresetSpec",
@@ -48,4 +57,5 @@ __all__ = [
     "stable_hash",
     "unregister_scenario",
     "write_json",
+    "write_text",
 ]
