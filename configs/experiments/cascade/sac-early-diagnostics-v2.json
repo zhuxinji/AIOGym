@@ -1,8 +1,13 @@
 {
+  "schema_version": "aiogym.experiment.v1",
+  "name": "cascade-sac-early-diagnostics-v2",
+  "description": "Short Cascade v2 SAC diagnostic with frequent validation.",
+  "output_dir": "runs/experiments/cascade-sac-early-diagnostics-v2",
+  "seeds": [0, 1, 2],
+  "training": {
   "schema_version": "aiogym.rl_training_config.v3",
   "track_id": "cascade-regulation-generalist-v2",
   "algorithm_id": "sac",
-  "training_seed": 0,
   "budget": {"unit": "environment_transitions", "value": 60000},
   "n_envs": 1,
   "device": "cpu",
@@ -30,8 +35,6 @@
   "evaluation": {"every_transitions": 2000},
   "checkpointing": {"every_transitions": 10000},
   "output": {
-    "directory": "runs/diagnostics/cascade/sac-early/v2",
-    "name": "cascade-sac-early-diagnostics-v2",
     "onnx": false,
     "save_rollout": true,
     "strict_export": false
@@ -44,4 +47,5 @@
   "dataset_hash": null,
   "curriculum_id": null,
   "migration_metadata": null
+  }
 }

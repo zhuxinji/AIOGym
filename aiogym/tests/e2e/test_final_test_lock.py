@@ -15,6 +15,7 @@ from aiogym.rl.final_test import FinalTestLock
     (
         "quadruple-regulation-generalist-v1",
         "cascade-regulation-generalist-v1",
+        "cascade-recirculating-regulation-generalist-v2",
     ),
 )
 def test_final_test_builds_statistics_and_consumes_lock_once(

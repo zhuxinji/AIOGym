@@ -17,7 +17,10 @@ def test_quick_training_profile_comes_from_packaged_resource(profile):
     assert profile.config_template["algorithm_id"] == profile.algorithm_id
 
 
-@pytest.mark.parametrize("target", ("quadruple", "cascade"))
+@pytest.mark.parametrize(
+    "target",
+    ("quadruple", "cascade", "cascade-recirculating"),
+)
 def test_quick_sac_profile_builds_canonical_config(target, tmp_path):
     config, profile = build_training_config(
         target,
@@ -29,7 +32,7 @@ def test_quick_sac_profile_builds_canonical_config(target, tmp_path):
         dataset_path=None,
         resume_checkpoint=None,
     )
-    assert config.track_id.endswith("-regulation-generalist-v1")
+    assert config.track_id.endswith("-regulation-generalist-v2")
     assert config.algorithm_id == "sac"
     assert config.budget_unit == "environment_transitions"
     assert config.budget_value == 1000

@@ -28,7 +28,7 @@ filter on `list_scenarios()`.
 |---|---|---:|---:|---:|---:|---:|---:|---:|---|
 | `quadruple` | `reference-parameterized`; one published reference | 4 | 5 (L0-L4) | 2 | Yes | Yes (SAC) | Yes / Yes | L4 | Complete release-grade physical validation and publish multi-seed reference ranges |
 | `cascade` | `legacy-unverified`; no external reference in the profile | 5 | 3 (L0-L2) | 4 | Yes | Yes (SAC) | Yes / Yes | L4 | Validate benchmark parameters against evidence and publish multi-seed reference ranges |
-| `cascade-recirculating` | `design-provisional`; V2.0 baseline with documented BOM conflicts | 5 | 6 (v1/v2 L0-L2) | 3 | No | No | No / No | L3 | Add one real collect/train/reload/validate/benchmark E2E covering Dataset v2, SAC, BC, and RLPD |
+| `cascade-recirculating` | `design-provisional`; V2.0 baseline with documented BOM conflicts | 5 | 6 (v1/v2 L0-L2) | 3 | Yes | Yes (SAC) | Yes / Yes | L4 | Complete release-grade physical validation and publish multi-seed reference ranges |
 | `crystallization` | `legacy-unverified`; empty parameter provenance | 0 | 0 | 0 | No | No | No / No | L1 | Add a Case v2 with an explicit regulation goal and constraints |
 | `cstr` | `legacy-unverified`; empty parameter provenance | 0 | 0 | 0 | No | No | No / No | L1 | Add a Case v2, then a versioned training distribution |
 | `extraction` | `legacy-unverified`; empty parameter provenance | 0 | 0 | 0 | No | No | No / No | L1 | Add a physically reviewed Case v2 with explicit constraints |
@@ -77,9 +77,15 @@ test. The final-test lock test injects a deterministic evaluator to exercise
 one-shot test-split consumption and statistical report generation; real Track
 evaluation is exercised separately by the training and benchmark tests.
 
-Cascade-recirculating currently has deterministic distribution feasibility,
-Track-contract, and short-rollout tests, but no Dataset collection or training
-E2E. Those unit/integration checks justify L3, not L4.
+Cascade-recirculating has a combined real V2 Dataset collection,
+BC/SAC/RLPD training, digest-verified checkpoint reload, validation, Python and
+CLI benchmark workflow in
+`aiogym/tests/e2e/test_cascade_recirculating_v2_workflow.py`. The test verifies
+the four-action contract and the V2 L2 sensor/actuator dynamics recorded in
+Dataset metadata. Its V2 Track also shares the one-shot final-test lock test.
+Packaged collection and BC/SAC/RLPD quick profiles make the same workflow
+available through the guided CLI. This is pipeline evidence for L4, not a
+claim of research-scale learned-policy performance.
 
 ## Parameter provenance limits
 

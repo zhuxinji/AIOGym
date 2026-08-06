@@ -10,7 +10,7 @@ from aiogym._internal.serialization import write_json_artifact
 from aiogym.benchmarks.anchors import load_anchor_set
 from aiogym.benchmarks.tracks.audit import require_split_isolation
 from aiogym.evaluation.provenance import reward_spec_hash
-from aiogym.rl.config import RLTrainingConfig
+from aiogym.experiments import load_training_config
 from aiogym.rl.episode_env import make_track_training_env
 from aiogym.rl.plan import resolve_training_plan
 
@@ -21,7 +21,7 @@ PREFLIGHT_SCHEMA_VERSION = "aiogym.protocol_preflight.v1"
 def preflight_protocol(config_path: str | Path, *, samples: int = 3) -> dict:
     if samples < 2:
         raise ValueError("preflight samples must be at least two")
-    plan = resolve_training_plan(RLTrainingConfig.load(config_path))
+    plan = resolve_training_plan(load_training_config(config_path))
     track = plan.track
     require_split_isolation(track)
     anchor = load_anchor_set(

@@ -1,8 +1,13 @@
 {
+  "schema_version": "aiogym.experiment.v1",
+  "name": "cascade-sac-pilot-lr2e4-v2",
+  "description": "Cascade v2 SAC pilot with a 2e-4 learning rate.",
+  "output_dir": "runs/experiments/cascade-sac-pilot-lr2e4-v2",
+  "seeds": [0, 1, 2],
+  "training": {
   "schema_version": "aiogym.rl_training_config.v3",
   "track_id": "cascade-regulation-generalist-v2",
   "algorithm_id": "sac",
-  "training_seed": 0,
   "budget": {
     "unit": "environment_transitions",
     "value": 200000
@@ -43,8 +48,6 @@
     "every_transitions": 20000
   },
   "output": {
-    "directory": "runs/pilots/cascade/sac-lr2e4/v2",
-    "name": "cascade-sac-pilot-lr2e4-v2",
     "onnx": false,
     "save_rollout": true,
     "strict_export": false
@@ -57,4 +60,5 @@
   "dataset_hash": null,
   "curriculum_id": null,
   "migration_metadata": null
+  }
 }

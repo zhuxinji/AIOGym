@@ -156,4 +156,4 @@ def test_cli_discovers_only_case_and_track_resources(capsys):
     assert "quadruple/minimum-phase" in capsys.readouterr().out
 
     assert cli_main(["list", "tracks"]) is None
-    assert "quadruple-regulation-generalist-v1" in capsys.readouterr().out
+    assert "quadruple-regulation-generalist-v2" in capsys.readouterr().out

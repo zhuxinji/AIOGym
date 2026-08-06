@@ -12,7 +12,7 @@ from aiogym.cli import evaluate as evaluate_cli
 from aiogym.rl.runner import RUN_RESULT_SCHEMA_VERSION
 
 
-TRACK_ID = "quadruple-regulation-generalist-v1"
+TRACK_ID = "quadruple-regulation-generalist-v2"
 
 
 def _run_fixture(tmp_path):

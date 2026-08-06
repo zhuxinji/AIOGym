@@ -39,8 +39,8 @@ def format_table(headers: Sequence[str], rows: Iterable[Sequence[Any]]) -> str:
     return "\n".join(lines)
 
 
-def track_catalog() -> tuple[dict[str, Any], ...]:
-    return iter_track_catalog()
+def track_catalog(*, include_all: bool = False) -> tuple[dict[str, Any], ...]:
+    return iter_track_catalog(include_all=include_all)
 
 
 def reward_catalog() -> tuple[dict[str, Any], ...]:
@@ -110,12 +110,17 @@ def profile_catalog(
     )
 
 
-def render_track_catalog(*, ids: bool = False, json_output: bool = False) -> str:
+def render_track_catalog(
+    *,
+    ids: bool = False,
+    include_all: bool = False,
+    json_output: bool = False,
+) -> str:
     if ids:
         from aiogym.benchmarks.tracks.registry import list_tracks
 
         return "\n".join(list_tracks())
-    rows = track_catalog()
+    rows = track_catalog(include_all=include_all)
     if json_output:
         return json.dumps(rows, indent=2, sort_keys=True)
     return format_table(

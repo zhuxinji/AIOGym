@@ -21,9 +21,13 @@ def test_quick_collection_profile_comes_from_packaged_resource(profile):
     assert profile.default_workers > 0
 
 
-def test_collection_profile_builds_canonical_config():
+@pytest.mark.parametrize(
+    "target",
+    ("quadruple", "cascade", "cascade-recirculating"),
+)
+def test_collection_profile_builds_canonical_config(target):
     config, profile = build_collection_config(
-        "quadruple",
+        target,
         "quick",
         base_seed=4,
         transitions=10_000,
@@ -31,11 +35,11 @@ def test_collection_profile_builds_canonical_config():
         output=None,
         dataset_id=None,
     )
-    assert config.track_id == "quadruple-regulation-generalist-v1"
+    assert config.track_id == f"{target}-regulation-generalist-v2"
     assert config.target_transitions == 10_000
     assert config.workers == 2
-    assert config.dataset_id == "quadruple-quick-seed4"
-    assert str(config.output) == "datasets/quadruple-quick-seed4"
+    assert config.dataset_id == f"{target}-quick-seed4"
+    assert str(config.output) == f"datasets/{target}-quick-seed4"
     assert profile.id == "quick-v1"
 
 

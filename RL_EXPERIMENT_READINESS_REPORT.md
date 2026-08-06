@@ -1,5 +1,9 @@
 # RL Experiment Readiness Report
 
+> Historical note: the per-experiment `run_*.sh` launchers mentioned in this
+> report were later replaced by `aiogym run <experiment.json>`. Recorded results
+> and old artifact paths remain historical evidence, not current usage guidance.
+
 Last updated: 2026-08-03
 
 ## Baseline
@@ -215,8 +219,9 @@ Last updated: 2026-08-03
 - The real Quadruple v2 preflight passed with three distinct training
   EpisodeSpecs, one neutral step, zero optimizer updates, and zero test
   rollouts. Track hash and frozen anchor hash still match Gate A.
-- Added `configs/experiments/quadruple/sac-pilot-v2.json` and the guarded pilot
-  script. CLI dry-run resolves seeds 0/1/2 and 100,000 transitions per seed.
+- Added `configs/experiments/quadruple/sac-pilot-v2.json` and the then-current
+  guarded pilot launcher. The current generic CLI dry-run resolves seeds 0/1/2
+  and 100,000 transitions per seed.
 - PASS: 57 focused experiment-tool/config/statistics tests.
 - PASS: broad non-E2E/non-RL/non-oracle/non-ONNX regression: 620 passed,
   46 deselected. The sole sandbox multiprocessing semaphore check passed when
@@ -283,10 +288,10 @@ Last updated: 2026-08-03
 - The Track contract retains fixed-bounds normalized observations and hides the
   disturbance vector from the policy. The preflight performs only resets and
   one neutral action; it records zero optimizer updates and zero test rollouts.
-- The guarded local script captures runtime/preflight evidence, trains all
-  three seeds, runs static review, renders Case-aware learning curves, and
-  creates a text/JSON review bundle. Existing results are not overwritten
-  unless `AIOGYM_PILOT_OVERWRITE=1` is explicitly set.
+- The historical guarded launcher captured runtime/preflight evidence, trained
+  all three seeds, ran static review, rendered Case-aware learning curves, and
+  created a text/JSON review bundle. The current `aiogym run` workflow refuses
+  existing results unless `--overwrite` is explicitly passed.
 - At this preparation checkpoint local training had not run; the subsequently
   completed initial Gate C pilot is reviewed below.
 
@@ -412,8 +417,7 @@ Last updated: 2026-08-03
   reviewed candidate was promoted byte-for-byte. New anchor artifact hash:
   `ac7a378cb4b41ce325ea0d8aafc25fc5603020a72fb14ba82c30f8301ad1abdb`.
 - Added a bounded replacement pilot at the safety-stable 1e-4 learning rate:
-  `configs/experiments/cascade/sac-pilot-case-conditioned-v2.json` and
-  `scripts/experiments/run_cascade_sac_pilot_case_conditioned.sh`. All other
+  `configs/experiments/cascade/sac-pilot-case-conditioned-v2.json`. All other
   algorithm, budget, seed, validation, and checkpoint factors match the prior
   1e-4 retry; output identity is separate.
 - PASS: 59 anchor, Track, distribution, split, and training-integration tests;
@@ -422,9 +426,8 @@ Last updated: 2026-08-03
   and 5, zero optimizer updates, and zero test rollouts.
 - PASS: final focused no-training regression before launch: 93 tests, Ruff,
   compileall, candidate/builtin byte equality, and diff whitespace checks.
-- LAUNCHED: `bash
-  scripts/experiments/run_cascade_sac_pilot_case_conditioned.sh` was started in
-  the persistent visible local terminal. Its runtime and protocol-preflight
+- LAUNCHED: the historical case-conditioned launcher was started in the
+  persistent visible local terminal. Its runtime and protocol-preflight
   artifacts were written before optimizer execution began; completion is
   reviewed below.
 
@@ -517,9 +520,9 @@ Last updated: 2026-08-03
   transitions, seeds 0/1/2, validation every 2,000 transitions, resumable
   checkpoint cadence 10,000, and otherwise the exact case-conditioned 1e-4 SAC
   algorithm/replay/Track protocol.
-- Added `scripts/experiments/run_cascade_sac_early_diagnostics.sh` with isolated
-  output under `runs/diagnostics/cascade/sac-early/v2` and the same guarded
-  preflight, static review, plotting, and text-only bundle workflow.
+- The historical early-diagnostic launcher used isolated output under
+  `runs/diagnostics/cascade/sac-early/v2` and the same guarded preflight,
+  static review, plotting, and text-only bundle workflow.
 - PASS: 60 diagnostic/config/selector/checkpoint tests, script syntax, Ruff,
   dry-run, and protocol preflight. Preflight records zero optimizer updates and
   zero test rollouts.

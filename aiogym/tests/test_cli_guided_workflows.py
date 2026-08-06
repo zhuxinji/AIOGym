@@ -55,7 +55,7 @@ def test_guided_train_resolves_canonical_config_and_run_reference(
     ) == 0
     payload = json.loads(capsys.readouterr().out)
     config = captured[0][0]
-    assert config.track_id == "quadruple-regulation-generalist-v1"
+    assert config.track_id == "quadruple-regulation-generalist-v2"
     assert config.output["name"] == "quadruple-sac-quick-seed3"
     assert payload["requested_target"] == "quadruple"
     assert payload["profile_id"] == "quick-v1"
@@ -64,7 +64,20 @@ def test_guided_train_resolves_canonical_config_and_run_reference(
     )
 
 
+@pytest.mark.parametrize(
+    ("target", "track_id"),
+    (
+        ("quadruple", "quadruple-regulation-generalist-v2"),
+        ("cascade", "cascade-regulation-generalist-v2"),
+        (
+            "cascade-recirculating",
+            "cascade-recirculating-regulation-generalist-v2",
+        ),
+    ),
+)
 def test_guided_train_dry_run_creates_no_artifacts(
+    target,
+    track_id,
     tmp_path,
     monkeypatch,
     capsys,
@@ -75,7 +88,7 @@ def test_guided_train_dry_run_creates_no_artifacts(
     )
     assert train_main(
         [
-            "quadruple",
+            target,
             "sac",
             "--dry-run",
             "--output",
@@ -84,7 +97,7 @@ def test_guided_train_dry_run_creates_no_artifacts(
     ) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["dry_run"] is True
-    assert payload["track_id"] == "quadruple-regulation-generalist-v1"
+    assert payload["track_id"] == track_id
     assert payload["reward_spec_id"] == "regulation-v1"
     assert payload["config"]["track_id"] == payload["track_id"]
     assert list(tmp_path.iterdir()) == []
@@ -137,14 +150,26 @@ def test_guided_collection_resolves_exact_counts(
     payload = json.loads(capsys.readouterr().out)
     config, resume = captured[0]
     assert not resume
-    assert config.track_id == "quadruple-regulation-generalist-v1"
+    assert config.track_id == "quadruple-regulation-generalist-v2"
     assert config.target_transitions == 10_000
     assert config.workers == 2
     assert config.dataset_id == "quadruple-quick-seed5"
     assert payload["profile_id"] == "quick-v1"
 
 
+@pytest.mark.parametrize(
+    ("target", "track_id"),
+    (
+        ("cascade", "cascade-regulation-generalist-v2"),
+        (
+            "cascade-recirculating",
+            "cascade-recirculating-regulation-generalist-v2",
+        ),
+    ),
+)
 def test_guided_collection_dry_run_creates_no_directory(
+    target,
+    track_id,
     tmp_path,
     monkeypatch,
     capsys,
@@ -155,14 +180,12 @@ def test_guided_collection_dry_run_creates_no_directory(
         lambda *args, **kwargs: pytest.fail("collector must not execute"),
     )
     assert collect_main(
-        ["cascade", "--dry-run", "--output", str(output)]
+        [target, "--dry-run", "--output", str(output)]
     ) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["dry_run"] is True
     assert payload["target_transitions"] == 1600
-    assert payload["config"]["track_id"] == (
-        "cascade-regulation-generalist-v1"
-    )
+    assert payload["config"]["track_id"] == track_id
     assert not output.exists()
 
 

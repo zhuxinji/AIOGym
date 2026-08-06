@@ -25,13 +25,29 @@ def test_list_tracks_defaults_to_selectors_and_explanatory_columns(capsys):
     ]
     assert "quadruple" in output
     assert "cascade:economic" in output
-    assert "quadruple-regulation-generalist-v1" in output
+    assert "quadruple-regulation-generalist-v2" in output
+    assert "quadruple-regulation-generalist-v1" not in output
 
 
 def test_list_tracks_ids_preserves_canonical_script_surface(capsys):
     main(["list", "tracks", "--ids"])
 
     assert capsys.readouterr().out.splitlines() == list(list_tracks())
+
+
+def test_list_tracks_all_includes_compatibility_versions(capsys):
+    main(["list", "tracks", "--all"])
+    output = capsys.readouterr().out
+
+    assert "quadruple-regulation-generalist-v1" in output
+    assert "quadruple-regulation-generalist-v2" in output
+
+    main(["list", "tracks", "--all", "--json"])
+    rows = json.loads(capsys.readouterr().out)
+    assert any(
+        row["track_id"] == "quadruple-regulation-generalist-v1"
+        for row in rows
+    )
 
 
 def test_list_tracks_structured_output_and_option_conflict(capsys):
@@ -69,14 +85,32 @@ def test_list_rewards_and_profiles_are_filterable(capsys):
     assert len(profiles) == 1
     assert profiles[0]["profile_id"] == "quick-v1"
     assert profiles[0]["track_id"] == (
-        "quadruple-regulation-generalist-v1"
+        "quadruple-regulation-generalist-v2"
+    )
+
+    main(
+        [
+            "list",
+            "profiles",
+            "--kind",
+            "collection",
+            "--target",
+            "cascade-recirculating",
+            "--json",
+        ]
+    )
+    collection_profiles = json.loads(capsys.readouterr().out)
+    assert len(collection_profiles) == 1
+    assert collection_profiles[0]["profile_id"] == "quick-v1"
+    assert collection_profiles[0]["track_id"] == (
+        "cascade-recirculating-regulation-generalist-v2"
     )
 
 
 def test_describe_commands_read_canonical_registry_values(capsys):
     main(["describe", "track", "quadruple", "--json"])
     track = json.loads(capsys.readouterr().out)
-    assert track["track_id"] == "quadruple-regulation-generalist-v1"
+    assert track["track_id"] == "quadruple-regulation-generalist-v2"
     assert track["reward_spec_id"] == "regulation-v1"
 
     main(["describe", "reward", "regulation", "--json"])

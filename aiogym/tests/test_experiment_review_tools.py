@@ -76,22 +76,22 @@ def test_cascade_pilot_preflight_freezes_hidden_disturbance_contract():
 
 
 def test_cascade_retry_changes_only_learning_rate_and_output_identity():
-    baseline = json.loads(
+    baseline_spec = json.loads(
         (ROOT / "configs/experiments/cascade/sac-pilot-v2.json").read_text(
             encoding="utf-8"
         )
     )
-    retry = json.loads(
+    retry_spec = json.loads(
         (
             ROOT
             / "configs/experiments/cascade/sac-pilot-lr1e4-v2.json"
         ).read_text(encoding="utf-8")
     )
+    baseline = baseline_spec["training"]
+    retry = retry_spec["training"]
 
     baseline_learning_rate = baseline["algorithm"].pop("learning_rate")
     retry_learning_rate = retry["algorithm"].pop("learning_rate")
-    baseline.pop("output")
-    retry.pop("output")
 
     assert baseline_learning_rate == 3e-4
     assert retry_learning_rate == 1e-4
@@ -104,19 +104,16 @@ def test_cascade_learning_rate_midpoint_changes_only_controlled_factor():
             ROOT
             / "configs/experiments/cascade/sac-pilot-lr1e4-v2.json"
         ).read_text(encoding="utf-8")
-    )
+    )["training"]
     midpoint = json.loads(
         (
             ROOT
             / "configs/experiments/cascade/sac-pilot-lr2e4-v2.json"
         ).read_text(encoding="utf-8")
-    )
+    )["training"]
 
     lower_learning_rate = lower["algorithm"].pop("learning_rate")
     midpoint_learning_rate = midpoint["algorithm"].pop("learning_rate")
-    lower.pop("output")
-    midpoint.pop("output")
-
     assert lower_learning_rate == 1e-4
     assert midpoint_learning_rate == 2e-4
     assert midpoint == lower
@@ -128,16 +125,14 @@ def test_case_conditioned_retry_keeps_safe_learning_rate_config_frozen():
             ROOT
             / "configs/experiments/cascade/sac-pilot-lr1e4-v2.json"
         ).read_text(encoding="utf-8")
-    )
+    )["training"]
     repaired = json.loads(
         (
             ROOT
             / "configs/experiments/cascade/sac-pilot-case-conditioned-v2.json"
         ).read_text(encoding="utf-8")
-    )
+    )["training"]
 
-    lower.pop("output")
-    repaired.pop("output")
     assert repaired == lower
 
 
@@ -147,13 +142,13 @@ def test_early_diagnostic_changes_only_observation_window_and_output():
             ROOT
             / "configs/experiments/cascade/sac-pilot-case-conditioned-v2.json"
         ).read_text(encoding="utf-8")
-    )
+    )["training"]
     diagnostic = json.loads(
         (
             ROOT
             / "configs/experiments/cascade/sac-early-diagnostics-v2.json"
         ).read_text(encoding="utf-8")
-    )
+    )["training"]
 
     assert diagnostic["budget"]["value"] == 60000
     assert diagnostic["evaluation"]["every_transitions"] == 2000
@@ -164,8 +159,6 @@ def test_early_diagnostic_changes_only_observation_window_and_output():
     diagnostic.pop("evaluation")
     pilot.pop("checkpointing")
     diagnostic.pop("checkpointing")
-    pilot.pop("output")
-    diagnostic.pop("output")
     assert diagnostic == pilot
 
 

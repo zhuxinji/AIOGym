@@ -32,6 +32,7 @@ spec are private.
 | `aiogym.benchmarks` | `TrackSpec`, `list_tracks`, `load_track`, `evaluate_policy_on_track` |
 | `aiogym.controllers` | `Controller`, `make_controller`, `register_controller`, `unregister_controller` |
 | `aiogym.datasets` | `DatasetCollectionConfig`, `DatasetReader`, `validate_dataset`, `list_collectors` |
+| `aiogym.design` | `prompt_design_spec`, `load_design_spec`, `validate_design_spec`, `compile_design_model`, `run_design_study`, `run_design_sweep`, `write_design_report_bundle` |
 | `aiogym.evaluation` | `evaluate_controller`, `build_evaluation_report`, `build_final_statistical_report`, `render_benchmark_report` |
 | `aiogym.generation` | `DistributionSpec`, `EpisodeSpec`, `list_distributions`, `load_distribution`, `make_episode_sampler` |
 | `aiogym.models` | `ProcessModelContract`, `define_model`, `make_model`, `register_model`, `unregister_model`, `CaseSpec`, `list_cases`, `load_case` |
@@ -107,6 +108,14 @@ aiogym evaluate --checkpoint PATH --algorithm ID --track TRACK
 aiogym benchmark --run RUN
 aiogym benchmark --config FILE
 aiogym final-test --config FILE
+aiogym design
+aiogym design --advanced
+aiogym design new NAME [--advanced] [--run]
+aiogym design run --interactive [--save-spec FILE]
+aiogym design validate SPEC
+aiogym design run SPEC --output DIR
+aiogym design sweep SPEC --parameter PATH --values CSV --output DIR
+aiogym design report RESULT --output DIR
 ```
 
 `benchmark` accepts an official Track, the PID/MPC baselines, and at most one
@@ -124,6 +133,10 @@ not the installed profile source.
 `final-test` is the only ordinary command that can consume a test split. Its
 configuration binds the Track hash, checkpoint digests, seed list, and
 one-shot lock.
+
+Design-study commands operate on user-supplied equipment and are deliberately
+outside official Track ranking. Their reports carry exact DesignSpec hashes and
+state `simulation-screening-only` evidence limits.
 
 ## Optional dependencies
 

@@ -3,10 +3,10 @@
   "id": "quick-v1",
   "selector": "quick",
   "description": "Nominal-PID tutorial collection.",
-  "track_id": "cascade-regulation-generalist-v1",
+  "track_id": "cascade-regulation-generalist-v2",
   "config_template": {
     "schema_version": "aiogym.dataset_collection.v1",
-    "track_id": "cascade-regulation-generalist-v1",
+    "track_id": "cascade-regulation-generalist-v2",
     "split": "training",
     "base_seed": 0,
     "target_transitions": 1600,

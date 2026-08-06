@@ -3,11 +3,11 @@
   "id": "quick-v1",
   "selector": "quick",
   "description": "Tutorial and smoke-validation budget.",
-  "track_id": "quadruple-regulation-generalist-v1",
+  "track_id": "quadruple-regulation-generalist-v2",
   "algorithm_id": "sac",
   "config_template": {
     "schema_version": "aiogym.rl_training_config.v3",
-    "track_id": "quadruple-regulation-generalist-v1",
+    "track_id": "quadruple-regulation-generalist-v2",
     "algorithm_id": "sac",
     "training_seed": 0,
     "budget": {"unit": "environment_transitions", "value": 1000},

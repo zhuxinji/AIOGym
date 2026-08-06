@@ -10,10 +10,10 @@ from .schema import TrackSpec
 
 
 BUILTIN_TRACK_DIR = Path(__file__).with_name("builtin")
-DEFAULT_BENCHMARK_TRACK_ID = "quadruple-regulation-generalist-v1"
+DEFAULT_BENCHMARK_TRACK_ID = "quadruple-regulation-generalist-v2"
 TRACK_SELECTORS = {
-    "quadruple": "quadruple-regulation-generalist-v1",
-    "cascade": "cascade-regulation-generalist-v1",
+    "quadruple": "quadruple-regulation-generalist-v2",
+    "cascade": "cascade-regulation-generalist-v2",
     "cascade:economic": "cascade-economic-specialist-v1",
     "cascade:recovery": "cascade-recovery-diagnostic-v1",
     "cascade-recirculating": (
@@ -74,13 +74,16 @@ def preferred_track_selector(track_id: str) -> str | None:
     return None
 
 
-def iter_track_catalog() -> tuple[dict[str, Any], ...]:
+def iter_track_catalog(*, include_all: bool = False) -> tuple[dict[str, Any], ...]:
     rows = []
-    for selector, track_id in TRACK_SELECTORS.items():
+    selected = {track_id: selector for selector, track_id in TRACK_SELECTORS.items()}
+    track_ids = list_tracks() if include_all else tuple(selected)
+    for track_id in track_ids:
+        selector = selected.get(track_id)
         track = load_track(track_id, validate_policy_contract=False)
         rows.append(
             {
-                "selector": selector,
+                "selector": selector or "-",
                 "track_id": track.id,
                 "scenario": track.scenario,
                 "goal": track.goal,

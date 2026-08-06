@@ -1,8 +1,13 @@
 {
+  "schema_version": "aiogym.experiment.v1",
+  "name": "quadruple-sac-pilot-v2",
+  "description": "Three-seed SAC pilot for the Quadruple v2 regulation Track.",
+  "output_dir": "runs/experiments/quadruple-sac-pilot-v2",
+  "seeds": [0, 1, 2],
+  "training": {
   "schema_version": "aiogym.rl_training_config.v3",
   "track_id": "quadruple-regulation-generalist-v2",
   "algorithm_id": "sac",
-  "training_seed": 0,
   "budget": {
     "unit": "environment_transitions",
     "value": 100000
@@ -43,8 +48,6 @@
     "every_transitions": 10000
   },
   "output": {
-    "directory": "runs/pilots/quadruple/sac-v2",
-    "name": "quadruple-sac-pilot-v2",
     "onnx": false,
     "save_rollout": true,
     "strict_export": false
@@ -57,4 +60,5 @@
   "dataset_hash": null,
   "curriculum_id": null,
   "migration_metadata": null
+  }
 }

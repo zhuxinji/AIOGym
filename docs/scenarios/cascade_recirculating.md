@@ -65,3 +65,9 @@ The model remains `design-provisional`. Installed tank dimensions, standpipe and
 LSH/LSL elevations, V12/V23 flow curves, the P101 VFD-frequency/flow/head curve,
 heat-loss coefficients, heater efficiency, and sensor/actuator dynamics require
 commissioning data before calibrated-plant claims.
+
+The scenario is pipeline-ready at L4. Its checked-in workflow covers V2 Dataset
+collection, BC/SAC/RLPD training, digest-verified checkpoint reload, validation,
+benchmarking, and one-shot final-test locking. The packaged `quick` profiles are
+tutorial and smoke budgets; they are not publishable multi-seed performance
+baselines and do not change the `design-provisional` physical status.

@@ -3,6 +3,8 @@
   "workflow_commands": [
     "collect",
     "train",
+    "run",
+    "design",
     "evaluate",
     "benchmark",
     "final-test"
