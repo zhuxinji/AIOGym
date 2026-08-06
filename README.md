@@ -30,7 +30,8 @@ pip install 'aiogym[rl]'
 aiogym list scenarios
 aiogym list tasks
 
-aiogym design run configs/design/cascade-recirculating-example-v1.json \
+aiogym design new three_tank plant.json
+aiogym design run plant.json \
   --output runs/design/example
 
 aiogym collect quadruple/regulation \

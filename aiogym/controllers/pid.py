@@ -69,9 +69,11 @@ class PIDAgent:
     def __init__(self, model, loops=None, holds=None, demand_u_index=None):
         self.model = model
         self.nu = model.action_dim()
-        cfg = _default_pid_config(model) if loops is None else {}
-        self.loops_config = list(loops if loops is not None else cfg["loops"])
-        self.demand_u_index = cfg.get("demand_u_index") if demand_u_index is None else demand_u_index
+        if loops is None:
+            raise ValueError("PID loops must come from ScenarioPlugin controller defaults")
+        cfg = {}
+        self.loops_config = list(loops)
+        self.demand_u_index = demand_u_index
         self.demand_valve = 0.5
         self.holds = list(holds if holds is not None else cfg.get("holds", []))
         self.hold_specs = [_hold_spec(row) for row in self.holds]
@@ -191,17 +193,6 @@ def _gain_matrix(name, value, rows, columns):
     if not np.all(np.isfinite(matrix)):
         raise ValueError(f"PID {name} must contain only finite values")
     return matrix
-
-
-def _default_pid_config(model):
-    from .configs import load_controller_config
-
-    params = dict(load_controller_config("pid", model.scenario).get("parameters", {}))
-    if not params.get("loops"):
-        raise ValueError(
-            f"no PID loop config for {model.scenario!r}; pass loops explicitly or add it to pid.json"
-        )
-    return params
 
 
 def _validate_pid_config(model, loop_specs, hold_specs, demand_u_index):

@@ -113,10 +113,10 @@ def train(
     checkpoint = checkpoint_base.with_suffix(".zip")
     if not checkpoint.is_file():
         raise FileNotFoundError(f"SB3 did not create checkpoint: {checkpoint}")
-    policy = SB3CheckpointPolicy(
-        model,
+    policy = SB3CheckpointPolicy.load(
+        checkpoint,
         algorithm=config.algorithm,
-        checkpoint=checkpoint,
+        device="cpu",
     )
     evaluation = evaluate(
         policy,

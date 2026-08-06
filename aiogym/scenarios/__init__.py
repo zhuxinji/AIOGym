@@ -5,7 +5,6 @@ from aiogym.core import list_scenarios, register_scenario
 
 from .cascade import PLUGIN as CASCADE
 from .cascade_recirculating import PLUGIN as CASCADE_RECIRCULATING
-from .experimental import PLUGINS as EXPERIMENTAL
 from .quadruple import PLUGIN as QUADRUPLE
 from .three_tank import PLUGIN as THREE_TANK
 
@@ -15,7 +14,6 @@ BUILTIN_PLUGINS = (
     CASCADE,
     CASCADE_RECIRCULATING,
     THREE_TANK,
-    *EXPERIMENTAL,
 )
 
 

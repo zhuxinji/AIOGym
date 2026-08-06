@@ -5,7 +5,26 @@ import math
 
 import numpy as np
 
-from .._internal.validation import nonnegative_float, positive_float, positive_int
+
+
+def nonnegative_float(name, value):
+    number = float(value)
+    if not math.isfinite(number) or number < 0:
+        raise ValueError(f"{name} must be finite and non-negative")
+    return number
+
+
+def positive_float(name, value):
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        raise ValueError(f"{name} must be finite and positive")
+    return number
+
+
+def positive_int(name, value):
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
 
 
 class MPCAgent:

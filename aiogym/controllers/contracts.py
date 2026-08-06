@@ -49,17 +49,19 @@ def build_context(env, info: Mapping[str, Any] | None = None) -> ControllerConte
 def make_meas(env):
     """Build a measured state dictionary from the native environment."""
 
-    state = (
-        env._measured_state()
-        if hasattr(env, "_measured_state")
-        else env.model.state_vector(env.integ.x)
-    )
+    if hasattr(env, "_measured_state"):
+        state = env._measured_state()
+    elif hasattr(env, "state"):
+        state = list(env.state)
+    else:
+        state = env.model.state_vector(env.integ.x)
     if getattr(env, "observation_mode", "full_state") == "measured_output":
         return {
             "y": list(env.model.controlled_output(state)),
             "observation_mode": "measured_output",
         }
-    return env.model.measurement(state, env._env())
+    model = getattr(env.model, "_model", env.model)
+    return model.measurement(state, env._env())
 
 
 def validate_action(action: Any, env, controller_name: str) -> np.ndarray:

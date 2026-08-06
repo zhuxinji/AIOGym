@@ -16,12 +16,12 @@ class ThreeTankStudyProvider:
     def checks(self, plant: ResolvedPlant):
         model = ThreeTankModel(plant)
         spec = _legacy_design_spec(plant)
-        from aiogym.design.study import (
+        from .checks import (
             _safety_interlock_assessment,
             _static_assessment,
             _steady_state_assessment,
         )
-        from aiogym.models.validation import validate_model_readiness
+        from aiogym.core.validation import validate_model_readiness
 
         static = _static_assessment(model._model, spec)
         readiness = validate_model_readiness(model._model)
@@ -67,7 +67,7 @@ class ThreeTankStudyProvider:
     def steady_check(self, plant: ResolvedPlant, disturbances: Mapping):
         model = ThreeTankModel(plant)
         spec = _legacy_design_spec(plant)
-        from aiogym.design.study import _steady_state_assessment
+        from .checks import _steady_state_assessment
 
         metrics = _steady_state_assessment(model._model, spec, env=disturbances)
         return _result(

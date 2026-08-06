@@ -46,7 +46,7 @@ def convert_design_spec_v1(source: str | Path | Mapping[str, Any]) -> dict[str, 
     raw.pop("design_hash", None)
     if raw.get("schema_version") != "aiogym.design_spec.v1":
         raise ValueError("source is not an aiogym.design_spec.v1 declaration")
-    from aiogym.design.spec import load_design_spec
+    from aiogym.scenarios.three_tank.spec import load_design_spec
     from aiogym.scenarios.three_tank import design_v1_to_plant
 
     return design_v1_to_plant(load_design_spec(raw))

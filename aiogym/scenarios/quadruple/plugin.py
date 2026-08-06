@@ -1,4 +1,4 @@
-from aiogym.scenarios._legacy import build_plugin
+from aiogym.scenarios._shared import build_plugin
 
 from .model import QuadrupleModel
 
@@ -56,6 +56,22 @@ PLUGIN = build_plugin(
     horizon=600,
     control_dt=1.0,
     controller_defaults={"pid": _PID, "mpc": _MPC},
+    preset_configs={
+        "minimum-phase": {
+            "initial_state": [
+                12.2629675195507,
+                12.783158403008972,
+                1.6339411322567796,
+                1.409044702533737,
+            ],
+            "reference": [12.2629675195507, 12.783158403008972],
+            "observation": "normalized-state-error-action",
+            "reference_schedule": {
+                120: [13.2629675195507, 11.783158403008972],
+                360: [11.7629675195507, 13.283158403008972],
+            },
+        },
+    },
 )
 
 __all__ = ["PLUGIN"]

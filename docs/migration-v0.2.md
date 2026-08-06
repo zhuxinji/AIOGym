@@ -32,7 +32,7 @@ are not emulated.
 Dataset v2 bundles can be converted with:
 
 ```bash
-python3 scripts/refactor/migrate_dataset_v2_to_v3.py OLD_DATASET NEW_DATASET
+python3 scripts/migrate_dataset_v2_to_v3.py OLD_DATASET NEW_DATASET
 ```
 
 The converter preserves old provenance under `legacy_metadata`; it does not

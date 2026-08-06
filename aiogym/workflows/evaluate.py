@@ -118,7 +118,7 @@ def _episode_metrics(env, episode, objective):
                 except TypeError:
                     energy_kw = resolver(transition.action, state)
         metrics["energy"] += float(energy_kw or 0.0) * dt / 3600.0
-        profit += float(info.get("profit", 0.0))
+        profit += float(info.get("profit", transition.reward))
         production += float(
             info.get("production", info.get("product_flow_m3s", 0.0))
         ) * dt

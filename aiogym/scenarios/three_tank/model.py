@@ -39,7 +39,7 @@ class ThreeTankModel:
     scenario = "three_tank"
 
     def __init__(self, plant):
-        from aiogym.design.model import ThreeTankDesignModel
+        from .equipment import ThreeTankDesignModel
 
         self.plant = plant
         self._model = ThreeTankDesignModel(_legacy_design_spec(plant))

@@ -37,21 +37,21 @@ def collect(
         raise ValueError("bound policy environment does not match collection plant")
     resolved_policy = make_controller(policy, env=env) if isinstance(policy, str) else policy
     identifier = dataset_id or Path(output).name
-    writer = DatasetWriter(
-        output,
-        dataset_id=identifier,
-        task_id=env.task.id,
-        task_hash=env.task.task_hash,
-        plant_id=env.plant.id,
-        plant_hash=env.plant.plant_hash,
-        preset=env.preset.id,
-        policy=resolved_policy.metadata(),
-        base_seed=base_seed,
-        observation_schema=_space_schema(env.observation_space),
-        action_schema=_space_schema(env.action_space),
-        resume=resume,
-    )
     try:
+        writer = DatasetWriter(
+            output,
+            dataset_id=identifier,
+            task_id=env.task.id,
+            task_hash=env.task.task_hash,
+            plant_id=env.plant.id,
+            plant_hash=env.plant.plant_hash,
+            preset=env.preset.id,
+            policy=resolved_policy.metadata(),
+            base_seed=base_seed,
+            observation_schema=_space_schema(env.observation_space),
+            action_schema=_space_schema(env.action_space),
+            resume=resume,
+        )
         for index in range(len(writer.manifest["episodes"]), count):
             episode_seed = base_seed + index
             result = rollout(

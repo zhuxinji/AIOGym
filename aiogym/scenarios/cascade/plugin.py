@@ -1,4 +1,4 @@
-from aiogym.scenarios._legacy import build_plugin
+from aiogym.scenarios._shared import build_plugin
 
 from .model import CascadeModel
 
@@ -38,6 +38,16 @@ PLUGIN = build_plugin(
         "mpc": {name: _MPC for name in (
             "commissioning", "continuous-benchmark", "disturbance-rejection", "safety-recovery", "temperature-step"
         )},
+    },
+    preset_configs={
+        "continuous-benchmark": {
+            "initial_state": [0.45, 35.0, 0.45, 50.0, 0.45, 65.0],
+            "reference": [0.45, 0.45, 0.45, 35.0, 50.0, 65.0],
+            "disturbance_schedule": {
+                100: {"pump_flow_factor": 0.7},
+                400: {"pump_flow_factor": 1.0},
+            },
+        },
     },
 )
 

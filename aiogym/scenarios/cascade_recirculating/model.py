@@ -1,9 +1,10 @@
-from aiogym.scenarios._legacy import LegacyProcessModel
+from aiogym.scenarios._shared import NumericProcessModel
+
+from .numerical import RecirculatingCascadeModel as _NumericalModel
 
 
-class RecirculatingCascadeModel(LegacyProcessModel):
-    def __init__(self, plant):
-        super().__init__("cascade_recirculating", plant)
+class RecirculatingCascadeModel(NumericProcessModel):
+    numerical_type = _NumericalModel
 
 
 __all__ = ["RecirculatingCascadeModel"]

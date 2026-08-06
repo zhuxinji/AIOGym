@@ -64,23 +64,16 @@ class ProcessControlEnv(gym.Env):
         self.task = task
         self.plant = plant
         self.preset = preset
-        builder = getattr(model, "build_env", None)
-        if callable(builder):
-            self._delegate = builder(task=task, preset=preset, plant=plant)
-            self.control_dt = float(self._delegate.control_dt)
-            self.episode_steps = int(self._delegate.episode_steps)
-            self.action_space = self._delegate.action_space
-            self.observation_space = self._delegate.observation_space
-            self._step_index = 0
-            return
-        self._delegate = None
         self.control_dt = float(preset.config.get("control_dt", task.control_dt))
         self.episode_steps = int(preset.config.get("horizon", task.horizon))
         action_low, action_high = _bounds(model.action_schema())
         state_low, state_high = _bounds(model.state_schema())
         initial_output = np.asarray(model.outputs(model.initial_state()), dtype=np.float32)
+        observation_schema = getattr(model, "observation_schema", None)
         output_schema = getattr(model, "output_schema", None)
-        if callable(output_schema):
+        if callable(observation_schema):
+            observation_low, observation_high = _bounds(observation_schema(preset))
+        elif callable(output_schema):
             observation_low, observation_high = _bounds(output_schema())
         elif initial_output.shape == state_low.shape:
             observation_low, observation_high = state_low, state_high
@@ -93,20 +86,22 @@ class ProcessControlEnv(gym.Env):
         )
         self._state = np.asarray(model.initial_state(), dtype=float)
         self._step_index = 0
-        self.disturbances = dict(preset.config.get("disturbances", {}))
+        defaults = getattr(model, "default_disturbances", lambda: {})()
+        self.disturbances = {**dict(defaults), **dict(preset.config.get("disturbances", {}))}
+        self._reference_state = self._preset_reference()
+        self._previous_action = np.asarray(model.default_action(), dtype=np.float32)
+        self.action_mode = "actuator"
 
     @property
     def state(self) -> np.ndarray:
-        if self._delegate is not None:
-            return np.asarray(self._delegate.integ.x, dtype=float).copy()
         return self._state.copy()
+
+    @property
+    def y_sp(self):
+        return self._reference_state.copy()
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         super().reset(seed=seed)
-        if self._delegate is not None:
-            observation, info = self._delegate.reset(seed=seed, options=options)
-            self._step_index = 0
-            return observation, self._delegate_info(info)
         del options
         sampler = getattr(self.model, "sample_initial_state", None)
         if callable(sampler):
@@ -115,6 +110,13 @@ class ProcessControlEnv(gym.Env):
             state = self.model.initial_state()
         self._state = np.asarray(state, dtype=float).reshape(-1)
         self._step_index = 0
+        defaults = getattr(self.model, "default_disturbances", lambda: {})()
+        self.disturbances = {
+            **dict(defaults),
+            **dict(self.preset.config.get("disturbances", {})),
+        }
+        self._reference_state = self._preset_reference()
+        self._previous_action = np.asarray(self.model.default_action(), dtype=np.float32)
         observation = self._observation()
         return observation, self._info(
             commanded_action=None,
@@ -124,17 +126,7 @@ class ProcessControlEnv(gym.Env):
         )
 
     def step(self, action):
-        if self._delegate is not None:
-            result = self._delegate.step(action)
-            observation, reward, terminated, truncated, info = result
-            self._step_index += 1
-            return (
-                observation,
-                reward,
-                terminated,
-                truncated,
-                self._delegate_info(info),
-            )
+        self._apply_events()
         values = np.asarray(action, dtype=np.float32).reshape(-1)
         if values.shape != self.action_space.shape:
             raise ValueError(
@@ -153,6 +145,9 @@ class ProcessControlEnv(gym.Env):
             "physical_time": self._step_index * self.control_dt,
             "plant": self.plant,
             "preset": self.preset,
+            "model": self.model,
+            "control_dt": self.control_dt,
+            "disturbances": dict(self.disturbances),
         }
         reward_result = self.task.reward(previous, values, self._state, context)
         if isinstance(reward_result, tuple):
@@ -168,6 +163,7 @@ class ProcessControlEnv(gym.Env):
             reward_terms=reward_terms,
             constraints=constraints,
         )
+        self._previous_action = values.copy()
         return self._observation(), float(reward), terminated, truncated, info
 
     def _integrate(self, state: np.ndarray, action: np.ndarray) -> np.ndarray:
@@ -201,55 +197,46 @@ class ProcessControlEnv(gym.Env):
         return result
 
     def close(self) -> None:
-        if self._delegate is not None:
-            self._delegate.close()
-
-    def _delegate_info(self, info: Mapping[str, Any] | None) -> dict[str, Any]:
-        enriched = dict(info or {})
-        enriched.setdefault("true_state", self.state)
-        enriched.setdefault(
-            "reference",
-            np.asarray(getattr(self._delegate, "y_sp", ()), dtype=np.float32),
-        )
-        enriched.setdefault(
-            "commanded_action",
-            np.asarray(
-                getattr(self._delegate, "last_commanded_act", ()), dtype=np.float32
-            ),
-        )
-        enriched.setdefault(
-            "applied_action",
-            np.asarray(getattr(self._delegate, "last_act", ()), dtype=np.float32),
-        )
-        enriched.setdefault("reward_terms", dict(enriched.get("reward_terms") or {}))
-        enriched.setdefault("constraint_costs", dict(enriched.get("costs") or {}))
-        enriched.update(
-            {
-                "task_id": self.task.id,
-                "task_hash": self.task.task_hash,
-                "plant_id": self.plant.id,
-                "plant_hash": self.plant.plant_hash,
-                "preset": self.preset.id,
-            }
-        )
-        return enriched
-
-    def __getattr__(self, name: str) -> Any:
-        delegate = self.__dict__.get("_delegate")
-        if delegate is not None:
-            return getattr(delegate, name)
-        raise AttributeError(name)
+        return None
 
     def _observation(self) -> np.ndarray:
-        observation = np.asarray(self.model.outputs(self._state), dtype=np.float32)
+        resolver = getattr(self.model, "observation", None)
+        if callable(resolver):
+            values = resolver(
+                self._state,
+                self._reference(),
+                self._previous_action,
+                self.disturbances,
+                self.preset,
+            )
+        else:
+            values = self.model.outputs(self._state)
+        observation = np.asarray(values, dtype=np.float32)
         if observation.shape != self.observation_space.shape:
             raise ValueError("model output shape changed during the episode")
         return observation
 
     def _reference(self) -> np.ndarray:
-        if self.task.reference:
-            return np.asarray(self.task.reference, dtype=np.float32)
-        return np.asarray(self.model.default_setpoint_vector(), dtype=np.float32)
+        return self._reference_state.copy()
+
+    def _preset_reference(self) -> np.ndarray:
+        values = self.preset.config.get("reference")
+        if values is None:
+            values = self.task.reference or self.model.default_setpoint_vector()
+        return np.asarray(values, dtype=float)
+
+    def _apply_events(self) -> None:
+        reference_events = self.preset.config.get("reference_schedule", {})
+        if self._step_index in reference_events:
+            self._reference_state = np.asarray(
+                reference_events[self._step_index], dtype=float
+            )
+        disturbance_events = self.preset.config.get("disturbance_schedule", {})
+        if self._step_index in disturbance_events:
+            self.disturbances.update(disturbance_events[self._step_index])
+
+    def _env(self):
+        return dict(self.disturbances)
 
     def _constraints(self) -> dict[str, float]:
         function = getattr(self.model, "constraint_costs", None)

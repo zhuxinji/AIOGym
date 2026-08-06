@@ -6,16 +6,13 @@ import json
 from pathlib import Path
 
 from aiogym.core import PlantConfig, PresetSpec, ResolvedPlant, ScenarioPlugin, TaskSpec
-from aiogym.scenarios._legacy import regulation_reward
+from aiogym.scenarios._shared import regulation_reward
 
 from .model import ThreeTankModel, _legacy_design_spec
 from .study import ThreeTankStudyProvider
 
 
-_EXAMPLE = (
-    Path(__file__).resolve().parents[3]
-    / "configs/design/cascade-recirculating-example-v1.json"
-)
+_EXAMPLE = Path(__file__).with_name("default-design-v1.json")
 
 
 def design_v1_to_plant(raw):
@@ -64,7 +61,7 @@ def resolve_plant(config: PlantConfig) -> ResolvedPlant:
         parameters=parameters,
         provenance={"source": "PlantConfig", "schema": config.schema_version},
     )
-    from aiogym.design.spec import load_design_spec
+    from .spec import load_design_spec
 
     load_design_spec(_legacy_design_spec(resolved))
     return resolved

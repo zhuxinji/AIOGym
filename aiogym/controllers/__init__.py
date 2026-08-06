@@ -1,21 +1,16 @@
-"""Unified controller public API with optional implementations loaded lazily."""
-from __future__ import annotations
+"""Policies supported by the scenario-oriented workflows."""
 
-from aiogym._internal.lazy import exported_dir, resolve_export
+from .base import make_controller
+from .mpc import MPCAgent
+from .pid import MatrixPIDPolicy, PIDAgent
+from .policies import HoldPolicy, RandomPolicy, SB3CheckpointPolicy
 
-
-_EXPORTS = {
-    "Controller": ".contracts",
-    "make_controller": ".registry",
-    "register_controller": ".registry",
-    "unregister_controller": ".registry",
-}
-__all__ = sorted(_EXPORTS)
-
-
-def __getattr__(name):
-    return resolve_export(globals(), __name__, _EXPORTS, name)
-
-
-def __dir__():
-    return exported_dir(globals(), _EXPORTS)
+__all__ = [
+    "HoldPolicy",
+    "MPCAgent",
+    "MatrixPIDPolicy",
+    "PIDAgent",
+    "RandomPolicy",
+    "SB3CheckpointPolicy",
+    "make_controller",
+]

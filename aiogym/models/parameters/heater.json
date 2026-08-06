@@ -1,1 +1,0 @@
-{"schema_version":"aiogym.parameter_profile.v1","scenario":"heater","status":"legacy-unverified","fidelity":"legacy-benchmark","time_unit":"s","parameters":{},"references":[],"validity_domain":{},"nominal_operating_point":{},"solver":{"method":"rk4","max_step":0.05}}

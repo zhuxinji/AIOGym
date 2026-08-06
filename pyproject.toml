@@ -64,13 +64,8 @@ target-version = "py310"
 select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
 ignore = ["B009", "B905", "E402", "E702", "E731", "I001", "UP035", "UP037"]
 
-[tool.ruff.lint.per-file-ignores]
-"aiogym/controllers/__init__.py" = ["F401"]
-"aiogym/evaluation/protocols.py" = ["F401"]
-"aiogym/models/core.py" = ["F401"]
-
 [tool.pytest.ini_options]
-testpaths = ["aiogym/tests"]
+testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = ["--strict-config", "--strict-markers"]
 markers = [
@@ -87,16 +82,9 @@ aiogym = "aiogym.cli.main:main"
 
 [tool.setuptools.packages.find]
 include = ["aiogym*"]
-exclude = ["aiogym.tests*"]
+exclude = ["tests*"]
 
 [tool.setuptools.package-data]
 aiogym = [
-  "controllers/configs/*.json",
-  "models/examples/*.py",
-  "models/examples/*.md",
-  "models/parameters/*.json",
-  "models/cases/builtin/*/*.json",
-  "benchmarks/tracks/builtin/*.json",
-  "benchmarks/anchors/builtin/*.json",
-  "resources/profiles/**/*.json",
+  "scenarios/three_tank/*.json",
 ]

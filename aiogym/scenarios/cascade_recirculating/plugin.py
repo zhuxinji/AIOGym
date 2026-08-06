@@ -1,4 +1,4 @@
-from aiogym.scenarios._legacy import build_plugin
+from aiogym.scenarios._shared import build_plugin
 
 from .model import RecirculatingCascadeModel
 
@@ -37,6 +37,19 @@ PLUGIN = build_plugin(
     controller_defaults={
         "pid": {name: _PID for name in _PRESETS},
         "mpc": {name: _MPC for name in _PRESETS},
+    },
+    preset_configs={
+        "commissioning": {
+            "initial_state": [0.18, 24.0, 0.22, 25.5, 0.32, 26.5],
+            "reference": [
+                0.24,
+                0.24,
+                0.24,
+                30.0,
+                28.97128161165881,
+                27.654664660905787,
+            ],
+        },
     },
 )
 
