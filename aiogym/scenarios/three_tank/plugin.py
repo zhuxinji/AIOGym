@@ -1,81 +1,77 @@
-"""PlantConfig validation and Task definitions for three_tank."""
+"""The single public ScenarioPlugin for all supported three-tank plants."""
 from __future__ import annotations
 
-import copy
 import json
 from pathlib import Path
 
-from aiogym.core import PlantConfig, PresetSpec, ResolvedPlant, ScenarioPlugin, TaskSpec
-from aiogym.scenarios._shared import regulation_reward
+from aiogym.core import PlantConfig, ResolvedPlant, ScenarioPlugin, TaskSpec
+from aiogym.scenarios._shared import economic_reward, regulation_reward
 
-from .model import ThreeTankModel, _legacy_design_spec
+from .model import ThreeTankModel
 from .study import ThreeTankStudyProvider
 
 
-_EXAMPLE = Path(__file__).with_name("default-design-v1.json")
+_PLANTS = Path(__file__).with_name("plants")
 
 
-def design_v1_to_plant(raw):
-    return {
-        "schema_version": "aiogym.plant.v1",
-        "id": raw["id"],
-        "scenario": "three_tank",
-        "description": raw.get("description", ""),
-        "plant": {
-            "tanks": raw["tanks"],
-            "heaters": raw["heaters"],
-            "pump": raw["pump"],
-            "hydraulics": raw["hydraulics"],
-        },
-        "operating_point": raw["operation"],
-        "study": {
-            "requirements": raw["requirements"],
-            "uncertainty": raw.get("uncertainties", {}),
-        },
-        "references": raw.get("references", []),
-    }
+def _load_builtin(plant_id: str):
+    return json.loads((_PLANTS / f"{plant_id}.json").read_text(encoding="utf-8"))
+
+
+BUILT_IN_PLANTS = {
+    plant_id: (lambda plant_id=plant_id: _load_builtin(plant_id))
+    for plant_id in (
+        "open-cascade-v1",
+        "recirculating-h1-v1",
+        "lab-three-tank-v1",
+    )
+}
 
 
 def default_plant():
-    return design_v1_to_plant(json.loads(_EXAMPLE.read_text(encoding="utf-8")))
+    return BUILT_IN_PLANTS["lab-three-tank-v1"]()
 
 
 def resolve_plant(config: PlantConfig) -> ResolvedPlant:
-    required = {"tanks", "heaters", "pump", "hydraulics"}
-    unknown = set(config.plant) - required
+    topology = config.plant.get("topology")
+    if topology not in {"open_cascade", "recirculating_loop"}:
+        raise ValueError(
+            "three_tank plant topology must be open_cascade or recirculating_loop"
+        )
+    if "parameters" in config.plant:
+        allowed = {"topology", "parameters", "actuators"}
+        required = allowed
+    else:
+        allowed = {"topology", "tanks", "hydraulics", "pump", "heaters", "safety"}
+        required = allowed
     missing = required - set(config.plant)
+    unknown = set(config.plant) - allowed
     if missing or unknown:
         raise ValueError(
-            f"three_tank plant fields missing={sorted(missing)} unknown={sorted(unknown)}"
+            f"three_tank plant fields missing={sorted(missing)} "
+            f"unknown={sorted(unknown)}"
         )
-    requirements = config.study.get("requirements", {})
-    uncertainty = config.study.get("uncertainty", {})
-    parameters = {
-        **copy.deepcopy(dict(config.plant)),
-        "operation": copy.deepcopy(dict(config.operating_point)),
-        "requirements": copy.deepcopy(dict(requirements)),
-        "uncertainties": copy.deepcopy(dict(uncertainty)),
-    }
     resolved = ResolvedPlant(
         config=config,
-        parameters=parameters,
+        parameters=dict(config.plant),
         provenance={"source": "PlantConfig", "schema": config.schema_version},
     )
-    from .spec import load_design_spec
-
-    load_design_spec(_legacy_design_spec(resolved))
+    # Compilation is validation: actuator layout, parameters, and design schema
+    # must be coherent before an environment is returned.
+    ThreeTankModel(resolved)
     return resolved
 
 
-def _task():
-    default = PlantConfig.from_mapping(default_plant())
-    operation = default.operating_point
-    horizon = max(1, round(operation["duration_s"] / operation["control_dt_s"]))
+def _regulation_task():
     return TaskSpec(
         id="three_tank/regulation",
         scenario="three_tank",
         objective="regulation",
+        revision=1,
+        reward_id="normalized-tracking-mse-v1",
+        metric_suite_id="regulation-core-v1",
         reward=regulation_reward,
+        reward_term_names=("tracking_error", "slew", "effort"),
         metrics=(
             "return",
             "tracking_iae",
@@ -87,50 +83,37 @@ def _task():
         ),
         primary_metric="tracking_iae",
         metric_direction="minimize",
-        horizon=horizon,
-        control_dt=float(operation["control_dt_s"]),
-        presets={
-            "commissioning": PresetSpec("commissioning"),
-            "regulation": PresetSpec("regulation"),
-        },
-        default_preset="commissioning",
-        reference=tuple(operation["target_levels_m"])
-        + tuple(operation["target_temperatures_degC"]),
+        required_capabilities=("tracking",),
+    )
+
+
+def _economic_task():
+    return TaskSpec(
+        id="three_tank/economic",
+        scenario="three_tank",
+        objective="economic",
+        revision=1,
+        reward_id="production-minus-energy-v1",
+        metric_suite_id="economic-core-v1",
+        reward=economic_reward,
+        reward_term_names=("product_value", "energy_cost"),
+        metrics=("return", "economic_objective", "energy", "constraint_violations"),
+        primary_metric="economic_objective",
+        metric_direction="maximize",
+        required_capabilities=("product_flow", "energy"),
     )
 
 
 PLUGIN = ScenarioPlugin(
     id="three_tank",
     make_model=ThreeTankModel,
-    default_plant=default_plant,
+    default_plant="lab-three-tank-v1",
     resolve_plant=resolve_plant,
-    tasks={"regulation": _task()},
-    controller_defaults={
-        "pid": {
-            "commissioning": {
-                "kp": [
-                    [4.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-                    [-3.0, 3.0, 0.0, 0.0, 0.0, 0.0],
-                    [0.0, -3.0, 3.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.12, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.0, 0.12, 0.0],
-                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.12],
-                ],
-                "ki": [
-                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.0005, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.0, 0.0005, 0.0],
-                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0005],
-                ],
-                "kd": [[0.0] * 6 for _ in range(6)],
-                "bias": "default_action",
-            }
-        },
-        "mpc": {},
-    },
+    built_in_plants=BUILT_IN_PLANTS,
+    tasks={"regulation": _regulation_task(), "economic": _economic_task()},
+    controller_defaults={},
     study_provider=ThreeTankStudyProvider(),
 )
 
-__all__ = ["PLUGIN", "default_plant", "design_v1_to_plant", "resolve_plant"]
+
+__all__ = ["BUILT_IN_PLANTS", "PLUGIN", "default_plant", "resolve_plant"]

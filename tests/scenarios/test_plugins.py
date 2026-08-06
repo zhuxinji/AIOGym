@@ -38,7 +38,7 @@ def test_stable_scenario_plugins_match_phase0_golden(scenario, preset):
         assert np.allclose(observation, expected["initial_observation"], atol=1e-8)
         assert env.observation_space.contains(observation)
         assert info["task_id"] == f"{scenario}/regulation"
-        assert info["preset"] == preset
+        assert info["condition_id"] == preset
         rewards = []
         for _ in range(5):
             observation, reward, terminated, truncated, info = env.step(

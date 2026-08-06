@@ -67,6 +67,12 @@ def _schema(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
+def _condition_mapping(value):
+    if hasattr(value, "as_dict"):
+        return value.as_dict(include_hash=False)
+    return getattr(value, "config", value)
+
+
 class ThreeTankModel:
     scenario = "three_tank"
 
@@ -104,7 +110,7 @@ class ThreeTankModel:
 
     def sample_initial_state(self, rng, condition):
         del rng
-        config = getattr(condition, "config", condition)
+        config = _condition_mapping(condition)
         return list(config.get("initial_state", self.initial_state()))
 
     def dynamics(self, state, action, disturbances=None):
@@ -159,7 +165,7 @@ class ThreeTankModel:
         ]
 
     def observation_schema(self, condition):
-        config = getattr(condition, "config", condition)
+        config = _condition_mapping(condition)
         mode = config.get(
             "observation",
             "state-reference-disturbance"
@@ -182,7 +188,7 @@ class ThreeTankModel:
         self, state, reference, previous_action, disturbances, condition
     ):
         del previous_action
-        config = getattr(condition, "config", condition)
+        config = _condition_mapping(condition)
         mode = config.get(
             "observation",
             "state-reference-disturbance"

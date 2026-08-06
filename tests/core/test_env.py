@@ -5,7 +5,6 @@ import pytest
 
 from aiogym.core import (
     PlantConfig,
-    PresetSpec,
     ProcessControlEnv,
     ResolvedPlant,
     ScenarioPlugin,
@@ -58,22 +57,32 @@ def register_toy() -> ScenarioPlugin:
         metrics=("return", "iae"),
         primary_metric="iae",
         metric_direction="minimize",
-        horizon=3,
-        control_dt=0.5,
-        presets={
-            "default": PresetSpec("default"),
-            "short": PresetSpec("short", {"horizon": 2}),
-        },
-        reference=(1.0,),
     )
     plugin = ScenarioPlugin(
         id="core-toy",
         make_model=lambda plant: ToyModel(),
         default_plant=lambda: {
-            "schema_version": "aiogym.plant.v1",
+            "schema_version": "aiogym.plant.v2",
             "id": "core-toy-default",
             "scenario": "core-toy",
             "plant": {"gain": 1.0},
+            "conditions": {
+                "default": {
+                    "id": "default",
+                    "initial_state": [0.0],
+                    "reference": [1.0],
+                    "control_dt": 0.5,
+                    "horizon": 3,
+                },
+                "short": {
+                    "id": "short",
+                    "initial_state": [0.0],
+                    "reference": [1.0],
+                    "control_dt": 0.5,
+                    "horizon": 2,
+                },
+            },
+            "default_condition": "default",
         },
         resolve_plant=lambda config: ResolvedPlant(
             config=config,

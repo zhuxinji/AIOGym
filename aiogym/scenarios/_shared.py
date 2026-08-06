@@ -9,7 +9,7 @@ from typing import Any
 
 import numpy as np
 
-from aiogym.core import PresetSpec, ResolvedPlant, ScenarioPlugin, TaskSpec
+from aiogym.core import ResolvedPlant, ScenarioPlugin, TaskSpec
 
 
 def _schema(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -77,7 +77,8 @@ class NumericProcessModel:
 
     def sample_initial_state(self, rng, preset):
         del rng
-        return list(preset.get("initial_state", self.initial_state()))
+        condition = _condition_mapping(preset)
+        return list(condition.get("initial_state", self.initial_state()))
 
     def dynamics(self, state, action, disturbances=None):
         return self._model.dynamics(state, action, disturbances or {})
@@ -106,7 +107,9 @@ class NumericProcessModel:
     def observation_schema(self, preset):
         state = _schema(self._model.state_schema())
         reference = _schema(self._model.setpoint_schema())
-        mode = preset.config.get("observation", "state-reference-disturbance")
+        mode = _condition_mapping(preset).get(
+            "observation", "state-reference-disturbance"
+        )
         if mode == "normalized-state-error-action":
             return [
                 *({**row, "low": 0.0, "high": 1.0} for row in state),
@@ -120,7 +123,9 @@ class NumericProcessModel:
         return [*state, *reference, *disturbance]
 
     def observation(self, state, reference, previous_action, disturbances, preset):
-        mode = preset.config.get("observation", "state-reference-disturbance")
+        mode = _condition_mapping(preset).get(
+            "observation", "state-reference-disturbance"
+        )
         if mode == "normalized-state-error-action":
             state_rows = self._model.state_schema()
             normalized_state = [
@@ -170,6 +175,14 @@ class NumericProcessModel:
     def action_energy_kw(self, action, state=None, disturbances=None):
         return self._model.action_energy_kw(action, state, disturbances or {})
 
+    def capabilities(self):
+        values = {"tracking", "energy"}
+        if callable(getattr(self._model, "production", None)):
+            values.add("product_flow")
+        if getattr(self._model, "safety_constraints", ()):
+            values.add("hardware_interlocks")
+        return frozenset(values)
+
     def __getattr__(self, name):
         return getattr(self._model, name)
 
@@ -183,6 +196,12 @@ def regulation_reward(state, action, next_state, context):
     rate = float(np.mean(((output - reference) / scale) ** 2))
     cost = float(context["control_dt"]) * rate
     return -cost, {"tracking_error": -cost, "slew": 0.0, "effort": 0.0}
+
+
+def _condition_mapping(value):
+    if hasattr(value, "as_dict"):
+        return value.as_dict(include_hash=False)
+    return getattr(value, "config", value)
 
 
 def economic_reward(state, action, next_state, context):
@@ -209,19 +228,42 @@ def build_plugin(
     preset_configs=None,
 ):
     preset_configs = dict(preset_configs or {})
-    preset_specs = {
-        name: PresetSpec(name, preset_configs.get(name, {})) for name in presets
-    }
+    numerical = model_factory.numerical_type()
+    conditions = {}
+    for name in presets:
+        overrides = dict(preset_configs.get(name, {}))
+        conditions[name] = {
+            "id": name,
+            "initial_state": overrides.pop(
+                "initial_state", list(numerical.initial_state())
+            ),
+            "reference": overrides.pop(
+                "reference", list(numerical.default_setpoint_vector())
+            ),
+            "control_dt": overrides.pop("control_dt", control_dt),
+            "horizon": overrides.pop("horizon", horizon),
+            "disturbances": overrides.pop("disturbances", {}),
+            "reference_schedule": overrides.pop("reference_schedule", {}),
+            "disturbance_schedule": overrides.pop("disturbance_schedule", {}),
+            "observation": overrides.pop(
+                "observation", "state-reference-disturbance"
+            ),
+        }
+        if overrides:
+            raise ValueError(
+                f"unknown condition fields for {scenario}/{name}: {sorted(overrides)}"
+            )
 
     def default_plant():
         model = model_factory.numerical_type()
         return {
-            "schema_version": "aiogym.plant.v1",
+            "schema_version": "aiogym.plant.v2",
             "id": f"{scenario}-default-v1",
             "scenario": scenario,
             "description": f"Built-in default parameters for {scenario}",
             "plant": {"parameters": copy.deepcopy(model.p)},
-            "operating_point": {},
+            "conditions": copy.deepcopy(conditions),
+            "default_condition": default_preset,
             "study": {},
             "references": [],
         }
@@ -253,10 +295,27 @@ def build_plugin(
             metrics=metrics,
             primary_metric=primary,
             metric_direction=direction,
-            horizon=horizon,
-            control_dt=control_dt,
-            presets=preset_specs,
-            default_preset=default_preset,
+            revision=1,
+            reward_id=(
+                "economic-profit-v1"
+                if objective == "economic"
+                else "normalized-tracking-mse-v1"
+            ),
+            metric_suite_id=(
+                "economic-core-v1"
+                if objective == "economic"
+                else "regulation-core-v1"
+            ),
+            reward_term_names=(
+                ("product_value", "energy_cost")
+                if objective == "economic"
+                else ("tracking_error", "slew", "effort")
+            ),
+            required_capabilities=(
+                ("product_flow", "energy")
+                if objective == "economic"
+                else ("tracking",)
+            ),
         )
 
     tasks = {
@@ -272,6 +331,7 @@ def build_plugin(
         default_plant=default_plant,
         resolve_plant=resolve_plant,
         tasks=tasks,
+        built_in_plants={f"{scenario}-default-v1": default_plant},
         controller_defaults=dict(controller_defaults or {}),
     )
 

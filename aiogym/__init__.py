@@ -25,13 +25,22 @@ def list_tasks(scenario: str | None = None):
     return implementation(scenario=scenario)
 
 
-def make_env(task: str, *, plant=None, preset=None, **legacy):
+def make_env(task: str, *, plant=None, condition=None, preset=None, **legacy):
     """Create an environment from a Task and optional PlantConfig.
 
     A narrow compatibility path accepts the old ``scenario + case/reward_spec``
     call shape for one release. It deliberately does not recreate Track logic.
     """
     _register()
+    if preset is not None:
+        if condition is not None:
+            raise TypeError("condition and deprecated preset cannot both be provided")
+        warnings.warn(
+            "preset= is deprecated; use condition=",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        condition = preset
     if "/" not in task or legacy:
         warnings.warn(
             "make_env(scenario, case=..., reward_spec=...) is deprecated; use "
@@ -45,10 +54,12 @@ def make_env(task: str, *, plant=None, preset=None, **legacy):
         reward = str(legacy.get("reward_spec") or "regulation").lower()
         objective = "economic" if "economic" in reward else "regulation"
         task = f"{task}/{objective}"
-        preset = preset or _legacy_preset(task.split("/", 1)[0], legacy.get("case"))
+        condition = condition or _legacy_preset(
+            task.split("/", 1)[0], legacy.get("case")
+        )
     from .core import make_env as implementation
 
-    return implementation(task, plant=plant, preset=preset)
+    return implementation(task, plant=plant, condition=condition)
 
 
 def _legacy_preset(scenario, case):

@@ -48,8 +48,6 @@ def _task(**changes):
         "metrics": ("return", "iae"),
         "primary_metric": "iae",
         "metric_direction": "minimize",
-        "horizon": 10,
-        "control_dt": 1.0,
         "revision": 1,
         "reward_id": "tracking-v1",
         "metric_suite_id": "regulation-v1",
@@ -83,7 +81,7 @@ def test_task_hash_uses_explicit_reward_and_metric_identity():
     base = _task()
     assert replace(base, reward_id="tracking-v2").task_hash != base.task_hash
     assert replace(base, revision=2).task_hash != base.task_hash
-    assert replace(base, horizon=20, control_dt=0.5).task_hash == base.task_hash
+    assert replace(base, reward=lambda *_: 0.0).task_hash == base.task_hash
 
 
 def test_environment_identity_hashes_all_resolved_contracts():

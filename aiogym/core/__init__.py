@@ -1,6 +1,6 @@
 """Scenario-oriented AIO-Gym core with no optional dependency imports."""
 from .contracts import Policy, ProcessModel, ScenarioPlugin, StudyProvider
-from .env import ProcessControlEnv, make_env, resolve_plant
+from .env import ProcessControlEnv, make_env, resolve_condition, resolve_plant
 from .io import (
     canonical_json_bytes,
     file_sha256,
@@ -57,6 +57,7 @@ __all__ = [
     "make_env",
     "register_scenario",
     "resolve_plant",
+    "resolve_condition",
     "rollout",
     "stable_hash",
     "unregister_scenario",

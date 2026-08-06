@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from aiogym.core import PlantConfig, PresetSpec, ProcessControlEnv, ResolvedPlant, TaskSpec
+from aiogym.core import PlantConfig, ProcessControlEnv, ResolvedPlant, TaskSpec
 from aiogym.scenarios._shared import regulation_reward
 from aiogym.scenarios.three_tank.model import ThreeTankModel
 
@@ -33,13 +33,10 @@ def _environment(plant_id):
         metrics=("return", "tracking_iae"),
         primary_metric="tracking_iae",
         metric_direction="minimize",
-        horizon=condition.horizon,
-        control_dt=condition.control_dt,
         reward_id="normalized-tracking-mse-v1",
         metric_suite_id="regulation-core-v1",
     )
-    preset = PresetSpec(config.default_condition, condition.as_dict(include_hash=False))
-    return ProcessControlEnv(ThreeTankModel(plant), task, plant, preset)
+    return ProcessControlEnv(ThreeTankModel(plant), task, plant, condition)
 
 
 @pytest.mark.parametrize("plant_id", tuple(GOLDEN["cases"]))

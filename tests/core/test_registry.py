@@ -6,7 +6,6 @@ import pytest
 
 from aiogym.core import (
     PlantConfig,
-    PresetSpec,
     ResolvedPlant,
     ScenarioPlugin,
     TaskSpec,
@@ -35,18 +34,25 @@ def _plugin():
         metrics=("return",),
         primary_metric="return",
         metric_direction="maximize",
-        horizon=2,
-        control_dt=1.0,
-        presets={"default": PresetSpec("default")},
     )
     return ScenarioPlugin(
         id="registry-toy",
         make_model=lambda plant: object(),
         default_plant=lambda: {
-            "schema_version": "aiogym.plant.v1",
+            "schema_version": "aiogym.plant.v2",
             "id": "registry-default",
             "scenario": "registry-toy",
             "plant": {},
+            "conditions": {
+                "default": {
+                    "id": "default",
+                    "initial_state": [0.0],
+                    "reference": [0.0],
+                    "control_dt": 1.0,
+                    "horizon": 2,
+                }
+            },
+            "default_condition": "default",
         },
         resolve_plant=lambda config: ResolvedPlant(config, config.plant),
         tasks={"regulation": task},

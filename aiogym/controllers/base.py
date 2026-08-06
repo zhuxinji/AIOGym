@@ -42,7 +42,7 @@ def make_controller(
     key = str(controller_id).lower()
     plugin = get_scenario(env.task.scenario)
     profiles = plugin.controller_defaults.get(key, {})
-    profile_id = profile or env.preset.id
+    profile_id = profile or env.condition.id
     defaults = dict(profiles.get(profile_id, profiles.get(env.task.objective, {})))
     defaults.update(dict(config or {}))
     if key == "pid":

@@ -54,10 +54,14 @@ class StudyProvider(Protocol):
 class ScenarioPlugin:
     id: str
     make_model: Callable[[ResolvedPlant], ProcessModel]
-    default_plant: Callable[[], Mapping[str, Any] | PlantConfig]
+    default_plant: str | Callable[[], Mapping[str, Any] | PlantConfig]
     resolve_plant: Callable[[PlantConfig], ResolvedPlant]
     tasks: Mapping[str, TaskSpec]
+    built_in_plants: Mapping[
+        str, Callable[[], Mapping[str, Any] | PlantConfig]
+    ] = field(default_factory=dict)
     controller_defaults: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    resolve_controller_profile: Callable[..., Mapping[str, Any]] | None = None
     study_provider: StudyProvider | None = None
 
     def __post_init__(self) -> None:

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from aiogym.core import PlantConfig
+from aiogym.core import PlantConfig, make_env
 from aiogym.scenarios.three_tank.migration import (
     design_v1_to_plant_v2,
     plant_v1_to_v2,
@@ -74,3 +74,60 @@ def test_plant_v1_reader_converts_identity_without_hashing_notes_as_physics():
     assert config.scenario == "three_tank"
     assert config.plant_hash == changed.plant_hash
     assert config.config_hash != changed.config_hash
+
+
+@pytest.mark.parametrize(
+    ("plant_id", "action_dim"),
+    (
+        ("open-cascade-v1", 7),
+        ("recirculating-h1-v1", 4),
+        ("lab-three-tank-v1", 6),
+    ),
+)
+def test_builtin_plant_and_condition_resolver_builds_identity(plant_id, action_dim):
+    env = make_env("three_tank/regulation", plant=plant_id)
+    try:
+        _, info = env.reset(seed=3)
+        assert env.action_space.shape == (action_dim,)
+        assert info["condition_id"] == env.plant.config.default_condition
+        assert info["condition_hash"] == env.condition.condition_hash
+        assert info["interface_hash"] == env.identity.interface_hash
+        assert info["env_hash"] == env.identity.env_hash
+    finally:
+        env.close()
+
+
+def test_condition_validation_and_capability_fail_before_rollout():
+    with pytest.raises(ValueError, match="requires capability product_flow"):
+        make_env("three_tank/economic", plant="recirculating-h1-v1")
+    with pytest.raises(KeyError, match="available: commissioning"):
+        make_env(
+            "three_tank/regulation",
+            plant="recirculating-h1-v1",
+            condition="unknown",
+        )
+    with pytest.raises(ValueError, match="initial_state must contain 6"):
+        make_env(
+            "three_tank/regulation",
+            plant="recirculating-h1-v1",
+            condition={
+                "id": "bad",
+                "initial_state": [0.2],
+                "reference": [0.2] * 6,
+                "control_dt": 1.0,
+                "horizon": 2,
+            },
+        )
+    with pytest.raises(ValueError, match="unknown disturbances"):
+        make_env(
+            "three_tank/regulation",
+            plant="recirculating-h1-v1",
+            condition={
+                "id": "bad-disturbance",
+                "initial_state": [0.2, 20.0] * 3,
+                "reference": [0.2] * 3 + [20.0] * 3,
+                "control_dt": 1.0,
+                "horizon": 2,
+                "disturbances": {"imaginary": 1.0},
+            },
+        )

@@ -350,11 +350,6 @@ class TaskSpec:
     metrics: tuple[str, ...]
     primary_metric: str
     metric_direction: MetricDirection
-    horizon: int
-    control_dt: float
-    presets: Mapping[str, PresetSpec] = field(default_factory=dict)
-    default_preset: str = "default"
-    reference: tuple[float, ...] = ()
     revision: int = 1
     reward_id: str = "reward-v1"
     metric_suite_id: str = "metrics-v1"
@@ -373,20 +368,9 @@ class TaskSpec:
             raise ValueError("revision must be a positive integer")
         if not self.reward_id or not self.metric_suite_id:
             raise ValueError("reward_id and metric_suite_id must be non-empty")
-        if isinstance(self.horizon, bool) or int(self.horizon) <= 0:
-            raise ValueError("horizon must be a positive integer")
-        if float(self.control_dt) <= 0:
-            raise ValueError("control_dt must be positive")
-        presets = dict(self.presets)
-        if not presets:
-            presets = {"default": PresetSpec("default")}
-        if self.default_preset not in presets:
-            raise ValueError("default_preset must be declared in presets")
-        object.__setattr__(self, "presets", MappingProxyType(presets))
         object.__setattr__(self, "metrics", tuple(self.metrics))
         object.__setattr__(self, "required_capabilities", tuple(self.required_capabilities))
         object.__setattr__(self, "reward_term_names", tuple(self.reward_term_names))
-        object.__setattr__(self, "reference", tuple(float(v) for v in self.reference))
         object.__setattr__(self, "task_hash", stable_hash(self.identity()))
 
     def identity(self) -> dict[str, Any]:

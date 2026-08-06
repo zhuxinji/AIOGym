@@ -11,7 +11,14 @@ import numpy as np
 
 from .contracts import ProcessModel
 from .registry import get_scenario, get_task
-from .specs import PlantConfig, PresetSpec, ResolvedPlant, TaskSpec
+from .io import stable_hash
+from .specs import (
+    EnvironmentIdentity,
+    OperatingCondition,
+    PlantConfig,
+    ResolvedPlant,
+    TaskSpec,
+)
 
 
 def _bounds(schema: Sequence[Mapping[str, Any]]) -> tuple[np.ndarray, np.ndarray]:
@@ -35,16 +42,74 @@ def resolve_plant(
     plant: PlantConfig | str | Path | Mapping[str, Any] | None,
 ) -> ResolvedPlant:
     plugin = get_scenario(scenario)
-    raw = plugin.default_plant() if plant is None else plant
+    raw = plugin.default_plant if plant is None else plant
+    if callable(raw):
+        raw = raw()
     if isinstance(raw, PlantConfig):
         config = raw
     else:
+        if isinstance(raw, str) and not Path(raw).is_file():
+            try:
+                loader = plugin.built_in_plants[raw]
+            except KeyError as error:
+                available = ", ".join(sorted(plugin.built_in_plants)) or "<none>"
+                raise KeyError(
+                    f"unknown plant {raw!r} for scenario {scenario!r}; "
+                    f"available: {available}"
+                ) from error
+            raw = loader()
         config = PlantConfig.from_mapping(_load_mapping(raw))
     if config.scenario != scenario:
         raise ValueError(
             f"PlantConfig scenario {config.scenario!r} does not match task scenario {scenario!r}"
         )
     return plugin.resolve_plant(config)
+
+
+def resolve_condition(
+    plant: ResolvedPlant,
+    model: ProcessModel,
+    condition: OperatingCondition | str | Path | Mapping[str, Any] | None,
+) -> OperatingCondition:
+    raw = plant.config.default_condition if condition is None else condition
+    if isinstance(raw, OperatingCondition):
+        resolved = raw
+    elif isinstance(raw, Mapping):
+        resolved = OperatingCondition.from_mapping(raw)
+    elif isinstance(raw, Path) or (isinstance(raw, str) and Path(raw).is_file()):
+        resolved = OperatingCondition.from_mapping(_load_mapping(raw))
+    elif isinstance(raw, str):
+        try:
+            resolved = plant.config.conditions[raw]
+        except KeyError as error:
+            available = ", ".join(sorted(plant.config.conditions)) or "<none>"
+            raise KeyError(
+                f"unknown condition {raw!r} for plant {plant.id!r}; "
+                f"available: {available}"
+            ) from error
+    else:
+        raise TypeError("condition must be an ID, mapping, JSON path, or OperatingCondition")
+    state_dim = len(model.state_schema())
+    output_dim = len(model.outputs(model.initial_state()))
+    if len(resolved.initial_state) != state_dim:
+        raise ValueError(
+            f"condition initial_state must contain {state_dim} values"
+        )
+    if len(resolved.reference) != output_dim:
+        raise ValueError(f"condition reference must contain {output_dim} values")
+    known_disturbances = set(
+        getattr(model, "default_disturbances", lambda: {})()
+    )
+    supplied = set(resolved.disturbances)
+    supplied.update(
+        name
+        for values in resolved.disturbance_schedule.values()
+        for name in values
+    )
+    unknown = supplied - known_disturbances
+    if unknown:
+        raise ValueError(f"unknown disturbances: {sorted(unknown)}")
+    return resolved
 
 
 class ProcessControlEnv(gym.Env):
@@ -57,22 +122,23 @@ class ProcessControlEnv(gym.Env):
         model: ProcessModel,
         task: TaskSpec,
         plant: ResolvedPlant,
-        preset: PresetSpec,
+        condition: OperatingCondition,
     ) -> None:
         super().__init__()
         self.model = model
         self.task = task
         self.plant = plant
-        self.preset = preset
-        self.control_dt = float(preset.config.get("control_dt", task.control_dt))
-        self.episode_steps = int(preset.config.get("horizon", task.horizon))
+        self.condition = condition
+        self.preset = condition  # one-release attribute alias
+        self.control_dt = condition.control_dt
+        self.episode_steps = condition.horizon
         action_low, action_high = _bounds(model.action_schema())
         state_low, state_high = _bounds(model.state_schema())
         initial_output = np.asarray(model.outputs(model.initial_state()), dtype=np.float32)
         observation_schema = getattr(model, "observation_schema", None)
         output_schema = getattr(model, "output_schema", None)
         if callable(observation_schema):
-            observation_low, observation_high = _bounds(observation_schema(preset))
+            observation_low, observation_high = _bounds(observation_schema(condition))
         elif callable(output_schema):
             observation_low, observation_high = _bounds(output_schema())
         elif initial_output.shape == state_low.shape:
@@ -88,10 +154,35 @@ class ProcessControlEnv(gym.Env):
         self._step_index = 0
         defaults = getattr(model, "default_disturbances", lambda: {})()
         self._disturbance_overrides: dict[str, float] = {}
-        self.disturbances = {**dict(defaults), **dict(preset.config.get("disturbances", {}))}
-        self._reference_state = self._preset_reference()
+        self.disturbances = {**dict(defaults), **dict(condition.disturbances)}
+        self._reference_state = np.asarray(condition.reference, dtype=float)
         self._previous_action = np.asarray(model.default_action(), dtype=np.float32)
         self.action_mode = "actuator"
+        interface_hash = stable_hash(
+            {
+                "state_schema": list(model.state_schema()),
+                "controlled_output_schema": list(
+                    getattr(model, "output_schema", lambda: [])()
+                ),
+                "action_schema": list(model.action_schema()),
+                "observation_schema": list(
+                    observation_schema(condition)
+                    if callable(observation_schema)
+                    else []
+                ),
+                "action_mode": self.action_mode,
+                "dtype": "float32",
+            }
+        )
+        self.identity = EnvironmentIdentity(
+            task_id=task.id,
+            task_hash=task.task_hash,
+            plant_id=plant.id,
+            plant_hash=plant.plant_hash,
+            condition_id=condition.id,
+            condition_hash=condition.condition_hash,
+            interface_hash=interface_hash,
+        )
 
     @property
     def state(self) -> np.ndarray:
@@ -104,20 +195,15 @@ class ProcessControlEnv(gym.Env):
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         super().reset(seed=seed)
         del options
-        sampler = getattr(self.model, "sample_initial_state", None)
-        if callable(sampler):
-            state = sampler(self.np_random, self.preset.config)
-        else:
-            state = self.model.initial_state()
-        self._state = np.asarray(state, dtype=float).reshape(-1)
+        self._state = np.asarray(self.condition.initial_state, dtype=float).reshape(-1)
         self._step_index = 0
         defaults = getattr(self.model, "default_disturbances", lambda: {})()
         self.disturbances = {
             **dict(defaults),
-            **dict(self.preset.config.get("disturbances", {})),
+            **dict(self.condition.disturbances),
             **self._disturbance_overrides,
         }
-        self._reference_state = self._preset_reference()
+        self._reference_state = np.asarray(self.condition.reference, dtype=float)
         self._previous_action = np.asarray(self.model.default_action(), dtype=np.float32)
         observation = self._observation()
         return observation, self._info(
@@ -146,7 +232,7 @@ class ProcessControlEnv(gym.Env):
             "step_index": self._step_index,
             "physical_time": self._step_index * self.control_dt,
             "plant": self.plant,
-            "preset": self.preset,
+            "condition": self.condition,
             "model": self.model,
             "control_dt": self.control_dt,
             "disturbances": dict(self.disturbances),
@@ -209,7 +295,7 @@ class ProcessControlEnv(gym.Env):
                 self._reference(),
                 self._previous_action,
                 self.disturbances,
-                self.preset,
+                self.condition,
             )
         else:
             values = self.model.outputs(self._state)
@@ -221,19 +307,13 @@ class ProcessControlEnv(gym.Env):
     def _reference(self) -> np.ndarray:
         return self._reference_state.copy()
 
-    def _preset_reference(self) -> np.ndarray:
-        values = self.preset.config.get("reference")
-        if values is None:
-            values = self.task.reference or self.model.default_setpoint_vector()
-        return np.asarray(values, dtype=float)
-
     def _apply_events(self) -> None:
-        reference_events = self.preset.config.get("reference_schedule", {})
+        reference_events = self.condition.reference_schedule
         if self._step_index in reference_events:
             self._reference_state = np.asarray(
                 reference_events[self._step_index], dtype=float
             )
-        disturbance_events = self.preset.config.get("disturbance_schedule", {})
+        disturbance_events = self.condition.disturbance_schedule
         if self._step_index in disturbance_events:
             self.disturbances.update(disturbance_events[self._step_index])
 
@@ -274,7 +354,11 @@ class ProcessControlEnv(gym.Env):
             "task_hash": self.task.task_hash,
             "plant_id": self.plant.id,
             "plant_hash": self.plant.plant_hash,
-            "preset": self.preset.id,
+            "condition_id": self.condition.id,
+            "condition_hash": self.condition.condition_hash,
+            "interface_hash": self.identity.interface_hash,
+            "env_hash": self.identity.env_hash,
+            "integrator_id": self.identity.integrator_id,
             "step_index": self._step_index,
             "physical_time": self._step_index * self.control_dt,
             "true_state": self.state,
@@ -301,18 +385,34 @@ def make_env(
     task: str,
     *,
     plant: PlantConfig | str | Path | Mapping[str, Any] | None = None,
+    condition: OperatingCondition | str | Path | Mapping[str, Any] | None = None,
     preset: str | None = None,
 ) -> ProcessControlEnv:
+    if preset is not None:
+        if condition is not None:
+            raise TypeError("condition and deprecated preset cannot both be provided")
+        condition = preset
     task_spec = get_task(task)
     plugin = get_scenario(task_spec.scenario)
     resolved_plant = resolve_plant(task_spec.scenario, plant)
-    preset_id = preset or task_spec.default_preset
-    try:
-        preset_spec = task_spec.presets[preset_id]
-    except KeyError as error:
-        raise KeyError(f"unknown preset {preset_id!r} for task {task!r}") from error
     model = plugin.make_model(resolved_plant)
-    return ProcessControlEnv(model, task_spec, resolved_plant, preset_spec)
+    capabilities = frozenset(
+        getattr(model, "capabilities", lambda: {"tracking"})()
+    )
+    missing = set(task_spec.required_capabilities) - capabilities
+    if missing:
+        requirement = ", ".join(sorted(missing))
+        raise ValueError(
+            f"task {task_spec.id} requires capability {requirement}; "
+            f"plant {resolved_plant.id} does not provide it"
+        )
+    resolved_condition = resolve_condition(resolved_plant, model, condition)
+    return ProcessControlEnv(model, task_spec, resolved_plant, resolved_condition)
 
 
-__all__ = ["ProcessControlEnv", "make_env", "resolve_plant"]
+__all__ = [
+    "ProcessControlEnv",
+    "make_env",
+    "resolve_condition",
+    "resolve_plant",
+]
