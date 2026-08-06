@@ -85,7 +85,10 @@ def test_plant_hash_and_atomic_json_are_canonical(tmp_path):
         }
     )
     assert first.plant_hash == second.plant_hash
-    assert stable_hash(first.as_dict(include_hash=False)) == first.plant_hash
+    assert stable_hash(
+        {"scenario": first.scenario, "plant": dict(first.plant)}
+    ) == first.plant_hash
+    assert stable_hash(first.as_dict(include_hash=False)) == first.config_hash
     target = write_json(tmp_path / "plant.json", first.as_dict())
     assert json.loads(target.read_text(encoding="utf-8"))["plant_hash"] == first.plant_hash
     with pytest.raises(FileExistsError):

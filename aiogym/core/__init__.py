@@ -20,6 +20,8 @@ from .registry import (
 from .rollout import RolloutResult, Transition, rollout
 from .specs import (
     CheckResult,
+    EnvironmentIdentity,
+    OperatingCondition,
     PLANT_SCHEMA_VERSION,
     PlantConfig,
     PresetSpec,
@@ -31,6 +33,8 @@ from .specs import (
 __all__ = [
     "PLANT_SCHEMA_VERSION",
     "CheckResult",
+    "EnvironmentIdentity",
+    "OperatingCondition",
     "PlantConfig",
     "Policy",
     "PresetSpec",
