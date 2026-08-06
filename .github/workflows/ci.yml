@@ -26,8 +26,8 @@ jobs:
           cache-dependency-path: pyproject.toml
       - run: python -m pip install -e ".[dev]"
       - run: python -m compileall -q aiogym
-      - run: python -m ruff check aiogym
-      - run: python -m pytest -q -m "not rl and not oracle and not onnx and not e2e"
+      - run: python -m ruff check aiogym tests scripts/migrate_dataset_v2_to_v3.py
+      - run: python -m pytest -q
       - run: git diff --check
 
   package:
@@ -39,9 +39,9 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
-      - run: python -m pip install build
+      - run: python -m pip install build twine
       - run: python -m build
-      - run: python scripts/check_release_artifacts.py dist/*
+      - run: python -m twine check dist/*
       - run: python -m venv /tmp/aiogym-wheel-only
       - name: Install wheel outside the source tree
         working-directory: /tmp
@@ -53,18 +53,14 @@ jobs:
         run: |
           /tmp/aiogym-wheel-only/bin/python -c "import sys, aiogym; assert 'torch' not in sys.modules; assert 'stable_baselines3' not in sys.modules; print(aiogym.__version__)"
           /tmp/aiogym-wheel-only/bin/aiogym list scenarios
-          /tmp/aiogym-wheel-only/bin/aiogym list tracks
-          /tmp/aiogym-wheel-only/bin/aiogym list rewards
-          /tmp/aiogym-wheel-only/bin/aiogym list profiles
-          /tmp/aiogym-wheel-only/bin/aiogym describe reward regulation
+          /tmp/aiogym-wheel-only/bin/aiogym list tasks
           /tmp/aiogym-wheel-only/bin/python - <<'PY'
           import numpy as np
           import aiogym
 
           env = aiogym.make_env(
-              "quadruple",
-              case="minimum-phase",
-              reward_spec="regulation",
+              "quadruple/regulation",
+              condition="minimum-phase",
           )
           try:
               observation, _ = env.reset(seed=0)
@@ -77,6 +73,9 @@ jobs:
               assert observation.shape == env.observation_space.shape
               assert next_observation.shape == env.observation_space.shape
               assert float(reward) == float(reward)
+              policy = aiogym.make_controller("pid", env=env)
+              result = aiogym.evaluate(policy, seeds=(0,), max_steps=2)
+              assert result["episodes"][0]["steps"] == 2
           finally:
               env.close()
           PY
@@ -91,10 +90,5 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
       - run: python -m pip install -e ".[rl,test]"
-      - run: python -m pytest -q -m "rl and not slow and not e2e"
-      - name: Tiny BC and RLPD kernels plus SAC lifecycle smoke
-        run: >-
-          python -m pytest -q
-          aiogym/tests/test_rl_phase_e.py::test_bc_reproduces_collector_on_tiny_dataset
-          aiogym/tests/test_rl_phase_e.py::test_rlpd_batch_is_half_offline_half_online_in_canonical_mode
-          aiogym/tests/e2e/test_collect_train_validate.py::test_sac_records_multiple_training_specs_and_valid_artifacts
+      - name: Supported algorithms and end-to-end workflow smoke
+        run: python -m pytest -q tests/workflows/test_train.py tests/e2e/test_workflow_paths.py
