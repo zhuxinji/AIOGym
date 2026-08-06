@@ -113,3 +113,10 @@ def test_robustness_sampling_is_seeded_and_reports_same_samples():
     assert first["robustness"]["pass_rate"] == 1.0
     assert first["robustness"]["cases"] == second["robustness"]["cases"]
     assert all(np.isfinite(row["dynamic"]["energy_kwh"]) for row in first["robustness"]["cases"])
+    assert all(
+        row["dynamic"]["disturbance"] == row["disturbance"]
+        for row in first["robustness"]["cases"]
+    )
+    assert [
+        row["dynamic"]["heatup_time_s"] for row in first["robustness"]["cases"]
+    ] != [890.0, 890.0]

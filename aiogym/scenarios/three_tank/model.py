@@ -83,6 +83,9 @@ class ThreeTankModel:
     def default_setpoint_vector(self):
         return self._model.default_setpoint_vector()
 
+    def default_disturbances(self):
+        return dict(self._model.disturbance_defaults())
+
     def clamp_state(self, state):
         clamp = getattr(self._model, "clamp_state", None)
         return list(state) if clamp is None else clamp(state)

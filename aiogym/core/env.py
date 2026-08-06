@@ -87,6 +87,7 @@ class ProcessControlEnv(gym.Env):
         self._state = np.asarray(model.initial_state(), dtype=float)
         self._step_index = 0
         defaults = getattr(model, "default_disturbances", lambda: {})()
+        self._disturbance_overrides: dict[str, float] = {}
         self.disturbances = {**dict(defaults), **dict(preset.config.get("disturbances", {}))}
         self._reference_state = self._preset_reference()
         self._previous_action = np.asarray(model.default_action(), dtype=np.float32)
@@ -114,6 +115,7 @@ class ProcessControlEnv(gym.Env):
         self.disturbances = {
             **dict(defaults),
             **dict(self.preset.config.get("disturbances", {})),
+            **self._disturbance_overrides,
         }
         self._reference_state = self._preset_reference()
         self._previous_action = np.asarray(self.model.default_action(), dtype=np.float32)
@@ -237,6 +239,18 @@ class ProcessControlEnv(gym.Env):
 
     def _env(self):
         return dict(self.disturbances)
+
+    def set_disturbances(self, values: Mapping[str, float]) -> None:
+        """Set deterministic episode disturbances that survive the next reset."""
+        defaults = getattr(self.model, "default_disturbances", lambda: {})()
+        unknown = set(values) - set(defaults)
+        if unknown:
+            raise ValueError(f"unknown disturbances: {sorted(unknown)}")
+        resolved = {str(name): float(value) for name, value in values.items()}
+        if not all(math.isfinite(value) for value in resolved.values()):
+            raise ValueError("disturbances must be finite")
+        self._disturbance_overrides = resolved
+        self.disturbances.update(resolved)
 
     def _constraints(self) -> dict[str, float]:
         function = getattr(self.model, "constraint_costs", None)

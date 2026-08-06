@@ -179,7 +179,7 @@ def sweep(
 
 def _dynamic_check(plant, provider, *, disturbances):
     env = make_env(f"{plant.scenario}/regulation", plant=plant, preset="commissioning")
-    env.disturbances = dict(disturbances)
+    env.set_disturbances(disturbances)
     policy = make_controller("pid", env=env, profile="commissioning")
     requirements = provider.dynamic_requirements(env.plant)
     operation = requirements["operation"]
