@@ -84,6 +84,7 @@ class MPCAgent:
                 "move_supp": self.move_supp,
                 "steady_input_weight": self.steady_input_weight,
                 "initialization": "tracking_steady_state_action",
+                "initialization_status": self._initialization_status,
                 "feedforward_reseed": "setpoint_change",
                 "cv_scale": self.cv_scale,
                 "q_y": self.q_y}
@@ -95,6 +96,7 @@ class MPCAgent:
         self._last_target = None
         self._target_u = None
         self._clock = 1e9
+        self._initialization_status = "default_action"
 
     def act(self, obs, context):
         action = self.compute(context.measurement, context.setpoint, context.control_dt)
@@ -142,6 +144,7 @@ class MPCAgent:
                 if len(candidate) == nu and np.all(np.isfinite(candidate)):
                     self._target_u = np.clip(candidate, 0.0, 1.0)
                     self.u = self._target_u.copy()
+                    self._initialization_status = "tracking_steady_state_action"
             self._last_target = target.copy()
         u0 = self.u.copy()
         f = lambda x: np.asarray(m.dynamics(list(x), u0, env), dtype=np.float64)

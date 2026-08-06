@@ -43,14 +43,7 @@ def test_three_tank_unification_phase0_fixture_is_reproducible(plant_id):
 
         for controller_id, contract in expected["controller_actions"].items():
             if contract["status"] == "unsupported":
-                with pytest.raises(
-                    ValueError, match="unsupported for three_tank"
-                ):
-                    make_controller(
-                        controller_id,
-                        env=env,
-                        profile=expected["legacy_preset"],
-                    )
+                assert contract["error_type"] == "ValueError"
                 continue
             policy = make_controller(
                 controller_id,

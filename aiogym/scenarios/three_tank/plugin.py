@@ -8,6 +8,7 @@ from aiogym.core import PlantConfig, ResolvedPlant, ScenarioPlugin, TaskSpec
 from aiogym.scenarios._shared import economic_reward, regulation_reward
 
 from .model import ThreeTankModel
+from .controllers import resolve_controller_profile
 from .study import ThreeTankStudyProvider
 
 
@@ -112,6 +113,7 @@ PLUGIN = ScenarioPlugin(
     built_in_plants=BUILT_IN_PLANTS,
     tasks={"regulation": _regulation_task(), "economic": _economic_task()},
     controller_defaults={},
+    resolve_controller_profile=resolve_controller_profile,
     study_provider=ThreeTankStudyProvider(),
 )
 

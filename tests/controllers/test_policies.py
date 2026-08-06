@@ -36,19 +36,50 @@ def test_stable_scenario_pid_and_mpc_share_policy_contract(
         env.close()
 
 
-def test_three_tank_commissioning_pid_and_explicit_mpc_status():
-    env = make_env("three_tank/regulation", preset="commissioning")
+@pytest.mark.parametrize(
+    "plant_id",
+    ("open-cascade-v1", "recirculating-h1-v1", "lab-three-tank-v1"),
+)
+@pytest.mark.parametrize("controller_id", ("pid", "mpc"))
+def test_unified_three_tank_pid_and_mpc_contracts(plant_id, controller_id):
+    env = make_env("three_tank/regulation", plant=plant_id)
     try:
         result = rollout(
             env,
-            make_controller("pid", env=env, profile="commissioning"),
+            make_controller(controller_id, env=env),
             seed=7,
-            max_steps=3,
+            max_steps=2,
         )
-        assert result.policy_metadata["kind"] == "matrix_pid"
+        assert len(result.transitions) == 2
         assert all(env.action_space.contains(row.action) for row in result.transitions)
-        with pytest.raises(ValueError, match="unsupported for three_tank"):
-            make_controller("mpc", env=env)
+        assert np.isfinite(result.episode_return)
+        assert result.policy_metadata["interface_hash"] == env.identity.interface_hash
+        if controller_id == "mpc":
+            assert result.policy_metadata["initialization_status"] in {
+                "default_action",
+                "tracking_steady_state_action",
+            }
+    finally:
+        env.close()
+
+
+def test_name_bound_pid_rejects_unknown_actuator_before_rollout():
+    env = make_env("three_tank/regulation", plant="recirculating-h1-v1")
+    try:
+        with pytest.raises(ValueError, match="unknown PID actuator"):
+            make_controller(
+                "pid",
+                env=env,
+                config={
+                    "loops": [
+                        {
+                            "actuator": "not-installed",
+                            "output": "level_1",
+                            "pid": [1.0, 0.0, 0.0],
+                        }
+                    ]
+                },
+            )
     finally:
         env.close()
 

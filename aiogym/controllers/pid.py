@@ -181,6 +181,7 @@ class MatrixPIDPolicy:
             "kd": self.kd.tolist(),
             "bias": self.bias.tolist(),
             "action_contract": "env.action_space",
+            "interface_hash": self.env.identity.interface_hash,
         }
 
 

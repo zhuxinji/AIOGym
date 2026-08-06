@@ -26,6 +26,7 @@ class _LegacyPolicyAdapter:
         metadata = dict(self.controller.metadata())
         metadata["action_contract"] = "env.action_space"
         metadata["adapter"] = "core-policy"
+        metadata["interface_hash"] = self.env.identity.interface_hash
         return metadata
 
 
@@ -43,8 +44,19 @@ def make_controller(
     plugin = get_scenario(env.task.scenario)
     profiles = plugin.controller_defaults.get(key, {})
     profile_id = profile or env.condition.id
-    defaults = dict(profiles.get(profile_id, profiles.get(env.task.objective, {})))
+    if plugin.resolve_controller_profile is not None:
+        defaults = dict(
+            plugin.resolve_controller_profile(
+                key,
+                plant_id=env.plant.id,
+                condition_id=env.condition.id,
+                objective=env.task.objective,
+            )
+        )
+    else:
+        defaults = dict(profiles.get(profile_id, profiles.get(env.task.objective, {})))
     defaults.update(dict(config or {}))
+    defaults = _compile_named_profile(defaults, env)
     if key == "pid":
         from .pid import MatrixPIDPolicy
 
@@ -62,11 +74,6 @@ def make_controller(
         model = getattr(env.model, "_model", env.model)
         return _LegacyPolicyAdapter(PIDAgent(model, **defaults), env)
     if key == "mpc":
-        if plugin.id == "three_tank":
-            raise ValueError(
-                "MPC is unsupported for three_tank until the six-action model "
-                "has validated linearization defaults"
-            )
         from .mpc import MPCAgent
 
         model = getattr(env.model, "_model", env.model)
@@ -88,6 +95,59 @@ def make_controller(
             device=defaults.get("device", "auto"),
         )
     raise ValueError(f"unsupported core controller {controller_id!r}")
+
+
+def _compile_named_profile(profile, env):
+    resolved = dict(profile)
+    named_loops = "loops" in resolved and any(
+        "actuator" in row or "output" in row for row in resolved["loops"]
+    )
+    named_holds = "holds" in resolved and any(
+        "actuator" in row for row in resolved["holds"]
+    )
+    if not named_loops and not named_holds and "matrix_terms" not in resolved:
+        return resolved
+    action_names = [row["name"] for row in env.model.action_schema()]
+    output_names = [row["name"] for row in env.model.output_schema()]
+
+    def index(values, name, kind):
+        try:
+            return values.index(name)
+        except ValueError as error:
+            raise ValueError(f"unknown PID {kind} {name!r}") from error
+
+    if named_loops:
+        resolved["loops"] = [
+            {
+                **{key: value for key, value in row.items() if key not in {"actuator", "output"}},
+                "u_index": index(action_names, row["actuator"], "actuator"),
+                "y_index": index(output_names, row["output"], "output"),
+            }
+            for row in resolved["loops"]
+        ]
+    if named_holds:
+        resolved["holds"] = [
+            {
+                **{key: value for key, value in row.items() if key != "actuator"},
+                "u_index": index(action_names, row["actuator"], "actuator"),
+            }
+            for row in resolved["holds"]
+        ]
+    terms = resolved.pop("matrix_terms", None)
+    if terms is not None:
+        rows = len(action_names)
+        columns = len(output_names)
+        matrices = {
+            name: np.zeros((rows, columns), dtype=float)
+            for name in ("kp", "ki", "kd")
+        }
+        for term in terms:
+            row = index(action_names, term["actuator"], "actuator")
+            column = index(output_names, term["output"], "output")
+            for name in matrices:
+                matrices[name][row, column] += float(term.get(name, 0.0))
+        resolved.update({name: value.tolist() for name, value in matrices.items()})
+    return resolved
 
 
 __all__ = ["make_controller"]
