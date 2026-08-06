@@ -5,7 +5,7 @@ from aiogym.core.model import RHO_CP, ProcessModelContract
 
 
 class CascadeModel(ProcessModelContract):
-    scenario = "cascade"
+    scenario = "three_tank"
     display_name = "Heated-tank cascade"
     summary = "Three interlinked heated tanks with level and temperature dynamics."
     n = 3

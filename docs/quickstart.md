@@ -5,12 +5,13 @@
 ```bash
 aiogym list scenarios
 aiogym list tasks --scenario quadruple
+aiogym list plants --scenario three_tank
 ```
 
 ```python
 import aiogym
 
-env = aiogym.make_env("quadruple/regulation", preset="minimum-phase")
+env = aiogym.make_env("quadruple/regulation", condition="minimum-phase")
 observation, info = env.reset(seed=0)
 action = env.action_space.sample()
 next_observation, reward, terminated, truncated, info = env.step(action)
@@ -25,7 +26,11 @@ mapping, or a JSON path. Omitting it uses the scenario's built-in plant.
 ```python
 import aiogym
 
-env = aiogym.make_env("cascade/regulation", preset="continuous-benchmark")
+env = aiogym.make_env(
+    "three_tank/regulation",
+    plant="open-cascade-v1",
+    condition="continuous-benchmark",
+)
 pid = aiogym.make_controller("pid", env=env)
 result = aiogym.evaluate(pid, seeds=[0, 1, 2], output="runs/evaluate/cascade-pid")
 env.close()
@@ -37,7 +42,7 @@ print(result["aggregate"])
 ```python
 dataset = aiogym.collect(
     task="quadruple/regulation",
-    preset="minimum-phase",
+    condition="minimum-phase",
     policy="pid",
     episodes=3,
     seed=0,
@@ -56,7 +61,7 @@ run = aiogym.train(
     task="quadruple/regulation",
     algorithm="sac",
     steps=10_000,
-    preset="minimum-phase",
+    condition="minimum-phase",
     seed=0,
     eval_seeds=[100, 101, 102],
     output="runs/train/quadruple-sac",

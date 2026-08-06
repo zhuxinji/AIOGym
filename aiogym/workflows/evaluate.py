@@ -10,7 +10,13 @@ import numpy as np
 
 import aiogym.scenarios  # noqa: F401
 from aiogym.controllers.base import make_controller
-from aiogym.core import get_task, make_env, rollout
+from aiogym.core import (
+    get_task,
+    make_env,
+    resolve_condition_alias,
+    resolve_legacy_request,
+    rollout,
+)
 
 from .artifacts import write_run_bundle
 from .design import load_plant
@@ -37,9 +43,10 @@ def evaluate(
         if bound_env is None:
             raise ValueError("task is required for an unbound policy")
         task = bound_env.task.id
+    condition = resolve_condition_alias(condition, preset)
+    task, plant, condition = resolve_legacy_request(task, plant, condition)
     task_spec = get_task(task)
     created_env = bound_env is None
-    condition = _condition_alias(condition, preset)
     env = bound_env or make_env(task, plant=plant, condition=condition)
     if env.task.id != task:
         raise ValueError("bound policy environment does not match requested task")
@@ -204,8 +211,6 @@ def _output_reference(env, transition):
     info = transition.info
     reference = info.get("reference", info.get("y_sp"))
     output = info.get("y")
-    if output is None and getattr(env.model, "scenario", None) == "three_tank":
-        output = transition.next_observation
     if output is None or reference is None:
         return None, None
     output = np.asarray(output, dtype=float).reshape(-1)
@@ -254,12 +259,6 @@ def _seeds(values):
     if len(set(result)) != len(result):
         raise ValueError("seeds must not contain duplicates")
     return tuple(result)
-
-
-def _condition_alias(condition, preset):
-    if condition is not None and preset is not None:
-        raise TypeError("condition and deprecated preset cannot both be provided")
-    return condition if condition is not None else preset
 
 
 def render_evaluation_report(result: Mapping[str, Any]) -> str:

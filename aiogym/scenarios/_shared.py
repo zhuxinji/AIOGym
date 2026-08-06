@@ -75,10 +75,10 @@ class NumericProcessModel:
     def initial_state(self):
         return self._model.initial_state()
 
-    def sample_initial_state(self, rng, preset):
+    def sample_initial_state(self, rng, condition):
         del rng
-        condition = _condition_mapping(preset)
-        return list(condition.get("initial_state", self.initial_state()))
+        declaration = _condition_mapping(condition)
+        return list(declaration.get("initial_state", self.initial_state()))
 
     def dynamics(self, state, action, disturbances=None):
         return self._model.dynamics(state, action, disturbances or {})
@@ -104,10 +104,10 @@ class NumericProcessModel:
     def default_disturbances(self):
         return dict(self._model.disturbance_defaults())
 
-    def observation_schema(self, preset):
+    def observation_schema(self, condition):
         state = _schema(self._model.state_schema())
         reference = _schema(self._model.setpoint_schema())
-        mode = _condition_mapping(preset).get(
+        mode = _condition_mapping(condition).get(
             "observation", "state-reference-disturbance"
         )
         if mode == "normalized-state-error-action":
@@ -122,8 +122,8 @@ class NumericProcessModel:
         )
         return [*state, *reference, *disturbance]
 
-    def observation(self, state, reference, previous_action, disturbances, preset):
-        mode = _condition_mapping(preset).get(
+    def observation(self, state, reference, previous_action, disturbances, condition):
+        mode = _condition_mapping(condition).get(
             "observation", "state-reference-disturbance"
         )
         if mode == "normalized-state-error-action":
@@ -219,20 +219,20 @@ def build_plugin(
     scenario,
     *,
     model_factory,
-    presets,
-    default_preset,
+    conditions,
+    default_condition,
     economic=False,
     horizon=600,
     control_dt=1.0,
     controller_defaults=None,
-    preset_configs=None,
+    condition_configs=None,
 ):
-    preset_configs = dict(preset_configs or {})
+    condition_configs = dict(condition_configs or {})
     numerical = model_factory.numerical_type()
-    conditions = {}
-    for name in presets:
-        overrides = dict(preset_configs.get(name, {}))
-        conditions[name] = {
+    condition_declarations = {}
+    for name in conditions:
+        overrides = dict(condition_configs.get(name, {}))
+        condition_declarations[name] = {
             "id": name,
             "initial_state": overrides.pop(
                 "initial_state", list(numerical.initial_state())
@@ -262,8 +262,8 @@ def build_plugin(
             "scenario": scenario,
             "description": f"Built-in default parameters for {scenario}",
             "plant": {"parameters": copy.deepcopy(model.p)},
-            "conditions": copy.deepcopy(conditions),
-            "default_condition": default_preset,
+            "conditions": copy.deepcopy(condition_declarations),
+            "default_condition": default_condition,
             "study": {},
             "references": [],
         }

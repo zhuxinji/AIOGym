@@ -46,17 +46,17 @@ _MPC = {
 PLUGIN = build_plugin(
     "quadruple",
     model_factory=QuadrupleModel,
-    presets=(
+    conditions=(
         "minimum-phase",
         "nonminimum-phase",
         "zero-boundary-stress",
         "disturbance-rejection",
     ),
-    default_preset="minimum-phase",
+    default_condition="minimum-phase",
     horizon=600,
     control_dt=1.0,
     controller_defaults={"pid": _PID, "mpc": _MPC},
-    preset_configs={
+    condition_configs={
         "minimum-phase": {
             "initial_state": [
                 12.2629675195507,

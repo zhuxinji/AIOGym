@@ -54,10 +54,15 @@ def list_tasks(*, scenario: str | None = None) -> tuple[str, ...]:
     return tuple(sorted(task.id for plugin in plugins for task in plugin.tasks.values()))
 
 
+def list_plants(*, scenario: str) -> tuple[str, ...]:
+    return tuple(sorted(get_scenario(scenario).built_in_plants))
+
+
 __all__ = [
     "get_scenario",
     "get_task",
     "list_scenarios",
+    "list_plants",
     "list_tasks",
     "register_scenario",
     "unregister_scenario",

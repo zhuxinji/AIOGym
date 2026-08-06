@@ -1,6 +1,6 @@
 # AIO-Gym
 
-AIO-Gym 0.2 is a compact, scenario-oriented process-control toolkit. A
+AIO-Gym 0.3 is a compact, scenario-oriented process-control toolkit. A
 `Scenario` owns its process model and supported `Task` definitions; a
 `PlantConfig` owns equipment parameters; a `Run` records one design,
 collection, training, or evaluation workflow.
@@ -10,7 +10,7 @@ The stable Python surface is deliberately small:
 ```python
 import aiogym
 
-env = aiogym.make_env("quadruple/regulation", preset="minimum-phase")
+env = aiogym.make_env("quadruple/regulation", condition="minimum-phase")
 policy = aiogym.make_controller("pid", env=env)
 result = aiogym.evaluate(policy, seeds=[0, 1, 2])
 env.close()
@@ -29,21 +29,23 @@ pip install 'aiogym[rl]'
 ```bash
 aiogym list scenarios
 aiogym list tasks
+aiogym list plants --scenario three_tank
+aiogym list conditions --scenario three_tank --plant lab-three-tank-v1
 
 aiogym design new three_tank plant.json
 aiogym design run plant.json \
   --output runs/design/example
 
 aiogym collect quadruple/regulation \
-  --preset minimum-phase --controller pid --episodes 3 \
+  --condition minimum-phase --controller pid --episodes 3 \
   --output runs/data/quadruple-pid-v3
 
 aiogym train quadruple/regulation sac \
-  --preset minimum-phase --steps 10000 --eval-seeds 100 101 102 \
+  --condition minimum-phase --steps 10000 --eval-seeds 100 101 102 \
   --output runs/train/quadruple-sac
 
 aiogym evaluate quadruple/regulation \
-  --preset minimum-phase --controller pid --seeds 0 1 2 \
+  --condition minimum-phase --controller pid --seeds 0 1 2 \
   --output runs/evaluate/quadruple-pid
 ```
 
@@ -58,6 +60,8 @@ claims.
 - [Architecture](docs/architecture.md)
 - [Plant design](docs/design.md)
 - [Migration from 0.1](docs/migration-v0.2.md)
+- [Migration to 0.3](docs/migration-v0.3.md)
+- [Unified three-tank scenario](docs/three-tank.md)
 
 Design studies are simulation screening, not safety certification. Installed
 equipment and protection settings still require independent engineering review

@@ -1,17 +1,19 @@
 # Architecture
 
-AIO-Gym 0.2 has four domain concepts and one execution direction:
+AIO-Gym 0.3 has five domain concepts and one execution direction:
 
 ```text
-ScenarioPlugin -> PlantConfig -> ResolvedPlant -> TaskSpec -> ProcessControlEnv
+ScenarioPlugin -> PlantConfig -> OperatingCondition -> TaskSpec -> ProcessControlEnv
                                                          -> Policy -> Run result
 ```
 
 - `ScenarioPlugin` is the vertical owner of a model factory, plant resolver,
   supported tasks, controller defaults, and optional design-study provider.
 - `PlantConfig` describes equipment independently of an operating objective.
-- `TaskSpec` owns objective, reward, metrics, horizon, control cadence, and
-  presets. It replaces benchmark protocol composition.
+- `OperatingCondition` owns initial state, reference, disturbances, schedules,
+  horizon, control cadence, and policy observation mode.
+- `TaskSpec` owns objective, stable reward identity, metric suite, and required
+  plant capabilities.
 - A run is an explicit design, collection, training, or evaluation workflow.
 
 ## Package boundaries
@@ -49,10 +51,11 @@ steps without changing the Task horizon or Dataset transition cadence.
 ## Identity and artifacts
 
 `PlantConfig.plant_hash` binds equipment declarations. `TaskSpec.task_hash`
-binds objective semantics. Dataset v3 manifests and run artifacts record both,
-plus the preset, policy metadata, seeds, and file checksums. Writers refuse to
+binds objective semantics. `condition_hash`, `interface_hash`, and `env_hash`
+bind the operating and policy-facing contracts. Dataset v3 manifests and run
+artifacts record these identities plus policy metadata, seeds, and checksums. Writers refuse to
 replace an existing artifact unless the caller explicitly enables overwrite or
 resume behavior.
 
 No Track, Anchor, Goal, RewardSpec, Case, Distribution, Curriculum, Claim,
-artifact-compatibility, or ranking layer participates in the 0.2 runtime.
+artifact-compatibility, or ranking layer participates in the 0.3 runtime.

@@ -98,7 +98,7 @@ def register_toy() -> ScenarioPlugin:
 def test_make_env_uses_one_resolver_and_concrete_environment():
     register_toy()
     try:
-        env = make_env("core-toy/regulation", preset="short")
+        env = make_env("core-toy/regulation", condition="short")
         assert isinstance(env, ProcessControlEnv)
         observation, info = env.reset(seed=7)
         assert env.action_space.shape == (1,)

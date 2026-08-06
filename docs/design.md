@@ -1,13 +1,13 @@
 # Plant design workflow
 
 Plant design is part of the owning `ScenarioPlugin`, not a parallel model
-stack. A strict `aiogym.plant.v1` `PlantConfig` contains equipment, operating
-point, study requirements, uncertainty declarations, and references.
+stack. A strict `aiogym.plant.v2` `PlantConfig` contains equipment, topology,
+study requirements, uncertainty declarations, conditions, and references.
 
 ```bash
 aiogym design new three_tank plant.json
 aiogym design validate plant.json
-aiogym design run plant.json --samples 20 --seed 7 --output runs/design/plant
+aiogym design run plant.json --condition commissioning --samples 20 --seed 7 --output runs/design/plant
 aiogym design sweep plant.json \
   --parameter plant.heaters.H1.rated_power_kw --values 4 5 6 \
   --samples 10 --seed 7 --output runs/design/heater-sweep
@@ -21,7 +21,7 @@ is not overwritten by default.
 
 Legacy `aiogym.design_spec.v1` JSON can be loaded and is deterministically
 converted to `PlantConfig`. This is an input conversion only: the resulting run
-is governed by the 0.2 scenario model and workflow.
+is governed by the 0.3 unified three-tank model and workflow.
 
 A PASS is simulation-screening evidence. It is not a safety certification and
 does not replace procurement reconciliation, protection-layer review, hazard

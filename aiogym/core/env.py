@@ -10,6 +10,7 @@ import gymnasium as gym
 import numpy as np
 
 from .contracts import ProcessModel
+from .compat import resolve_condition_alias, resolve_legacy_request
 from .registry import get_scenario, get_task
 from .io import stable_hash
 from .specs import (
@@ -129,7 +130,6 @@ class ProcessControlEnv(gym.Env):
         self.task = task
         self.plant = plant
         self.condition = condition
-        self.preset = condition  # one-release attribute alias
         self.control_dt = condition.control_dt
         self.episode_steps = condition.horizon
         action_low, action_high = _bounds(model.action_schema())
@@ -362,6 +362,7 @@ class ProcessControlEnv(gym.Env):
             "step_index": self._step_index,
             "physical_time": self._step_index * self.control_dt,
             "true_state": self.state,
+            "y": np.asarray(self.model.outputs(self._state), dtype=float),
             "reference": self._reference(),
             "commanded_action": None if commanded_action is None else commanded_action.copy(),
             "applied_action": None if applied_action is None else applied_action.copy(),
@@ -388,10 +389,8 @@ def make_env(
     condition: OperatingCondition | str | Path | Mapping[str, Any] | None = None,
     preset: str | None = None,
 ) -> ProcessControlEnv:
-    if preset is not None:
-        if condition is not None:
-            raise TypeError("condition and deprecated preset cannot both be provided")
-        condition = preset
+    condition = resolve_condition_alias(condition, preset)
+    task, plant, condition = resolve_legacy_request(task, plant, condition)
     task_spec = get_task(task)
     plugin = get_scenario(task_spec.scenario)
     resolved_plant = resolve_plant(task_spec.scenario, plant)

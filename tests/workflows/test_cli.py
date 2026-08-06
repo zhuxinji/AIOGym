@@ -12,6 +12,23 @@ def test_cli_lists_only_v2_resources(capsys):
     assert capsys.readouterr().out == (
         "three_tank/economic\nthree_tank/regulation\n"
     )
+    assert main(["list", "plants", "--scenario", "three_tank"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "lab-three-tank-v1",
+        "open-cascade-v1",
+        "recirculating-h1-v1",
+    ]
+    assert main(
+        [
+            "list",
+            "conditions",
+            "--scenario",
+            "three_tank",
+            "--plant",
+            "lab-three-tank-v1",
+        ]
+    ) == 0
+    assert capsys.readouterr().out == "commissioning\n"
 
 
 def test_cli_design_new_and_validate(tmp_path, capsys):

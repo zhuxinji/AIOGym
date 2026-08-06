@@ -20,7 +20,7 @@ def test_supported_algorithms_train_save_reload_and_evaluate(tmp_path, algorithm
     output = tmp_path / algorithm
     result = train(
         task="quadruple/regulation",
-        preset="minimum-phase",
+        condition="minimum-phase",
         algorithm=algorithm,
         steps=2,
         seed=1,
@@ -40,7 +40,7 @@ def test_supported_algorithms_train_save_reload_and_evaluate(tmp_path, algorithm
     replay = evaluate(
         loaded,
         task="quadruple/regulation",
-        preset="minimum-phase",
+        condition="minimum-phase",
         seeds=(11,),
         max_steps=2,
     )
@@ -52,7 +52,7 @@ def test_supported_algorithms_train_save_reload_and_evaluate(tmp_path, algorithm
     with pytest.raises(FileExistsError):
         train(
             task="quadruple/regulation",
-            preset="minimum-phase",
+            condition="minimum-phase",
             algorithm=algorithm,
             steps=1,
             output=output,
@@ -60,23 +60,26 @@ def test_supported_algorithms_train_save_reload_and_evaluate(tmp_path, algorithm
 
 
 @pytest.mark.parametrize(
-    ("task", "preset"),
+    ("task", "condition", "plant"),
     (
-        ("cascade/regulation", "continuous-benchmark"),
-        ("three_tank/regulation", "commissioning"),
+        ("three_tank/regulation", "continuous-benchmark", "open-cascade-v1"),
+        ("three_tank/regulation", "commissioning", "lab-three-tank-v1"),
     ),
 )
-def test_sac_smoke_runs_on_remaining_stable_scenarios(tmp_path, task, preset):
+def test_sac_smoke_runs_on_remaining_stable_scenarios(
+    tmp_path, task, condition, plant
+):
     result = train(
         task=task,
-        preset=preset,
+        plant=plant,
+        condition=condition,
         algorithm="sac",
         steps=2,
         seed=2,
         eval_seeds=(12,),
         eval_max_steps=2,
         algorithm_kwargs=SMALL_POLICY,
-        output=tmp_path / task.split("/")[0],
+        output=tmp_path / plant,
     )
     assert result["algorithm"] == "sac"
     assert result["evaluation"]["episodes"][0]["steps"] == 2

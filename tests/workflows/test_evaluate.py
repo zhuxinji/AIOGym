@@ -22,7 +22,7 @@ def test_regulation_evaluate_aggregates_explicit_seeds():
     result = evaluate(
         "pid",
         task="quadruple/regulation",
-        preset="minimum-phase",
+        condition="minimum-phase",
         seeds=(3, 4),
         max_steps=4,
     )
@@ -38,15 +38,17 @@ def test_regulation_evaluate_aggregates_explicit_seeds():
 def test_economic_and_regulation_are_distinct_tasks_on_same_plant():
     regulation = evaluate(
         "pid",
-        task="cascade/regulation",
-        preset="continuous-benchmark",
+        task="three_tank/regulation",
+        plant="open-cascade-v1",
+        condition="continuous-benchmark",
         seeds=(0,),
         max_steps=3,
     )
     economic = evaluate(
         "pid",
-        task="cascade/economic",
-        preset="continuous-benchmark",
+        task="three_tank/economic",
+        plant="open-cascade-v1",
+        condition="continuous-benchmark",
         seeds=(0,),
         max_steps=3,
     )
@@ -81,7 +83,7 @@ def test_evaluate_artifacts_and_seed_validation(tmp_path):
     result = evaluate(
         "hold",
         task="quadruple/regulation",
-        preset="minimum-phase",
+        condition="minimum-phase",
         seeds=(1,),
         max_steps=2,
         output=output,
@@ -97,7 +99,7 @@ def test_evaluate_artifacts_and_seed_validation(tmp_path):
         evaluate(
             "hold",
             task="quadruple/regulation",
-            preset="minimum-phase",
+            condition="minimum-phase",
             seeds=(1,),
             max_steps=2,
             output=output,

@@ -25,10 +25,19 @@ def build_parser():
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
     listing = commands.add_parser("list", help="list registered resources")
     resources = listing.add_subparsers(dest="resource", metavar="RESOURCE")
-    for name in ("scenarios", "tasks", "controllers", "algorithms"):
+    for name in (
+        "scenarios",
+        "tasks",
+        "plants",
+        "conditions",
+        "controllers",
+        "algorithms",
+    ):
         item = resources.add_parser(name)
-        if name == "tasks":
+        if name in {"tasks", "plants", "conditions"}:
             item.add_argument("--scenario")
+        if name == "conditions":
+            item.add_argument("--plant")
     help_text = {
         "design": "validate plants and run design studies",
         "collect": "collect an episode-oriented Dataset v3",
@@ -47,6 +56,14 @@ def _list(args):
         values = aiogym.list_scenarios()
     elif args.resource == "tasks":
         values = aiogym.list_tasks(args.scenario)
+    elif args.resource == "plants":
+        if not args.scenario:
+            raise ValueError("--scenario is required for plants")
+        values = aiogym.list_plants(args.scenario)
+    elif args.resource == "conditions":
+        if not args.scenario:
+            raise ValueError("--scenario is required for conditions")
+        values = aiogym.list_conditions(args.scenario, args.plant)
     elif args.resource == "controllers":
         values = ("hold", "mpc", "pid", "random", "sb3")
     elif args.resource == "algorithms":
@@ -54,7 +71,10 @@ def _list(args):
 
         values = ALGORITHMS
     else:
-        raise ValueError("choose one of: scenarios, tasks, controllers, algorithms")
+        raise ValueError(
+            "choose one of: scenarios, tasks, plants, conditions, "
+            "controllers, algorithms"
+        )
     print("\n".join(values))
     return 0
 

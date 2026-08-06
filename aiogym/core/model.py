@@ -18,7 +18,9 @@ GOAL_NAMES = ("regulation", "economic")
 
 
 def canonical_scenario_id(value):
-    return "cascade-recirculating" if value == "cascade_recirculating" else value
+    if value in {"cascade", "cascade_recirculating", "cascade-recirculating"}:
+        return "three_tank"
+    return value
 
 RHO = 1000.0
 CP = 4186.0

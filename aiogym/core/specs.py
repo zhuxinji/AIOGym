@@ -330,18 +330,6 @@ class ResolvedPlant:
 
 
 @dataclass(frozen=True)
-class PresetSpec:
-    id: str
-    config: Mapping[str, Any] = field(default_factory=dict)
-    description: str = ""
-
-    def __post_init__(self) -> None:
-        if not self.id:
-            raise ValueError("preset id must be non-empty")
-        object.__setattr__(self, "config", _mapping(self.config))
-
-
-@dataclass(frozen=True)
 class TaskSpec:
     id: str
     scenario: str
@@ -477,7 +465,6 @@ __all__ = [
     "OperatingCondition",
     "PLANT_SCHEMA_VERSION",
     "PlantConfig",
-    "PresetSpec",
     "ResolvedPlant",
     "RewardFunction",
     "RunResult",

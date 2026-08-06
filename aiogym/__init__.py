@@ -4,7 +4,7 @@ from __future__ import annotations
 import warnings
 
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 
 def _register():
@@ -23,6 +23,21 @@ def list_tasks(scenario: str | None = None):
     from .core import list_tasks as implementation
 
     return implementation(scenario=scenario)
+
+
+def list_plants(scenario: str):
+    _register()
+    from .core import list_plants as implementation
+
+    return implementation(scenario=scenario)
+
+
+def list_conditions(scenario: str, plant=None):
+    _register()
+    from .core import resolve_plant
+
+    resolved = resolve_plant(scenario, plant)
+    return tuple(sorted(resolved.config.conditions))
 
 
 def make_env(task: str, *, plant=None, condition=None, preset=None, **legacy):
@@ -44,7 +59,7 @@ def make_env(task: str, *, plant=None, condition=None, preset=None, **legacy):
     if "/" not in task or legacy:
         warnings.warn(
             "make_env(scenario, case=..., reward_spec=...) is deprecated; use "
-            "make_env('scenario/objective', plant=..., preset=...)",
+            "make_env('scenario/objective', plant=..., condition=...)",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -54,28 +69,11 @@ def make_env(task: str, *, plant=None, condition=None, preset=None, **legacy):
         reward = str(legacy.get("reward_spec") or "regulation").lower()
         objective = "economic" if "economic" in reward else "regulation"
         task = f"{task}/{objective}"
-        condition = condition or _legacy_preset(
-            task.split("/", 1)[0], legacy.get("case")
-        )
+        if condition is None and legacy.get("case") is not None:
+            condition = str(legacy["case"])
     from .core import make_env as implementation
 
     return implementation(task, plant=plant, condition=condition)
-
-
-def _legacy_preset(scenario, case):
-    if case is None:
-        return None
-    value = str(case).lower()
-    aliases = {
-        "quadruple": ("minimum-phase", "nonminimum-phase"),
-        "cascade": ("continuous-benchmark", "episode-benchmark"),
-        "cascade_recirculating": ("commissioning", "regulation"),
-        "three_tank": ("commissioning", "regulation"),
-    }
-    for candidate in aliases.get(scenario, ()):
-        if candidate in value:
-            return candidate
-    return None
 
 
 def load_plant(source):
@@ -119,6 +117,8 @@ __all__ = [
     "collect",
     "evaluate",
     "list_scenarios",
+    "list_plants",
+    "list_conditions",
     "list_tasks",
     "load_plant",
     "make_controller",

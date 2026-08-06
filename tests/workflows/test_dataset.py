@@ -70,7 +70,7 @@ def test_resume_appends_only_missing_episodes_and_no_overwrite(tmp_path):
     output = tmp_path / "resume"
     first = collect(
         task="quadruple/regulation",
-        preset="minimum-phase",
+        condition="minimum-phase",
         policy="random",
         episodes=1,
         seed=17,
@@ -81,7 +81,7 @@ def test_resume_appends_only_missing_episodes_and_no_overwrite(tmp_path):
     with pytest.raises(FileExistsError):
         collect(
             task="quadruple/regulation",
-            preset="minimum-phase",
+            condition="minimum-phase",
             policy="random",
             episodes=2,
             seed=17,
@@ -90,7 +90,7 @@ def test_resume_appends_only_missing_episodes_and_no_overwrite(tmp_path):
         )
     resumed = collect(
         task="quadruple/regulation",
-        preset="minimum-phase",
+        condition="minimum-phase",
         policy="random",
         episodes=2,
         seed=17,
@@ -102,7 +102,7 @@ def test_resume_appends_only_missing_episodes_and_no_overwrite(tmp_path):
     assert resumed["manifest"]["episodes"][0]["content_hash"] == first_hash
     repeated = collect(
         task="quadruple/regulation",
-        preset="minimum-phase",
+        condition="minimum-phase",
         policy="random",
         episodes=2,
         seed=17,
@@ -114,7 +114,7 @@ def test_resume_appends_only_missing_episodes_and_no_overwrite(tmp_path):
     with pytest.raises(ValueError, match="identity"):
         collect(
             task="quadruple/regulation",
-            preset="minimum-phase",
+            condition="minimum-phase",
             policy="random",
             episodes=3,
             seed=18,
@@ -128,7 +128,7 @@ def test_pid_mpc_random_and_checkpoint_compatible_policy_objects_collect(tmp_pat
     for controller_id in ("pid", "mpc", "random"):
         result = collect(
             task="quadruple/regulation",
-            preset="minimum-phase",
+            condition="minimum-phase",
             policy=controller_id,
             episodes=1,
             seed=2,
@@ -150,7 +150,7 @@ def test_pid_mpc_random_and_checkpoint_compatible_policy_objects_collect(tmp_pat
 
     learned = collect(
         task="quadruple/regulation",
-        preset="minimum-phase",
+        condition="minimum-phase",
         policy=PredictPolicy(),
         episodes=1,
         seed=2,

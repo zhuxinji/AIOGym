@@ -16,15 +16,13 @@ from aiogym.core import make_env, rollout
     ("task", "preset"),
     (
         ("quadruple/regulation", "minimum-phase"),
-        ("cascade/regulation", "continuous-benchmark"),
-        ("cascade_recirculating/regulation", "commissioning"),
     ),
 )
 @pytest.mark.parametrize("controller_id", ("pid", "mpc"))
 def test_stable_scenario_pid_and_mpc_share_policy_contract(
     task, preset, controller_id
 ):
-    env = make_env(task, preset=preset)
+    env = make_env(task, condition=preset)
     try:
         policy = make_controller(controller_id, env=env)
         result = rollout(env, policy, seed=0, max_steps=2)

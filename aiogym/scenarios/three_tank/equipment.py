@@ -9,13 +9,13 @@ from aiogym.core.backends import _NUMERIC_OPS, _casadi_ops
 from aiogym.core.model import RHO_CP
 from .physics import RecirculatingCascadeModel
 
-from .spec import load_design_spec
+from .schema import load_design_spec
 
 
 class ThreeTankDesignModel(RecirculatingCascadeModel):
     """Three-tank recirculating design with stable H1/H2/H3 actuator slots."""
 
-    scenario = "cascade_recirculating_design"
+    scenario = "three_tank"
     display_name = "Parameterised recirculating three-tank design"
     summary = (
         "Three-tank P101-V12-V23 recirculating loop with independently optional "

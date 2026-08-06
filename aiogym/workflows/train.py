@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from aiogym.controllers.policies import SB3CheckpointPolicy
-from aiogym.core import file_sha256, make_env, write_json
+from aiogym.core import file_sha256, make_env, resolve_condition_alias, write_json
 
 from .artifacts import write_run_bundle
 from .evaluate import evaluate
@@ -83,7 +83,7 @@ def train(
         steps=steps,
         output=Path(output),
         plant=plant,
-        condition=_condition_alias(condition, preset),
+        condition=resolve_condition_alias(condition, preset),
         seed=seed,
         eval_seeds=tuple(eval_seeds),
         algorithm_kwargs=dict(algorithm_kwargs or {}),
@@ -214,12 +214,6 @@ def _algorithm_defaults(algorithm, steps):
         "verbose": 0,
         "device": "cpu",
     }
-
-
-def _condition_alias(condition, preset):
-    if condition is not None and preset is not None:
-        raise TypeError("condition and deprecated preset cannot both be provided")
-    return condition if condition is not None else preset
 
 
 def render_training_report(result):

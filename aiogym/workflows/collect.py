@@ -7,7 +7,12 @@ import numpy as np
 
 import aiogym.scenarios  # noqa: F401
 from aiogym.controllers.base import make_controller
-from aiogym.core import make_env, rollout
+from aiogym.core import (
+    make_env,
+    resolve_condition_alias,
+    resolve_legacy_request,
+    rollout,
+)
 
 from .dataset import DatasetReader, DatasetWriter
 from .design import load_plant
@@ -31,7 +36,8 @@ def collect(
     base_seed = _nonnegative_int("seed", seed)
     bound_env = getattr(policy, "env", None) if not isinstance(policy, str) else None
     created_env = bound_env is None
-    condition = _condition_alias(condition, preset)
+    condition = resolve_condition_alias(condition, preset)
+    task, plant, condition = resolve_legacy_request(task, plant, condition)
     env = bound_env or make_env(task, plant=plant, condition=condition)
     if env.task.id != task:
         raise ValueError("bound policy environment does not match collection task")
@@ -188,12 +194,6 @@ def _nonnegative_int(name, value):
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError(f"{name} must be a non-negative integer")
     return value
-
-
-def _condition_alias(condition, preset):
-    if condition is not None and preset is not None:
-        raise TypeError("condition and deprecated preset cannot both be provided")
-    return condition if condition is not None else preset
 
 
 __all__ = ["collect"]

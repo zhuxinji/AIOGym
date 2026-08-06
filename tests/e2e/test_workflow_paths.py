@@ -89,7 +89,7 @@ def test_three_tank_plant_to_study_data_train_and_evaluate(tmp_path):
 
 
 def test_quadruple_controller_data_and_sac_path(tmp_path):
-    env = aiogym.make_env("quadruple/regulation", preset="minimum-phase")
+    env = aiogym.make_env("quadruple/regulation", condition="minimum-phase")
     try:
         pid = aiogym.make_controller("pid", env=env)
         mpc = aiogym.make_controller("mpc", env=env)
@@ -112,18 +112,20 @@ def test_quadruple_controller_data_and_sac_path(tmp_path):
     assert collected["plant_hash"] == trained["plant_hash"]
 
 
-def test_cascade_tasks_share_plant_but_separate_objectives(tmp_path):
+def test_open_cascade_tasks_share_plant_but_separate_objectives(tmp_path):
     regulation = aiogym.evaluate(
         "pid",
-        task="cascade/regulation",
+        task="three_tank/regulation",
+        plant="open-cascade-v1",
         condition="continuous-benchmark",
         seeds=(0,),
         max_steps=2,
     )
     economic = aiogym.evaluate(
         "hold",
-        task="cascade/economic",
-        preset="continuous-benchmark",
+        task="three_tank/economic",
+        plant="open-cascade-v1",
+        condition="continuous-benchmark",
         seeds=(0,),
         max_steps=2,
     )
@@ -133,7 +135,8 @@ def test_cascade_tasks_share_plant_but_separate_objectives(tmp_path):
     assert "economic_objective" in economic["aggregate"]
     trained = _sac_smoke(
         tmp_path,
-        task="cascade/regulation",
+        task="three_tank/regulation",
+        plant="open-cascade-v1",
         condition="continuous-benchmark",
     )
     assert trained["plant_hash"] == regulation["plant_hash"]

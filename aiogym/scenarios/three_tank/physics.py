@@ -1,7 +1,7 @@
 """Closed-loop three-tank rig described by the retrofit design PDF.
 
-The public ``cascade`` scenario is an open, three-heater benchmark.  This model
-is intentionally separate because the retrofit rig recirculates Tank 3 through
+The open-cascade topology is a three-heater benchmark. This topology strategy
+is distinct because the retrofit rig recirculates Tank 3 through
 P101, has only two gravity valves, and heats only Tank 1.
 """
 from __future__ import annotations
@@ -13,7 +13,7 @@ from aiogym.core.model import RHO_CP, ProcessModelContract
 
 
 class RecirculatingCascadeModel(ProcessModelContract):
-    scenario = "cascade_recirculating"
+    scenario = "three_tank"
     display_name = "Recirculating heated-tank cascade"
     summary = (
         "Three non-identical tanks in a closed P101-Tank 1-V12-Tank 2-V23-Tank 3 "
@@ -481,16 +481,16 @@ class RecirculatingCascadeModel(ProcessModelContract):
                 number = float(value)
             except (TypeError, ValueError) as exc:
                 raise ValueError(
-                    f"cascade_recirculating disturbance {name!r} must be finite"
+                    f"three_tank disturbance {name!r} must be finite"
                 ) from exc
             if not math.isfinite(number):
                 raise ValueError(
-                    f"cascade_recirculating disturbance {name!r} must be finite"
+                    f"three_tank disturbance {name!r} must be finite"
                 )
             lower, upper = self._environment_bounds[name]
             if number < lower or number > upper:
                 raise ValueError(
-                    f"cascade_recirculating disturbance {name!r} must be within "
+                    f"three_tank disturbance {name!r} must be within "
                     f"[{lower}, {upper}], got {number}"
                 )
             clean[name] = number
@@ -506,7 +506,7 @@ class RecirculatingCascadeModel(ProcessModelContract):
         if not bool(getattr(ops, "symbolic", False)):
             for value in u:
                 if not math.isfinite(float(value)):
-                    raise ValueError("cascade_recirculating action values must be finite")
+                    raise ValueError("three_tank action values must be finite")
         return [
             ops.min(ops.max(u[i], 0.0), 1.0)
             for i in range(self.action_dim())
@@ -795,7 +795,7 @@ class RecirculatingCascadeModel(ProcessModelContract):
     def ideal_energy_kw(self, x, y_sp, env, act):
         target = [float(value) for value in y_sp]
         if len(target) != 6:
-            raise ValueError("cascade_recirculating setpoint must contain 6 values")
+            raise ValueError("three_tank setpoint must contain 6 values")
         requirements = self.nominal_steady_state(
             tank_1_temperature=target[3],
             levels=target[:3],

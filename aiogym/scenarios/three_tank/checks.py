@@ -12,7 +12,7 @@ from aiogym.core.model import RHO_CP
 from aiogym.core.validation import validate_model_readiness
 
 from .equipment import ThreeTankDesignModel, compile_design_model
-from .spec import load_design_spec
+from .schema import load_design_spec
 
 
 DESIGN_RESULT_SCHEMA_VERSION = "aiogym.design_result.v1"

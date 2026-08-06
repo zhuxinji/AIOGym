@@ -1,4 +1,4 @@
-"""Strict, versioned input contract for three-tank design studies."""
+"""Strict, versioned schemas for three-tank declarations and design studies."""
 from __future__ import annotations
 
 import copy
