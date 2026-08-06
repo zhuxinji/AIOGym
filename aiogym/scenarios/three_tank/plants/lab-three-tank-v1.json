@@ -19,7 +19,7 @@
         0.24,
         20.0
       ],
-      "observation": "state-reference-disturbance",
+      "observation": "controlled-output",
       "reference": [
         0.24,
         0.24,
@@ -65,6 +65,7 @@
         0.3,
         0.3
       ],
+      "nominal_circulation_flow_m3s": 8.333333333333333e-05,
       "overflow_head_floor_m": 1e-09
     },
     "pump": {

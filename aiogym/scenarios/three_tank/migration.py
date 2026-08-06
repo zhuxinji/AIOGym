@@ -42,6 +42,10 @@ def plant_v1_to_v2(
 def design_v1_to_plant_v2(source: Mapping) -> dict:
     raw = copy.deepcopy(dict(source))
     operation = raw["operation"]
+    hydraulics = copy.deepcopy(raw["hydraulics"])
+    hydraulics["nominal_circulation_flow_m3s"] = operation[
+        "circulation_flow_m3s"
+    ]
     condition = {
         "id": "commissioning",
         "initial_state": _interleave(
@@ -63,7 +67,7 @@ def design_v1_to_plant_v2(source: Mapping) -> dict:
         },
         "reference_schedule": {},
         "disturbance_schedule": {},
-        "observation": "state-reference-disturbance",
+        "observation": "controlled-output",
     }
     return {
         "schema_version": "aiogym.plant.v2",
@@ -73,7 +77,7 @@ def design_v1_to_plant_v2(source: Mapping) -> dict:
         "plant": {
             "topology": "recirculating_loop",
             "tanks": raw["tanks"],
-            "hydraulics": raw["hydraulics"],
+            "hydraulics": hydraulics,
             "pump": raw["pump"],
             "heaters": raw["heaters"],
             "safety": {

@@ -7,9 +7,7 @@ from collections.abc import Mapping
 
 from aiogym.core.backends import _NUMERIC_OPS, _casadi_ops
 from aiogym.core.model import RHO_CP
-from aiogym.scenarios.cascade_recirculating.numerical import (
-    RecirculatingCascadeModel,
-)
+from .physics import RecirculatingCascadeModel
 
 from .spec import load_design_spec
 
