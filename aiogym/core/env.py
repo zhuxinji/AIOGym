@@ -206,6 +206,23 @@ class ProcessControlEnv(gym.Env):
 
     def _delegate_info(self, info: Mapping[str, Any] | None) -> dict[str, Any]:
         enriched = dict(info or {})
+        enriched.setdefault("true_state", self.state)
+        enriched.setdefault(
+            "reference",
+            np.asarray(getattr(self._delegate, "y_sp", ()), dtype=np.float32),
+        )
+        enriched.setdefault(
+            "commanded_action",
+            np.asarray(
+                getattr(self._delegate, "last_commanded_act", ()), dtype=np.float32
+            ),
+        )
+        enriched.setdefault(
+            "applied_action",
+            np.asarray(getattr(self._delegate, "last_act", ()), dtype=np.float32),
+        )
+        enriched.setdefault("reward_terms", dict(enriched.get("reward_terms") or {}))
+        enriched.setdefault("constraint_costs", dict(enriched.get("costs") or {}))
         enriched.update(
             {
                 "task_id": self.task.id,
