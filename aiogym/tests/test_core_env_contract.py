@@ -101,8 +101,8 @@ def test_make_env_uses_one_resolver_and_concrete_environment():
         next_observation, reward, terminated, truncated, step_info = env.step(
             np.asarray([0.5], dtype=np.float32)
         )
-        assert np.allclose(next_observation, [0.25])
-        assert reward == pytest.approx(-0.75**2)
+        assert np.allclose(next_observation, [0.19661458])
+        assert reward == pytest.approx(-(1.0 - float(next_observation[0])) ** 2)
         assert not terminated
         assert not truncated
         assert step_info["commanded_action"].tolist() == [0.5]

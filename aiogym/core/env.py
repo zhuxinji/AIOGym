@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import math
 from pathlib import Path
 from typing import Any
 
@@ -63,12 +64,25 @@ class ProcessControlEnv(gym.Env):
         self.task = task
         self.plant = plant
         self.preset = preset
+        builder = getattr(model, "build_env", None)
+        if callable(builder):
+            self._delegate = builder(task=task, preset=preset, plant=plant)
+            self.control_dt = float(self._delegate.control_dt)
+            self.episode_steps = int(self._delegate.episode_steps)
+            self.action_space = self._delegate.action_space
+            self.observation_space = self._delegate.observation_space
+            self._step_index = 0
+            return
+        self._delegate = None
         self.control_dt = float(preset.config.get("control_dt", task.control_dt))
         self.episode_steps = int(preset.config.get("horizon", task.horizon))
         action_low, action_high = _bounds(model.action_schema())
         state_low, state_high = _bounds(model.state_schema())
         initial_output = np.asarray(model.outputs(model.initial_state()), dtype=np.float32)
-        if initial_output.shape == state_low.shape:
+        output_schema = getattr(model, "output_schema", None)
+        if callable(output_schema):
+            observation_low, observation_high = _bounds(output_schema())
+        elif initial_output.shape == state_low.shape:
             observation_low, observation_high = state_low, state_high
         else:
             observation_low = np.full(initial_output.shape, -np.inf, dtype=np.float32)
@@ -82,10 +96,16 @@ class ProcessControlEnv(gym.Env):
 
     @property
     def state(self) -> np.ndarray:
+        if self._delegate is not None:
+            return np.asarray(self._delegate.integ.x, dtype=float).copy()
         return self._state.copy()
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         super().reset(seed=seed)
+        if self._delegate is not None:
+            observation, info = self._delegate.reset(seed=seed, options=options)
+            self._step_index = 0
+            return observation, self._delegate_info(info)
         del options
         sampler = getattr(self.model, "sample_initial_state", None)
         if callable(sampler):
@@ -103,6 +123,17 @@ class ProcessControlEnv(gym.Env):
         )
 
     def step(self, action):
+        if self._delegate is not None:
+            result = self._delegate.step(action)
+            observation, reward, terminated, truncated, info = result
+            self._step_index += 1
+            return (
+                observation,
+                reward,
+                terminated,
+                truncated,
+                self._delegate_info(info),
+            )
         values = np.asarray(action, dtype=np.float32).reshape(-1)
         if values.shape != self.action_space.shape:
             raise ValueError(
@@ -111,12 +142,7 @@ class ProcessControlEnv(gym.Env):
         if not self.action_space.contains(values):
             raise ValueError("policy action must belong to env.action_space")
         previous = self._state.copy()
-        derivative = np.asarray(
-            self.model.dynamics(previous, values, disturbances=None), dtype=float
-        ).reshape(-1)
-        if derivative.shape != previous.shape:
-            raise ValueError("model dynamics shape does not match state shape")
-        self._state = previous + self.control_dt * derivative
+        self._state = self._integrate(previous, values)
         if not np.all(np.isfinite(self._state)):
             raise FloatingPointError("model produced a non-finite state")
         self._step_index += 1
@@ -142,6 +168,54 @@ class ProcessControlEnv(gym.Env):
             constraints=constraints,
         )
         return self._observation(), float(reward), terminated, truncated, info
+
+    def _integrate(self, state: np.ndarray, action: np.ndarray) -> np.ndarray:
+        maximum_step = float(getattr(self.model, "dt_micro", self.control_dt))
+        substeps = max(1, math.ceil(self.control_dt / maximum_step - 1e-12))
+        step = self.control_dt / substeps
+
+        def derivative(values):
+            output = np.asarray(
+                self.model.dynamics(values, action, disturbances=None), dtype=float
+            ).reshape(-1)
+            if output.shape != state.shape:
+                raise ValueError("model dynamics shape does not match state shape")
+            return output
+
+        result = state.copy()
+        for _ in range(substeps):
+            k1 = derivative(result)
+            k2 = derivative(result + 0.5 * step * k1)
+            k3 = derivative(result + 0.5 * step * k2)
+            k4 = derivative(result + step * k3)
+            result = result + (step / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+            clamp = getattr(self.model, "clamp_state", None)
+            if callable(clamp):
+                result = np.asarray(clamp(result), dtype=float)
+        return result
+
+    def close(self) -> None:
+        if self._delegate is not None:
+            self._delegate.close()
+
+    def _delegate_info(self, info: Mapping[str, Any] | None) -> dict[str, Any]:
+        enriched = dict(info or {})
+        enriched.update(
+            {
+                "task_id": self.task.id,
+                "task_hash": self.task.task_hash,
+                "plant_id": self.plant.id,
+                "plant_hash": self.plant.plant_hash,
+                "preset": self.preset.id,
+            }
+        )
+        return enriched
+
+    def __getattr__(self, name: str) -> Any:
+        delegate = self.__dict__.get("_delegate")
+        if delegate is not None:
+            return getattr(delegate, name)
+        raise AttributeError(name)
 
     def _observation(self) -> np.ndarray:
         observation = np.asarray(self.model.outputs(self._state), dtype=np.float32)
