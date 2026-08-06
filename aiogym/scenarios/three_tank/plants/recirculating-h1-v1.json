@@ -1,0 +1,108 @@
+{
+  "conditions": {
+    "commissioning": {
+      "control_dt": 0.5,
+      "disturbance_schedule": {},
+      "disturbances": {
+        "heat_loss_factor": 1.0,
+        "heater_efficiency": 1.0,
+        "pump_flow_factor": 1.0,
+        "t_amb": 20.0
+      },
+      "horizon": 600,
+      "id": "commissioning",
+      "initial_state": [
+        0.18,
+        24.0,
+        0.22,
+        25.5,
+        0.32,
+        26.5
+      ],
+      "observation": "state-reference-disturbance",
+      "reference": [
+        0.24,
+        0.24,
+        0.24,
+        30.0,
+        28.97128161165881,
+        27.654664660905787
+      ],
+      "reference_schedule": {}
+    }
+  },
+  "default_condition": "commissioning",
+  "description": "Built-in recirculating_loop three-tank plant",
+  "id": "recirculating-h1-v1",
+  "plant": {
+    "actuators": [
+      "pump_P101",
+      "valve_V12",
+      "valve_V23",
+      "heater_H1"
+    ],
+    "parameters": {
+      "area": [
+        0.075,
+        0.075,
+        0.075
+      ],
+      "cv_interstage": [
+        0.0005,
+        0.0005
+      ],
+      "cv_overflow": [
+        0.001,
+        0.001
+      ],
+      "gravity_drop": [
+        0.3,
+        0.3
+      ],
+      "h_floor": 0.001,
+      "heater_power": 2000.0,
+      "height_max": [
+        0.4,
+        0.4,
+        0.4
+      ],
+      "high_level_trip": [
+        0.34,
+        0.34,
+        0.34
+      ],
+      "level_sensor_range": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "low_level_trip": [
+        0.08,
+        0.08,
+        0.08
+      ],
+      "overflow_head_floor": 1e-09,
+      "overflow_level": [
+        0.36,
+        0.36
+      ],
+      "pump_flow_max": 0.0004166666666666667,
+      "pump_power_max": 370.0,
+      "pump_shutoff_head": 10.0,
+      "pump_static_head": 1.7,
+      "t_amb": 20.0,
+      "temperature_hard_limit": 100.0,
+      "temperature_trip": 80.0,
+      "ua_loss": [
+        40.0,
+        40.0,
+        60.0
+      ]
+    },
+    "topology": "recirculating_loop"
+  },
+  "references": [],
+  "scenario": "three_tank",
+  "schema_version": "aiogym.plant.v2",
+  "study": {}
+}

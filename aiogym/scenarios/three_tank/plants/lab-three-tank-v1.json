@@ -1,0 +1,148 @@
+{
+  "conditions": {
+    "commissioning": {
+      "control_dt": 1.0,
+      "disturbance_schedule": {},
+      "disturbances": {
+        "heat_loss_factor": 1.0,
+        "heater_efficiency": 1.0,
+        "pump_flow_factor": 1.0,
+        "t_amb": 20.0
+      },
+      "horizon": 3000,
+      "id": "commissioning",
+      "initial_state": [
+        0.24,
+        20.0,
+        0.24,
+        20.0,
+        0.24,
+        20.0
+      ],
+      "observation": "state-reference-disturbance",
+      "reference": [
+        0.24,
+        0.24,
+        0.24,
+        30.0,
+        28.97128161165881,
+        27.654664660905787
+      ],
+      "reference_schedule": {}
+    }
+  },
+  "default_condition": "commissioning",
+  "description": "V2.0-derived example for the parameterised design-study workflow.",
+  "id": "lab-three-tank-v1",
+  "plant": {
+    "heaters": [
+      {
+        "efficiency": 0.9,
+        "power_w": 2000.0,
+        "tank": 1
+      },
+      {
+        "efficiency": 0.9,
+        "power_w": 500.0,
+        "tank": 2
+      },
+      {
+        "efficiency": 0.9,
+        "power_w": 500.0,
+        "tank": 3
+      }
+    ],
+    "hydraulics": {
+      "cv_interstage": [
+        0.0005,
+        0.0005
+      ],
+      "cv_overflow": [
+        0.001,
+        0.001
+      ],
+      "gravity_drop_m": [
+        0.3,
+        0.3
+      ],
+      "overflow_head_floor_m": 1e-09
+    },
+    "pump": {
+      "max_flow_m3s": 0.0004166666666666667,
+      "motor_power_w": 370.0,
+      "shutoff_head_m": 10.0,
+      "static_head_m": 1.7
+    },
+    "safety": {
+      "temperature_hard_limit_degC": 100.0,
+      "temperature_trip_degC": 80.0
+    },
+    "tanks": [
+      {
+        "area_m2": 0.075,
+        "height_m": 0.4,
+        "high_level_trip_m": 0.34,
+        "level_sensor_range_m": 0.5,
+        "low_level_trip_m": 0.08,
+        "overflow_level_m": 0.36,
+        "ua_w_per_k": 40.0
+      },
+      {
+        "area_m2": 0.075,
+        "height_m": 0.4,
+        "high_level_trip_m": 0.34,
+        "level_sensor_range_m": 0.5,
+        "low_level_trip_m": 0.08,
+        "overflow_level_m": 0.36,
+        "ua_w_per_k": 40.0
+      },
+      {
+        "area_m2": 0.075,
+        "height_m": 0.4,
+        "high_level_trip_m": 0.34,
+        "level_sensor_range_m": 0.5,
+        "low_level_trip_m": 0.08,
+        "ua_w_per_k": 60.0
+      }
+    ],
+    "topology": "recirculating_loop"
+  },
+  "references": [
+    {
+      "id": "cascade-retrofit-layout-v2",
+      "note": "Example values remain design-provisional and require installed-equipment calibration.",
+      "type": "design-proposal"
+    }
+  ],
+  "scenario": "three_tank",
+  "schema_version": "aiogym.plant.v2",
+  "study": {
+    "requirements": {
+      "level_tolerance_m": 0.015,
+      "maximum_energy_kwh": 2.5,
+      "maximum_heatup_time_s": 2700.0,
+      "maximum_overshoot_degC": 2.0,
+      "minimum_actuator_margin": 0.04,
+      "robustness_pass_rate": 0.8,
+      "temperature_hard_limit_degC": 100.0,
+      "temperature_tolerance_degC": 0.75,
+      "temperature_trip_degC": 80.0
+    },
+    "uncertainty": {
+      "heat_loss_factor": [
+        1.0,
+        1.5
+      ],
+      "heater_efficiency_factor": [
+        0.8,
+        1.0
+      ],
+      "pump_flow_factor": [
+        0.8,
+        1.0
+      ],
+      "samples": 12,
+      "seed": 20260806
+    }
+  }
+}
