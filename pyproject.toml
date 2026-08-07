@@ -59,11 +59,9 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = ["--strict-config", "--strict-markers"]
 markers = [
-  "core: NumPy and Gymnasium core tests without optional dependencies",
   "rl: Torch and Stable-Baselines3 tests",
   "symbolic: CasADi symbolic-backend tests",
   "e2e: end-to-end pipeline tests",
-  "slow: tests intentionally excluded from fast presubmit jobs",
 ]
 
 [project.scripts]

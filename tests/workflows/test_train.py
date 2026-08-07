@@ -9,6 +9,8 @@ import pytest
 
 pytest.importorskip("stable_baselines3")
 
+pytestmark = pytest.mark.rl
+
 from aiogym.workflows import TrainConfig, evaluate, load_checkpoint, train
 
 

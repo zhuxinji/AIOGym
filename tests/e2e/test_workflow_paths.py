@@ -11,6 +11,8 @@ from aiogym.workflows import DatasetReader, load_checkpoint
 
 pytest.importorskip("stable_baselines3")
 
+pytestmark = [pytest.mark.rl, pytest.mark.e2e]
+
 SMALL_POLICY = {"policy_kwargs": {"net_arch": [8, 8]}}
 PLANT = Path("aiogym/scenarios/three_tank/plants/lab-three-tank-v1.json")
 
