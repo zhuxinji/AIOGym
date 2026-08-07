@@ -43,7 +43,7 @@ def test_cli_design_new_and_validate(tmp_path, capsys):
     assert validated["plant"]["plant_hash"]
 
 
-def test_cli_collects_dataset_v3(tmp_path, capsys):
+def test_cli_collects_dataset_v4(tmp_path, capsys):
     output = tmp_path / "dataset"
     assert (
         main(
@@ -63,7 +63,7 @@ def test_cli_collects_dataset_v3(tmp_path, capsys):
         == 0
     )
     result = json.loads(capsys.readouterr().out)
-    assert result["manifest"]["schema_version"] == "aiogym.dataset.v3"
+    assert result["manifest"]["schema_version"] == "aiogym.dataset.v4"
     assert result["transitions"] == 2
 
 

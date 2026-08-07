@@ -1,4 +1,4 @@
-"""Episode-oriented NumPy Dataset v3 reader and atomic writer."""
+"""Episode-oriented NumPy Dataset v4 reader and atomic writer."""
 from __future__ import annotations
 
 import hashlib
@@ -14,8 +14,8 @@ import numpy as np
 from aiogym.core import file_sha256, stable_hash, write_json
 
 
-DATASET_SCHEMA_VERSION = "aiogym.dataset.v3"
-EPISODE_SCHEMA_VERSION = "aiogym.dataset.episode.v3"
+DATASET_SCHEMA_VERSION = "aiogym.dataset.v4"
+EPISODE_SCHEMA_VERSION = "aiogym.dataset.episode.v4"
 REQUIRED_ARRAYS = (
     "observation",
     "action",
@@ -25,6 +25,10 @@ REQUIRED_ARRAYS = (
     "truncated",
     "step_index",
     "physical_time",
+    "reference",
+    "disturbance",
+    "transition_reference",
+    "transition_disturbance",
 )
 
 
@@ -45,7 +49,7 @@ class DatasetEpisode:
         try:
             return self.arrays[name]
         except KeyError as error:
-            raise KeyError(f"unknown Dataset v3 array {name!r}") from error
+            raise KeyError(f"unknown Dataset v4 array {name!r}") from error
 
 
 class DatasetWriter:
@@ -99,6 +103,7 @@ class DatasetWriter:
             "state_schema": dict(state_schema),
             "observation_schema": dict(observation_schema),
             "action_schema": dict(action_schema),
+            "schedule_semantics": "pre-action-v1",
         }
         collection_hash = stable_hash(identity)
         if self.manifest_path.exists():
@@ -106,11 +111,11 @@ class DatasetWriter:
                 raise FileExistsError(f"dataset already exists: {self.path}")
             self.manifest = _read_manifest(self.manifest_path)
             if self.manifest["collection_hash"] != collection_hash:
-                raise ValueError("resume Dataset v3 identity does not match manifest")
+                raise ValueError("resume Dataset v4 identity does not match manifest")
         else:
             if self.path.exists() and any(self.path.iterdir()):
                 raise FileExistsError(
-                    f"refusing to create Dataset v3 in non-empty directory: {self.path}"
+                    f"refusing to create Dataset v4 in non-empty directory: {self.path}"
                 )
             self.path.mkdir(parents=True, exist_ok=True)
             self.manifest = {
@@ -180,7 +185,7 @@ class DatasetReader:
         if verify_checksums:
             report = self.validate()
             if not report["ok"]:
-                raise ValueError("Dataset v3 integrity failed: " + "; ".join(report["errors"]))
+                raise ValueError("Dataset v4 integrity failed: " + "; ".join(report["errors"]))
 
     def __len__(self):
         return len(self._records)
@@ -267,19 +272,19 @@ def _validated_arrays(arrays):
     normalized = {str(name): np.asarray(value) for name, value in arrays.items()}
     missing = set(REQUIRED_ARRAYS) - set(normalized)
     if missing:
-        raise ValueError(f"Dataset v3 episode arrays missing: {sorted(missing)}")
+        raise ValueError(f"Dataset v4 episode arrays missing: {sorted(missing)}")
     length = int(normalized["reward"].shape[0])
     if length <= 0:
-        raise ValueError("Dataset v3 episodes must contain transitions")
+        raise ValueError("Dataset v4 episodes must contain transitions")
     for name, array in normalized.items():
         if array.shape[0] != length:
-            raise ValueError(f"Dataset v3 array {name!r} has inconsistent length")
+            raise ValueError(f"Dataset v4 array {name!r} has inconsistent length")
         if array.dtype == object:
-            raise TypeError(f"Dataset v3 array {name!r} must not use object dtype")
+            raise TypeError(f"Dataset v4 array {name!r} must not use object dtype")
     if not np.array_equal(normalized["step_index"], np.arange(length)):
-        raise ValueError("Dataset v3 step_index must be contiguous from zero")
+        raise ValueError("Dataset v4 step_index must be contiguous from zero")
     if np.any(np.diff(normalized["physical_time"]) <= 0):
-        raise ValueError("Dataset v3 physical_time must be strictly increasing")
+        raise ValueError("Dataset v4 physical_time must be strictly increasing")
     return normalized
 
 
@@ -305,7 +310,7 @@ def _read_manifest(path):
 
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     if payload.get("schema_version") != DATASET_SCHEMA_VERSION:
-        raise ValueError("unsupported Dataset schema; expected aiogym.dataset.v3")
+        raise ValueError("unsupported Dataset schema; expected aiogym.dataset.v4")
     return payload
 
 

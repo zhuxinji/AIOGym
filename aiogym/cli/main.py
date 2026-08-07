@@ -40,7 +40,7 @@ def build_parser():
             item.add_argument("--plant")
     help_text = {
         "design": "validate plants and run design studies",
-        "collect": "collect an episode-oriented Dataset v3",
+        "collect": "collect an episode-oriented Dataset v4",
         "train": "train one SB3 policy",
         "evaluate": "evaluate one policy on explicit seeds",
     }

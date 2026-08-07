@@ -80,7 +80,7 @@ def migrate(source: Path, output: Path) -> dict:
             "distribution_id": first_metadata.get("distribution_id"),
             "reward_spec_id": first_metadata.get("reward_spec_id"),
             "action_note": (
-                "v3 action reconstructs the environment action from "
+                "v4 action reconstructs the environment action from "
                 "0.5 * (action_policy_normalized + 1); legacy physical action "
                 "arrays are retained separately"
             ),
@@ -100,11 +100,13 @@ def migrate(source: Path, output: Path) -> dict:
             "physical_time": episode["physical_time"],
             "true_state": episode["true_state"],
             "reference": episode["reference"],
+            "transition_reference": episode["reference"],
             "commanded_action": action,
             "applied_action": action,
             "reward_terms": episode["reward_terms"],
             "constraint_costs": episode["cost_channels"],
             "disturbance": episode["measured_disturbance"],
+            "transition_disturbance": episode["measured_disturbance"],
             "legacy_commanded_physical": episode["action_commanded_physical"],
             "legacy_applied_physical": episode["action_applied_physical"],
         }

@@ -1,4 +1,4 @@
-"""Policy-agnostic Dataset v3 collection through core.rollout."""
+"""Policy-agnostic Dataset v4 collection through core.rollout."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -116,7 +116,12 @@ def _episode_arrays(result):
         {name for row in transitions for name in row.info.get("constraint_costs", {})}
     )
     disturbance_names = sorted(
-        {name for row in transitions for name in row.info.get("disturbance", {})}
+        {
+            name
+            for row in transitions
+            for field in ("disturbance", "transition_disturbance")
+            for name in row.info.get(field, {})
+        }
     )
 
     def stack_info(name, fallback):
@@ -139,6 +144,9 @@ def _episode_arrays(result):
             np.float32
         ),
         "reference": stack_info("reference", lambda row: np.empty(0)).astype(np.float32),
+        "transition_reference": stack_info(
+            "transition_reference", lambda row: np.empty(0)
+        ).astype(np.float32),
         "commanded_action": stack_info("commanded_action", lambda row: row.action).astype(
             np.float32
         ),
@@ -165,6 +173,18 @@ def _episode_arrays(result):
         "disturbance": np.asarray(
             [
                 [float(row.info.get("disturbance", {}).get(name, 0.0)) for name in disturbance_names]
+                for row in transitions
+            ],
+            dtype=np.float64,
+        ).reshape(len(transitions), len(disturbance_names)),
+        "transition_disturbance": np.asarray(
+            [
+                [
+                    float(
+                        row.info.get("transition_disturbance", {}).get(name, 0.0)
+                    )
+                    for name in disturbance_names
+                ]
                 for row in transitions
             ],
             dtype=np.float64,

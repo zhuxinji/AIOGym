@@ -32,7 +32,8 @@ def test_three_tank_collect_round_trip_matches_core_rollout(tmp_path):
     reader = DatasetReader(output, verify_checksums=True)
     assert result["episodes"] == len(reader) == 2
     assert result["transitions"] == reader.transition_count == 6
-    assert reader.manifest["schema_version"] == "aiogym.dataset.v3"
+    assert reader.manifest["schema_version"] == "aiogym.dataset.v4"
+    assert reader.manifest["schedule_semantics"] == "pre-action-v1"
     assert reader.manifest["plant_hash"] == plant.plant_hash
     assert "track_id" not in reader.manifest
     assert "distribution_id" not in reader.manifest
@@ -192,7 +193,7 @@ def test_v2_migration_is_one_shot_and_preserves_legacy_metadata(tmp_path):
         }],
     }
     (source / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-    output = tmp_path / "v3"
+    output = tmp_path / "v4"
     report = migrate(source, output)
     assert report["ok"]
     new_reader = DatasetReader(output, verify_checksums=True)
@@ -206,7 +207,7 @@ def test_v2_migration_is_one_shot_and_preserves_legacy_metadata(tmp_path):
     assert new.metadata["legacy_metadata"]["track_id"] == metadata["track_id"]
 
 
-def test_v3_runtime_reader_has_no_v2_compatibility_imports():
+def test_v4_runtime_reader_has_no_v2_compatibility_imports():
     source = (
         Path(__file__).resolve().parents[2] / "aiogym/workflows/dataset.py"
     ).read_text(encoding="utf-8")

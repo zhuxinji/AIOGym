@@ -207,6 +207,7 @@ class ProcessControlEnv(gym.Env):
             **self._disturbance_overrides,
         }
         self._reference_state = np.asarray(self.condition.reference, dtype=float)
+        self._apply_events()
         self._previous_action = np.asarray(self.model.default_action(), dtype=np.float32)
         observation = self._observation()
         return observation, self._info(
@@ -214,10 +215,12 @@ class ProcessControlEnv(gym.Env):
             applied_action=None,
             reward_terms={},
             constraints={},
+            transition_reference=None,
+            transition_disturbance=None,
+            transition_step_index=None,
         )
 
     def step(self, action):
-        self._apply_events()
         values = np.asarray(action, dtype=np.float32).reshape(-1)
         if values.shape != self.action_space.shape:
             raise ValueError(
@@ -225,20 +228,22 @@ class ProcessControlEnv(gym.Env):
             )
         if not self.action_space.contains(values):
             raise ValueError("policy action must belong to env.action_space")
+        transition_reference = self._reference()
+        transition_disturbance = dict(self.disturbances)
+        transition_step_index = self._step_index
         previous = self._state.copy()
         self._state = self._integrate(previous, values)
         if not np.all(np.isfinite(self._state)):
             raise FloatingPointError("model produced a non-finite state")
-        self._step_index += 1
         context = {
-            "reference": self._reference(),
-            "step_index": self._step_index,
-            "physical_time": self._step_index * self.control_dt,
+            "reference": transition_reference.copy(),
+            "step_index": transition_step_index,
+            "physical_time": transition_step_index * self.control_dt,
             "plant": self.plant,
             "condition": self.condition,
             "model": self.model,
             "control_dt": self.control_dt,
-            "disturbances": dict(self.disturbances),
+            "disturbances": dict(transition_disturbance),
         }
         reward_result = self.task.reward(previous, values, self._state, context)
         if isinstance(reward_result, tuple):
@@ -247,12 +252,18 @@ class ProcessControlEnv(gym.Env):
             reward, reward_terms = reward_result, {"reward": float(reward_result)}
         constraints = self._constraints()
         terminated = bool(any(float(value) > 0 for value in constraints.values()))
+        self._step_index += 1
         truncated = self._step_index >= self.episode_steps
+        if not (terminated or truncated):
+            self._apply_events()
         info = self._info(
             commanded_action=values,
             applied_action=values,
             reward_terms=reward_terms,
             constraints=constraints,
+            transition_reference=transition_reference,
+            transition_disturbance=transition_disturbance,
+            transition_step_index=transition_step_index,
         )
         self._previous_action = values.copy()
         return self._observation(), float(reward), terminated, truncated, info
@@ -351,6 +362,9 @@ class ProcessControlEnv(gym.Env):
         applied_action: np.ndarray | None,
         reward_terms: Mapping[str, float],
         constraints: Mapping[str, float],
+        transition_reference: np.ndarray | None,
+        transition_disturbance: Mapping[str, float] | None,
+        transition_step_index: int | None,
     ) -> dict[str, Any]:
         info = {
             "task_id": self.task.id,
@@ -372,6 +386,17 @@ class ProcessControlEnv(gym.Env):
             "reward_terms": dict(reward_terms),
             "constraint_costs": dict(constraints),
             "disturbance": dict(getattr(self, "disturbances", {})),
+            "transition_reference": (
+                None
+                if transition_reference is None
+                else transition_reference.copy()
+            ),
+            "transition_disturbance": (
+                None
+                if transition_disturbance is None
+                else dict(transition_disturbance)
+            ),
+            "transition_step_index": transition_step_index,
         }
         step_info = getattr(self.model, "step_info", None)
         if callable(step_info):
@@ -379,7 +404,11 @@ class ProcessControlEnv(gym.Env):
                 step_info(
                     self._state,
                     applied_action,
-                    dict(getattr(self, "disturbances", {})),
+                    dict(
+                        getattr(self, "disturbances", {})
+                        if transition_disturbance is None
+                        else transition_disturbance
+                    ),
                 )
             )
         return info
