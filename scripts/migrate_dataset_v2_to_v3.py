@@ -49,6 +49,18 @@ def migrate(source: Path, output: Path) -> dict:
         ),
         env_hash=stable_hash({"task_hash": task_hash, "plant_hash": plant_hash}),
         policy={"id": "migrated-v2", "source_schema": "aiogym.dataset.v2"},
+        policy_training_contract=None,
+        target_environment_contract={
+            "task_hash": task_hash,
+            "plant_hash": plant_hash,
+            "condition_hash": stable_hash({"source": "aiogym.dataset.v2"}),
+        },
+        contract_status="unverified",
+        transfer_flags={
+            "is_transfer": False,
+            "plant_changed": False,
+            "condition_changed": False,
+        },
         base_seed=base_seed,
         state_schema={"source": "legacy-v2", "fields": []},
         observation_schema={

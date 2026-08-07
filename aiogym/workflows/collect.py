@@ -6,16 +6,13 @@ from pathlib import Path
 import numpy as np
 
 import aiogym.scenarios  # noqa: F401
-from aiogym.controllers.base import make_controller
 from aiogym.core import (
-    make_env,
     resolve_condition_alias,
-    resolve_legacy_request,
     rollout,
 )
 
+from ._policy_target import resolve_policy_target
 from .dataset import DatasetReader, DatasetWriter
-from .design import load_plant
 
 
 def collect(
@@ -31,19 +28,22 @@ def collect(
     dataset_id: str | None = None,
     resume: bool = False,
     max_steps: int | None = None,
+    allow_plant_transfer: bool = False,
+    allow_condition_transfer: bool = False,
 ):
     count = _positive_int("episodes", episodes)
     base_seed = _nonnegative_int("seed", seed)
-    bound_env = getattr(policy, "env", None) if not isinstance(policy, str) else None
-    created_env = bound_env is None
     condition = resolve_condition_alias(condition, preset)
-    task, plant, condition = resolve_legacy_request(task, plant, condition)
-    env = bound_env or make_env(task, plant=plant, condition=condition)
-    if env.task.id != task:
-        raise ValueError("bound policy environment does not match collection task")
-    if plant is not None and env.plant.plant_hash != load_plant(plant).plant_hash:
-        raise ValueError("bound policy environment does not match collection plant")
-    resolved_policy = make_controller(policy, env=env) if isinstance(policy, str) else policy
+    target = resolve_policy_target(
+        policy,
+        task=task,
+        plant=plant,
+        condition=condition,
+        allow_plant_transfer=allow_plant_transfer,
+        allow_condition_transfer=allow_condition_transfer,
+    )
+    env = target.env
+    resolved_policy = target.policy
     identifier = dataset_id or Path(output).name
     try:
         writer = DatasetWriter(
@@ -58,6 +58,10 @@ def collect(
             interface_hash=env.identity.interface_hash,
             env_hash=env.identity.env_hash,
             policy=resolved_policy.metadata(),
+            policy_training_contract=target.training_contract,
+            target_environment_contract=target.target_contract,
+            contract_status=target.contract_status,
+            transfer_flags=target.transfer_flags,
             base_seed=base_seed,
             state_schema={"fields": list(env.model.state_schema())},
             observation_schema=_space_schema(env.observation_space),
@@ -78,7 +82,7 @@ def collect(
             arrays, metadata = _episode_arrays(result)
             writer.append(index, episode_seed, arrays, metadata=metadata)
     finally:
-        if created_env:
+        if target.created_env:
             env.close()
     reader = DatasetReader(output, verify_checksums=True)
     return {
@@ -93,6 +97,10 @@ def collect(
         "condition_hash": env.condition.condition_hash,
         "interface_hash": env.identity.interface_hash,
         "env_hash": env.identity.env_hash,
+        "policy_training_contract": target.training_contract,
+        "target_environment_contract": dict(target.target_contract),
+        "contract_status": target.contract_status,
+        "transfer_flags": dict(target.transfer_flags),
         "episodes": len(reader),
         "transitions": reader.transition_count,
         "manifest": reader.manifest,

@@ -9,17 +9,13 @@ from typing import Any
 import numpy as np
 
 import aiogym.scenarios  # noqa: F401
-from aiogym.controllers.base import make_controller
 from aiogym.core import (
-    get_task,
-    make_env,
     resolve_condition_alias,
-    resolve_legacy_request,
     rollout,
 )
 
+from ._policy_target import resolve_policy_target
 from .artifacts import write_run_bundle
-from .design import load_plant
 
 
 EVALUATION_SCHEMA_VERSION = "aiogym.evaluation.v1"
@@ -36,49 +32,30 @@ def evaluate(
     output: str | Path | None = None,
     overwrite: bool = False,
     max_steps: int | None = None,
+    allow_plant_transfer: bool = False,
+    allow_condition_transfer: bool = False,
 ) -> dict[str, Any]:
     resolved_seeds = _seeds(seeds)
-    bound_env = getattr(policy, "env", None) if not isinstance(policy, str) else None
-    if task is None:
-        if bound_env is None:
-            raise ValueError("task is required for an unbound policy")
-        task = bound_env.task.id
     condition = resolve_condition_alias(condition, preset)
-    task, plant, condition = resolve_legacy_request(task, plant, condition)
-    task_spec = get_task(task)
-    created_env = bound_env is None
-    env = bound_env or make_env(task, plant=plant, condition=condition)
-    if env.task.id != task:
-        raise ValueError("bound policy environment does not match requested task")
-    if plant is not None and env.plant.plant_hash != load_plant(plant).plant_hash:
-        raise ValueError("bound policy environment does not match requested plant")
-    resolved_policy = make_controller(policy, env=env) if isinstance(policy, str) else policy
+    target = resolve_policy_target(
+        policy,
+        task=task,
+        plant=plant,
+        condition=condition,
+        allow_plant_transfer=allow_plant_transfer,
+        allow_condition_transfer=allow_condition_transfer,
+    )
+    env = target.env
+    resolved_policy = target.policy
+    task_spec = env.task
     policy_metadata = dict(resolved_policy.metadata())
-    training_contract = policy_metadata.get("training_contract")
-    target_contract = env.identity.as_dict()
-    transfer_flags = {}
-    if training_contract is not None:
-        if training_contract.get("task_hash") != target_contract["task_hash"]:
-            raise ValueError("checkpoint task semantics are incompatible with target task")
-        if training_contract.get("interface_hash") != target_contract["interface_hash"]:
-            raise ValueError("checkpoint interface_hash is incompatible with target environment")
-        transfer_flags = {
-            "is_transfer": any(
-                training_contract.get(name) != target_contract[name]
-                for name in ("plant_hash", "condition_hash", "env_hash")
-            ),
-            "plant_changed": training_contract.get("plant_hash")
-            != target_contract["plant_hash"],
-            "condition_changed": training_contract.get("condition_hash")
-            != target_contract["condition_hash"],
-        }
     episodes = []
     try:
         for seed in resolved_seeds:
             episode = rollout(env, resolved_policy, seed=seed, max_steps=max_steps)
             episodes.append(_episode_metrics(env, episode, task_spec.objective))
     finally:
-        if created_env:
+        if target.created_env:
             env.close()
     metric_keys = sorted(
         set.intersection(*(set(row["metrics"]) for row in episodes))
@@ -103,9 +80,10 @@ def evaluate(
         "metric_direction": task_spec.metric_direction,
         "seeds": list(resolved_seeds),
         "policy": policy_metadata,
-        "policy_training_contract": training_contract,
-        "evaluation_environment_contract": target_contract,
-        "transfer_flags": transfer_flags,
+        "policy_training_contract": target.training_contract,
+        "target_environment_contract": target.target_contract,
+        "contract_status": target.contract_status,
+        "transfer_flags": dict(target.transfer_flags),
         "episodes": episodes,
         "aggregate": aggregate,
     }

@@ -63,6 +63,10 @@ class DatasetWriter:
         interface_hash: str,
         env_hash: str,
         policy: Mapping[str, Any],
+        policy_training_contract: Mapping[str, Any] | None,
+        target_environment_contract: Mapping[str, Any],
+        contract_status: str,
+        transfer_flags: Mapping[str, Any],
         base_seed: int,
         state_schema: Mapping[str, Any],
         observation_schema: Mapping[str, Any],
@@ -83,6 +87,14 @@ class DatasetWriter:
             "interface_hash": interface_hash,
             "env_hash": env_hash,
             "policy": dict(policy),
+            "policy_training_contract": (
+                None
+                if policy_training_contract is None
+                else dict(policy_training_contract)
+            ),
+            "target_environment_contract": dict(target_environment_contract),
+            "contract_status": str(contract_status),
+            "transfer_flags": dict(transfer_flags),
             "base_seed": int(base_seed),
             "state_schema": dict(state_schema),
             "observation_schema": dict(observation_schema),

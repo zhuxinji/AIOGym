@@ -159,6 +159,15 @@ def test_checkpoint_interface_rejection_and_condition_transfer_flags():
     changed = base.as_dict(include_hash=False)
     changed["id"] = "transfer-condition"
     changed["reference"] = [*base.reference[:3], 31.0, *base.reference[4:]]
+    with pytest.raises(ValueError, match="allow_condition_transfer"):
+        evaluate(
+            policy,
+            task="three_tank/regulation",
+            plant="recirculating-h1-v1",
+            condition=changed,
+            seeds=(0,),
+            max_steps=1,
+        )
     result = evaluate(
         policy,
         task="three_tank/regulation",
@@ -166,6 +175,7 @@ def test_checkpoint_interface_rejection_and_condition_transfer_flags():
         condition=changed,
         seeds=(0,),
         max_steps=1,
+        allow_condition_transfer=True,
     )
     assert result["transfer_flags"] == {
         "is_transfer": True,

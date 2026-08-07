@@ -13,6 +13,8 @@ def _common(parser):
     parser.add_argument("--plant")
     parser.add_argument("--condition")
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--allow-plant-transfer", action="store_true")
+    parser.add_argument("--allow-condition-transfer", action="store_true")
 
 
 def _parser(command):
@@ -92,6 +94,8 @@ def main(command, argv=None):
                 max_steps=args.max_steps,
                 output=args.output,
                 resume=args.resume,
+                allow_plant_transfer=args.allow_plant_transfer,
+                allow_condition_transfer=args.allow_condition_transfer,
             )
         elif command == "train":
             from aiogym import train
@@ -116,6 +120,8 @@ def main(command, argv=None):
                 max_steps=args.max_steps,
                 output=args.output,
                 overwrite=args.force,
+                allow_plant_transfer=args.allow_plant_transfer,
+                allow_condition_transfer=args.allow_condition_transfer,
             )
     except (FileExistsError, FileNotFoundError, KeyError, TypeError, ValueError) as error:
         parser.error(str(error))
