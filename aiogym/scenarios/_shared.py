@@ -207,12 +207,23 @@ def _condition_mapping(value):
 def economic_reward(state, action, next_state, context):
     del state
     model = context["model"]
-    energy = float(model.action_energy_kw(action, next_state, context["disturbances"]))
-    production = getattr(model, "production", lambda *_: 0.0)(
-        next_state, action, context["disturbances"]
+    config = context["objective_config"]
+    product_value_per_m3 = float(config["product_value_per_m3"])
+    electricity_price_per_kwh = float(config["electricity_price_per_kwh"])
+    control_dt = float(context["control_dt"])
+    power_kw = float(
+        model.action_energy_kw(action, next_state, context["disturbances"])
     )
-    profit = float(production) - energy
-    return profit, {"product_value": float(production), "energy_cost": -energy}
+    product_flow_m3s = float(
+        model.production(next_state, action, context["disturbances"])
+    )
+    product_value = product_value_per_m3 * product_flow_m3s * control_dt
+    energy_cost = electricity_price_per_kwh * power_kw * control_dt / 3600.0
+    reward = product_value - energy_cost
+    return reward, {
+        "product_value": product_value,
+        "energy_cost": -energy_cost,
+    }
 
 
 def build_plugin(

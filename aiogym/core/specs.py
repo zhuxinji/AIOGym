@@ -358,6 +358,7 @@ class TaskSpec:
     metric_suite_id: str = "metrics-v1"
     required_capabilities: tuple[str, ...] = ()
     reward_term_names: tuple[str, ...] = ()
+    objective_config: Mapping[str, Any] = field(default_factory=dict)
     task_hash: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -374,6 +375,7 @@ class TaskSpec:
         object.__setattr__(self, "metrics", tuple(self.metrics))
         object.__setattr__(self, "required_capabilities", tuple(self.required_capabilities))
         object.__setattr__(self, "reward_term_names", tuple(self.reward_term_names))
+        object.__setattr__(self, "objective_config", deep_freeze(self.objective_config))
         object.__setattr__(self, "task_hash", stable_hash(self.identity()))
 
     def identity(self) -> dict[str, Any]:
@@ -388,6 +390,7 @@ class TaskSpec:
             "primary_metric": self.primary_metric,
             "metric_direction": self.metric_direction,
             "required_capabilities": list(self.required_capabilities),
+            "objective_config": deep_thaw(self.objective_config),
         }
 
 

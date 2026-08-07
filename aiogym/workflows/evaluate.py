@@ -18,7 +18,7 @@ from ._policy_target import resolve_policy_target
 from .artifacts import write_run_bundle
 
 
-EVALUATION_SCHEMA_VERSION = "aiogym.evaluation.v1"
+EVALUATION_SCHEMA_VERSION = "aiogym.evaluation.v2"
 
 
 def evaluate(
@@ -108,8 +108,9 @@ def _episode_metrics(env, episode, objective):
         "energy": 0.0,
     }
     errors = []
-    profit = 0.0
-    production = 0.0
+    product_value = 0.0
+    energy_cost = 0.0
+    production_volume = 0.0
     for transition in transitions:
         info = transition.info
         constraints = info.get("constraint_costs", {})
@@ -130,10 +131,10 @@ def _episode_metrics(env, episode, objective):
                 except TypeError:
                     energy_kw = resolver(transition.action, state)
         metrics["energy"] += float(energy_kw or 0.0) * dt / 3600.0
-        profit += float(info.get("profit", transition.reward))
-        production += float(
-            info.get("production", info.get("product_flow_m3s", 0.0))
-        ) * dt
+        reward_terms = info.get("reward_terms", {})
+        product_value += float(reward_terms.get("product_value", 0.0))
+        energy_cost -= float(reward_terms.get("energy_cost", 0.0))
+        production_volume += float(info.get("product_flow_m3s", 0.0)) * dt
         output, reference = _output_reference(env, transition)
         if output is not None and reference is not None:
             scale = _output_scale(env, len(reference))
@@ -141,9 +142,12 @@ def _episode_metrics(env, episode, objective):
     if objective == "economic":
         metrics.update(
             {
-                "economic_objective": profit,
-                "profit": profit,
-                "production": production,
+                "economic_objective": episode.episode_return,
+                "net_economic_value": episode.episode_return,
+                "product_value": product_value,
+                "energy_cost": energy_cost,
+                "production_volume_m3": production_volume,
+                "energy_kwh": metrics["energy"],
             }
         )
     else:

@@ -242,6 +242,8 @@ class ProcessControlEnv(gym.Env):
             "plant": self.plant,
             "condition": self.condition,
             "model": self.model,
+            "task": self.task,
+            "objective_config": self.task.objective_config,
             "control_dt": self.control_dt,
             "disturbances": dict(transition_disturbance),
         }

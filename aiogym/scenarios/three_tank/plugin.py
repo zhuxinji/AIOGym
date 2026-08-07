@@ -13,6 +13,11 @@ from .study import ThreeTankStudyProvider
 
 
 _PLANTS = Path(__file__).with_name("plants")
+_ECONOMIC_OBJECTIVE_CONFIG = {
+    "value_unit": "normalized_value",
+    "product_value_per_m3": 100000.0,
+    "electricity_price_per_kwh": 0.7,
+}
 
 
 def _load_builtin(plant_id: str):
@@ -93,15 +98,25 @@ def _economic_task():
         id="three_tank/economic",
         scenario="three_tank",
         objective="economic",
-        revision=1,
-        reward_id="production-minus-energy-v1",
-        metric_suite_id="economic-core-v1",
+        revision=2,
+        reward_id="net-economic-value-v2",
+        metric_suite_id="economic-core-v2",
         reward=economic_reward,
         reward_term_names=("product_value", "energy_cost"),
-        metrics=("return", "economic_objective", "energy", "constraint_violations"),
+        metrics=(
+            "return",
+            "economic_objective",
+            "net_economic_value",
+            "product_value",
+            "energy_cost",
+            "production_volume_m3",
+            "energy_kwh",
+            "constraint_violations",
+        ),
         primary_metric="economic_objective",
         metric_direction="maximize",
         required_capabilities=("product_flow", "energy"),
+        objective_config=_ECONOMIC_OBJECTIVE_CONFIG,
     )
 
 

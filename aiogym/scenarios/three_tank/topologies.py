@@ -23,13 +23,9 @@ class OpenCascadeTopology(ThreeTankPhysicsKernel):
     default_y_sp = (0.45, 0.45, 0.45, 35.0, 50.0, 65.0)
     plant_regime = {"ua_loss": (0.4, 2.6), "heater_max": (0.6, 1.15), "pump_flow_max": (0.7, 1.3), "cv_out": (0.7, 1.4)}
     economic_config = {
-        "temp_band": [(34, 44), (48, 58), (60, 72)],
-        "level_band": [(0.32, 0.58)] * 3,
-        "value": "production",
-        "w_value": 100000.0,
-        "w_energy": 0.7,
-        "w_viol": 29.0,
-        "w_product_shortfall": 100.0,
+        "value_unit": "normalized_value",
+        "product_value_per_m3": 100000.0,
+        "electricity_price_per_kwh": 0.7,
     }
     supervisory_layout = (("y_sp", 3, 25, 80), ("y_sp", 4, 30, 82), ("y_sp", 5, 35, 85))
     param_units = {"area": "m2", "height_max": "m", "cv_out": "m2.5/s", "ua_loss": "W/K", "heater_max": "W", "pump_flow_max": "m3/s", "pump_power_max": "W", "t_cold": "degC", "t_amb": "degC", "h_floor": "m", "heater_min_level": "m", "temperature_trip": "degC", "temperature_hard_limit": "degC"}
@@ -460,8 +456,6 @@ class OpenCascadeTopology(ThreeTankPhysicsKernel):
             return False
 
     def _economic_product_flow(self, x, u, env, ops):
-        if self.operation["product_flow_sp"] <= 0.0:
-            return 0.0
         context = self._resolved_env(env, ops)
         effective_action = self._effective_action(u, ops)
         levels = [x[0], x[2], x[4]]
