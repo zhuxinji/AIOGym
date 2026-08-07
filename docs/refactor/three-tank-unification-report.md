@@ -72,7 +72,7 @@ removed rather than registered as empty shells.
 
 ## Validation summary
 
-- Source suite: **81 passed**; Ruff and `git diff --check` passed.
+- Source suite: **82 passed**; Ruff and `git diff --check` passed.
 - PID/MPC smoke: both controllers produced correctly shaped actions and one
   finite, non-terminal transition on all three plants.
 - Workflow E2E: design study passed for both supported topologies; Dataset v3

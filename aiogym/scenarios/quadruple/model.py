@@ -1,10 +1,12 @@
+"""Environment adapter for the fixed-topology quadruple physics model."""
+
 from aiogym.scenarios._shared import NumericProcessModel
 
-from .numerical import QuadrupleModel as _NumericalModel
+from .physics import QuadruplePhysicsModel
 
 
 class QuadrupleModel(NumericProcessModel):
-    numerical_type = _NumericalModel
+    numerical_type = QuadruplePhysicsModel
 
 
 __all__ = ["QuadrupleModel"]

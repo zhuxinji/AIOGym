@@ -37,6 +37,12 @@ Within `three_tank`, all topology models inherit one
 `ThreeTankPhysicsKernel`. Plant JSON files select equipment and topology; they
 do not select independent copies of the environment or balance equations.
 
+Scenario modules use `model.py` for the environment-facing adapter or compiler
+and `physics.py` for physical equations. A fixed-topology scenario such as
+`quadruple` has one `QuadruplePhysicsModel`; `three_tank` additionally needs
+topology and equipment modules because one adapter compiles multiple plant
+interfaces.
+
 ## State, observation, action, reward, and metric
 
 These channels remain separate:

@@ -7,7 +7,7 @@ from aiogym.core.backends import _maxv
 from aiogym.core.model import ProcessModelContract
 
 
-class QuadrupleModel(ProcessModelContract):
+class QuadruplePhysicsModel(ProcessModelContract):
     """Four liquid levels driven by two split pump flows.
 
     Internal units follow Johansson (2000): level in cm, area in cm², flow in
@@ -403,3 +403,6 @@ class QuadrupleModel(ProcessModelContract):
                 ),
             },
         ]
+
+
+__all__ = ["QuadruplePhysicsModel"]

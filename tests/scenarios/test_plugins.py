@@ -6,6 +6,8 @@ import pytest
 
 import aiogym.scenarios  # noqa: F401
 from aiogym.core import get_task, list_scenarios, list_tasks, make_env
+from aiogym.scenarios.quadruple.model import QuadrupleModel
+from aiogym.scenarios.quadruple.physics import QuadruplePhysicsModel
 
 
 def test_open_cascade_tasks_share_plant_with_distinct_objectives():
@@ -35,6 +37,10 @@ def test_only_quadruple_and_three_tank_are_registered():
         "three_tank/economic",
     }
     assert get_task("three_tank/economic").primary_metric == "economic_objective"
+
+
+def test_quadruple_model_is_a_thin_adapter_over_its_physics_model():
+    assert QuadrupleModel.numerical_type is QuadruplePhysicsModel
 
 
 @pytest.mark.parametrize(
