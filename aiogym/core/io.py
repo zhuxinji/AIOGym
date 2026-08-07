@@ -9,12 +9,37 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import numpy as np
 
 
 JSONValue = None | bool | int | float | str | list["JSONValue"] | dict[str, "JSONValue"]
+
+
+def deep_freeze(value: Any) -> Any:
+    """Defensively copy a strict-JSON value into recursively immutable containers."""
+
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {key: deep_freeze(item) for key, item in value.items()}
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(deep_freeze(item) for item in value)
+    # Reuse the canonical serializer's scalar validation, including finite floats.
+    jsonable(value)
+    return value
+
+
+def deep_thaw(value: Any) -> Any:
+    """Return a fully independent mutable strict-JSON representation."""
+
+    if isinstance(value, Mapping):
+        return {key: deep_thaw(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [deep_thaw(item) for item in value]
+    return value
 
 
 def jsonable(value: Any) -> JSONValue:
@@ -112,6 +137,8 @@ def _atomic_write(target: Path, payload: bytes, *, overwrite: bool) -> Path:
 __all__ = [
     "JSONValue",
     "canonical_json_bytes",
+    "deep_freeze",
+    "deep_thaw",
     "file_sha256",
     "jsonable",
     "stable_hash",

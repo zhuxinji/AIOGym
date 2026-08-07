@@ -8,7 +8,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal
 
-from .io import stable_hash
+from .io import deep_freeze, deep_thaw, stable_hash
 
 
 PLANT_SCHEMA_VERSION = "aiogym.plant.v2"
@@ -21,6 +21,10 @@ RewardFunction = Callable[
 
 def _mapping(value: Mapping[str, Any] | None) -> Mapping[str, Any]:
     return MappingProxyType(dict(value or {}))
+
+
+def _deep_mapping(value: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    return deep_freeze(value or {})
 
 
 @dataclass(frozen=True)
@@ -48,7 +52,7 @@ class PlantConfig:
             raise ValueError("plant id must be a non-empty string")
         if not isinstance(self.scenario, str) or not self.scenario.strip():
             raise ValueError("plant scenario must be a non-empty string")
-        object.__setattr__(self, "plant", _mapping(self.plant))
+        object.__setattr__(self, "plant", _deep_mapping(self.plant))
         conditions = {
             str(name): (
                 value
@@ -60,12 +64,12 @@ class PlantConfig:
         if self.default_condition and self.default_condition not in conditions:
             raise ValueError("default_condition must be declared in conditions")
         object.__setattr__(self, "conditions", MappingProxyType(conditions))
-        object.__setattr__(self, "study", _mapping(self.study))
-        object.__setattr__(self, "references", tuple(self.references))
+        object.__setattr__(self, "study", _deep_mapping(self.study))
+        object.__setattr__(self, "references", deep_freeze(self.references))
         object.__setattr__(
             self,
             "plant_hash",
-            stable_hash({"scenario": self.scenario, "plant": dict(self.plant)}),
+            stable_hash({"scenario": self.scenario, "plant": self.plant}),
         )
         object.__setattr__(
             self,
@@ -74,7 +78,7 @@ class PlantConfig:
                 {name: condition.condition_hash for name, condition in conditions.items()}
             ),
         )
-        object.__setattr__(self, "study_hash", stable_hash(dict(self.study)))
+        object.__setattr__(self, "study_hash", stable_hash(self.study))
         object.__setattr__(
             self, "config_hash", stable_hash(self.as_dict(include_hash=False))
         )
@@ -116,6 +120,29 @@ class PlantConfig:
         declared = value.get("plant_hash")
         if declared is not None and str(declared) != config.plant_hash:
             raise ValueError("declared plant_hash does not match resolved PlantConfig")
+        declared_condition_hashes = value.get("condition_hashes")
+        if declared_condition_hashes is not None:
+            if not isinstance(declared_condition_hashes, Mapping):
+                raise ValueError("declared condition_hashes must be a mapping")
+            declared_hashes = {
+                str(name): str(hash_value)
+                for name, hash_value in declared_condition_hashes.items()
+            }
+            expected_hashes = dict(config.condition_hashes)
+            if declared_hashes.keys() != expected_hashes.keys():
+                raise ValueError(
+                    "declared condition_hashes keys do not match resolved PlantConfig"
+                )
+            mismatched = [
+                name
+                for name, expected in expected_hashes.items()
+                if declared_hashes[name] != expected
+            ]
+            if mismatched:
+                raise ValueError(
+                    "declared condition_hashes do not match resolved PlantConfig: "
+                    + ", ".join(sorted(mismatched))
+                )
         for field_name in ("study_hash", "config_hash"):
             declared_hash = value.get(field_name)
             if declared_hash is not None and str(declared_hash) != getattr(
@@ -132,14 +159,14 @@ class PlantConfig:
             "id": self.id,
             "scenario": self.scenario,
             "description": self.description,
-            "plant": dict(self.plant),
+            "plant": deep_thaw(self.plant),
             "conditions": {
                 name: condition.as_dict(include_hash=False)
                 for name, condition in sorted(self.conditions.items())
             },
             "default_condition": self.default_condition,
-            "study": dict(self.study),
-            "references": list(self.references),
+            "study": deep_thaw(self.study),
+            "references": deep_thaw(self.references),
         }
         if include_hash:
             payload["plant_hash"] = self.plant_hash
@@ -192,19 +219,14 @@ class OperatingCondition:
         object.__setattr__(self, "reference", reference)
         object.__setattr__(self, "control_dt", control_dt)
         object.__setattr__(self, "horizon", int(self.horizon))
-        object.__setattr__(self, "disturbances", MappingProxyType(disturbances))
+        object.__setattr__(self, "disturbances", deep_freeze(disturbances))
         object.__setattr__(
-            self, "reference_schedule", MappingProxyType(reference_schedule)
+            self, "reference_schedule", deep_freeze(reference_schedule)
         )
         object.__setattr__(
             self,
             "disturbance_schedule",
-            MappingProxyType(
-                {
-                    step: MappingProxyType(values)
-                    for step, values in disturbance_schedule.items()
-                }
-            ),
+            deep_freeze(disturbance_schedule),
         )
         object.__setattr__(
             self, "condition_hash", stable_hash(self.as_dict(include_hash=False))
@@ -260,13 +282,13 @@ class OperatingCondition:
             "reference": list(self.reference),
             "control_dt": self.control_dt,
             "horizon": self.horizon,
-            "disturbances": dict(self.disturbances),
+            "disturbances": deep_thaw(self.disturbances),
             "reference_schedule": {
                 str(step): list(values)
                 for step, values in sorted(self.reference_schedule.items())
             },
             "disturbance_schedule": {
-                str(step): dict(values)
+                str(step): deep_thaw(values)
                 for step, values in sorted(self.disturbance_schedule.items())
             },
             "observation": self.observation,
@@ -306,8 +328,8 @@ class ResolvedPlant:
     provenance: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "parameters", _mapping(self.parameters))
-        object.__setattr__(self, "provenance", _mapping(self.provenance))
+        object.__setattr__(self, "parameters", _deep_mapping(self.parameters))
+        object.__setattr__(self, "provenance", _deep_mapping(self.provenance))
 
     @property
     def id(self) -> str:
