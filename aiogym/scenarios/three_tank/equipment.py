@@ -7,12 +7,12 @@ from collections.abc import Mapping
 
 from aiogym.core.backends import _NUMERIC_OPS, _casadi_ops
 from aiogym.core.model import RHO_CP
-from .physics import RecirculatingCascadeModel
+from .physics import RecirculatingTopology
 
 from .schema import load_design_spec
 
 
-class ThreeTankDesignModel(RecirculatingCascadeModel):
+class ThreeTankDesignModel(RecirculatingTopology):
     """Three-tank recirculating design with stable H1/H2/H3 actuator slots."""
 
     scenario = "three_tank"
@@ -319,23 +319,16 @@ class ThreeTankDesignModel(RecirculatingCascadeModel):
             + overflow_1 * (temperatures[0] - temperatures[2])
             + overflow_2 * (temperatures[1] - temperatures[2]),
         ]
-        dx = []
-        for index in range(3):
-            area = self.p["area"][index]
-            volume = area * ops.max(levels[index], self.p["h_floor"])
-            heat_loss = (
-                self.p["ua_loss"][index]
-                * env["heat_loss_factor"]
-                * (temperatures[index] - env["t_amb"])
-            )
-            dx.extend(
-                (
-                    (flows_in[index] - flows_out[index]) / area,
-                    mixing_terms[index] / volume
-                    + (heat_inputs[index] - heat_loss) / (RHO_CP * volume),
-                )
-            )
-        return ops.vector(dx)
+        return self._assemble_dynamics(
+            levels,
+            temperatures,
+            flows_in,
+            flows_out,
+            mixing_terms,
+            heat_inputs,
+            env,
+            ops,
+        )
 
     def balance_residuals(self, x, u, env=None):
         state = self.state_vector(x)

@@ -14,6 +14,30 @@ controlled-output order `level_1, level_2, level_3, temperature_1,
 temperature_2, temperature_3`. The action schema is compiled from installed
 actuators; there are no dummy action slots.
 
+## Physical implementation boundary
+
+The built-in plants are declarations, not separate model copies. Their runtime
+inheritance is:
+
+```text
+ThreeTankPhysicsKernel
+├── OpenCascadeTopology          -> open-cascade-v1
+└── RecirculatingTopology        -> recirculating-h1-v1
+    └── ThreeTankDesignModel     -> lab-three-tank-v1
+```
+
+`ThreeTankPhysicsKernel` owns the common six-state split, state/output bounds,
+action validation and clipping, disturbance-vector handling, controlled and
+display outputs, integral limits, MPC initialization, and three-tank mass and
+energy derivative assembly. A topology supplies its flow connections, mixing
+terms, installed heaters, interlocks, and topology-specific reporting. The lab
+model changes the equipment and heater layout while reusing the recirculating
+flow topology and the common balance assembly.
+
+The remaining modules are not per-plant dynamics: `controllers.py` stores
+plant-aware controller profiles; `schema.py`, `checks.py`, and `study.py` own
+engineering design validation; and `migration.py` reads the previous schema.
+
 ```python
 import aiogym
 

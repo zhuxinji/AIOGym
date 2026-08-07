@@ -53,6 +53,15 @@ default and controller actions, and five fixed-action steps including state,
 observation, reward, energy, constraints, and protection events. The three
 interfaces also produced distinct `interface_hash` values.
 
+The follow-up physical-layer cleanup on 2026-08-07 introduced one
+`ThreeTankPhysicsKernel`. `OpenCascadeTopology` and `RecirculatingTopology`
+inherit it directly, while `ThreeTankDesignModel` extends the recirculating
+topology. State/output handling, runtime-input validation, action clipping,
+disturbance vectors, MPC initialization, and mass/energy derivative assembly
+are therefore shared rather than copied per plant. The topology classes retain
+only their connection flows, installed actuators, interlocks, steady-state
+inverses, energy models, and topology-specific reporting.
+
 ## Removed empty condition names
 
 Only conditions with executable definitions were migrated. The unimplemented
@@ -63,7 +72,7 @@ removed rather than registered as empty shells.
 
 ## Validation summary
 
-- Source suite: **80 passed**; Ruff and `git diff --check` passed.
+- Source suite: **81 passed**; Ruff and `git diff --check` passed.
 - PID/MPC smoke: both controllers produced correctly shaped actions and one
   finite, non-terminal transition on all three plants.
 - Workflow E2E: design study passed for both supported topologies; Dataset v3

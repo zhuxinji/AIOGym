@@ -12,7 +12,149 @@ from aiogym.core.backends import _NUMERIC_OPS, _casadi_ops, _maxv
 from aiogym.core.model import RHO_CP, ProcessModelContract
 
 
-class RecirculatingCascadeModel(ProcessModelContract):
+class ThreeTankPhysicsKernel(ProcessModelContract):
+    """Topology-neutral state, I/O, validation, and balance assembly.
+
+    A topology supplies flow connections, mixing terms, and heat inputs. This
+    kernel owns the common six-state ordering and converts those terms into
+    the three mass and energy balance pairs.
+    """
+
+    n = 3
+    dt_micro = 0.02
+    energy_scored = True
+
+    @staticmethod
+    def _levels_temperatures(x):
+        return [x[0], x[2], x[4]], [x[1], x[3], x[5]]
+
+    def _tank_parameter(self, name, index):
+        value = self.p[name]
+        if isinstance(value, (tuple, list)):
+            return value[index]
+        return value
+
+    @property
+    def state_bounds(self):
+        temperature_max = float(self.p["temperature_hard_limit"])
+        bounds = {}
+        for index, name in enumerate(self.state_names[0::2]):
+            bounds[name] = (0.0, self.height_max[index])
+        for name in self.state_names[1::2]:
+            bounds[name] = (0.0, temperature_max)
+        return bounds
+
+    @property
+    def output_bounds(self):
+        temperature_max = float(self.p["temperature_hard_limit"])
+        bounds = {}
+        for index, name in enumerate(self.output_names[:3]):
+            bounds[name] = (0.0, self.height_max[index])
+        for name in self.output_names[3:]:
+            bounds[name] = (0.0, temperature_max)
+        return bounds
+
+    def controlled_output(self, x, backend="numeric", ca=None):
+        del backend, ca
+        levels, temperatures = self._levels_temperatures(x)
+        return [*levels, *temperatures]
+
+    def display_outputs(self, x, backend="numeric", ca=None):
+        del ca
+        levels, temperatures = self._levels_temperatures(x)
+        if backend != "casadi":
+            levels = [_maxv(value, 0.0) for value in levels]
+        return {"levels": levels, "temps": temperatures}
+
+    def integral_observation_limits(self):
+        return [8.0, 8.0, 8.0, 300.0, 300.0, 300.0]
+
+    def mpc_init(self):
+        return self.default_action()
+
+    def _resolved_env(self, env=None, ops=None):
+        values = dict(env or {})
+        resolved = {}
+        for row in self.input_disturbances:
+            name = row["name"]
+            default = row.get("default", self.p.get(name, 0.0))
+            resolved[name] = values.get(name, default)
+        if bool(getattr(ops, "symbolic", False)):
+            return resolved
+
+        clean = {}
+        for name, value in resolved.items():
+            try:
+                number = float(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"three_tank disturbance {name!r} must be finite"
+                ) from exc
+            if not math.isfinite(number):
+                raise ValueError(
+                    f"three_tank disturbance {name!r} must be finite"
+                )
+            lower, upper = self._environment_bounds[name]
+            if lower is not None and number < float(lower):
+                raise ValueError(
+                    f"three_tank disturbance {name!r} must be within "
+                    f"[{lower}, {upper}], got {number}"
+                )
+            if upper is not None and number > float(upper):
+                raise ValueError(
+                    f"three_tank disturbance {name!r} must be within "
+                    f"[{lower}, {upper}], got {number}"
+                )
+            clean[name] = number
+        return clean
+
+    def runtime_env(self, disturbance_values):
+        return self._resolved_env(super().runtime_env(disturbance_values))
+
+    def disturbance_vector(self, values=None):
+        return super().disturbance_vector(self.runtime_env(values or {}))
+
+    def _effective_action(self, u, ops):
+        if not bool(getattr(ops, "symbolic", False)):
+            for value in u:
+                if not math.isfinite(float(value)):
+                    raise ValueError("three_tank action values must be finite")
+        return [
+            ops.min(ops.max(u[index], 0.0), 1.0)
+            for index in range(self.action_dim())
+        ]
+
+    def _assemble_dynamics(
+        self,
+        levels,
+        temperatures,
+        flows_in,
+        flows_out,
+        mixing_terms,
+        heat_inputs,
+        env,
+        ops,
+    ):
+        derivatives = []
+        for index in range(self.n):
+            area = self._tank_parameter("area", index)
+            volume = area * ops.max(levels[index], self.p["h_floor"])
+            heat_loss = (
+                self._tank_parameter("ua_loss", index)
+                * env["heat_loss_factor"]
+                * (temperatures[index] - env["t_amb"])
+            )
+            derivatives.extend(
+                (
+                    (flows_in[index] - flows_out[index]) / area,
+                    mixing_terms[index] / volume
+                    + (heat_inputs[index] - heat_loss) / (RHO_CP * volume),
+                )
+            )
+        return ops.vector(derivatives)
+
+
+class RecirculatingTopology(ThreeTankPhysicsKernel):
     scenario = "three_tank"
     display_name = "Recirculating heated-tank cascade"
     summary = (
@@ -21,9 +163,6 @@ class RecirculatingCascadeModel(ProcessModelContract):
     )
     supported_goals = ("regulation",)
     benchmark_goals = supported_goals
-    n = 3
-    dt_micro = 0.02
-
     state_names = ("h1", "T1", "h2", "T2", "h3", "T3")
     state_units = {
         "h1": "m", "h2": "m", "h3": "m",
@@ -169,28 +308,6 @@ class RecirculatingCascadeModel(ProcessModelContract):
     @property
     def height_max(self):
         return [float(value) for value in self.p["height_max"]]
-
-    @property
-    def state_bounds(self):
-        hmax = self.height_max
-        tmax = float(self.p["temperature_hard_limit"])
-        return {
-            "h1": (0.0, hmax[0]), "h2": (0.0, hmax[1]), "h3": (0.0, hmax[2]),
-            "T1": (0.0, tmax), "T2": (0.0, tmax), "T3": (0.0, tmax),
-        }
-
-    @property
-    def output_bounds(self):
-        hmax = self.height_max
-        tmax = float(self.p["temperature_hard_limit"])
-        return {
-            "tank_1_level": (0.0, hmax[0]),
-            "tank_2_level": (0.0, hmax[1]),
-            "tank_3_level": (0.0, hmax[2]),
-            "tank_1_temperature": (0.0, tmax),
-            "tank_2_temperature": (0.0, tmax),
-            "tank_3_temperature": (0.0, tmax),
-        }
 
     @property
     def setpoint_bounds(self):
@@ -361,9 +478,6 @@ class RecirculatingCascadeModel(ProcessModelContract):
             )
         return list(self.nominal_steady_state()["action"])
 
-    def mpc_init(self):
-        return self.default_action()
-
     def default_setpoint_vector(self):
         return list(self.nominal_steady_state()["y_sp"])
 
@@ -378,18 +492,6 @@ class RecirculatingCascadeModel(ProcessModelContract):
         ):
             return list(nominal["action"])
         return None
-
-    def controlled_output(self, x, backend="numeric", ca=None):
-        return [x[0], x[2], x[4], x[1], x[3], x[5]]
-
-    def integral_observation_limits(self):
-        return [8.0, 8.0, 8.0, 300.0, 300.0, 300.0]
-
-    def display_outputs(self, x, backend="numeric", ca=None):
-        levels = [x[0], x[2], x[4]]
-        if backend != "casadi":
-            levels = [_maxv(value, 0.0) for value in levels]
-        return {"levels": levels, "temps": [x[1], x[3], x[5]]}
 
     def physical_io_schema(self):
         """Return the V2.0 field-instrument and actuator contract."""
@@ -464,53 +566,6 @@ class RecirculatingCascadeModel(ProcessModelContract):
         metadata = super().metadata()
         metadata["physical_io"] = self.physical_io_schema()
         return metadata
-
-    def _resolved_env(self, env=None, ops=None):
-        values = dict(env or {})
-        resolved = {
-            "t_amb": values.get("t_amb", self.p["t_amb"]),
-            "pump_flow_factor": values.get("pump_flow_factor", 1.0),
-            "heater_efficiency": values.get("heater_efficiency", 1.0),
-            "heat_loss_factor": values.get("heat_loss_factor", 1.0),
-        }
-        if bool(getattr(ops, "symbolic", False)):
-            return resolved
-        clean = {}
-        for name, value in resolved.items():
-            try:
-                number = float(value)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"three_tank disturbance {name!r} must be finite"
-                ) from exc
-            if not math.isfinite(number):
-                raise ValueError(
-                    f"three_tank disturbance {name!r} must be finite"
-                )
-            lower, upper = self._environment_bounds[name]
-            if number < lower or number > upper:
-                raise ValueError(
-                    f"three_tank disturbance {name!r} must be within "
-                    f"[{lower}, {upper}], got {number}"
-                )
-            clean[name] = number
-        return clean
-
-    def runtime_env(self, disturbance_values):
-        return self._resolved_env(disturbance_values)
-
-    def disturbance_vector(self, values=None):
-        return super().disturbance_vector(self.runtime_env(values or {}))
-
-    def _effective_action(self, u, ops):
-        if not bool(getattr(ops, "symbolic", False)):
-            for value in u:
-                if not math.isfinite(float(value)):
-                    raise ValueError("three_tank action values must be finite")
-        return [
-            ops.min(ops.max(u[i], 0.0), 1.0)
-            for i in range(self.action_dim())
-        ]
 
     @staticmethod
     def _gate(condition, ops):
@@ -614,21 +669,16 @@ class RecirculatingCascadeModel(ProcessModelContract):
         ]
         heat_inputs = [heat_h1, 0.0, 0.0]
 
-        dx = []
-        for i in range(3):
-            area = self.p["area"][i]
-            volume = area * ops.max(levels[i], self.p["h_floor"])
-            heat_loss = (
-                self.p["ua_loss"][i]
-                * env["heat_loss_factor"]
-                * (temperatures[i] - env["t_amb"])
-            )
-            dx.extend((
-                (flows_in[i] - flows_out[i]) / area,
-                mixing_terms[i] / volume
-                + (heat_inputs[i] - heat_loss) / (RHO_CP * volume),
-            ))
-        return ops.vector(dx)
+        return self._assemble_dynamics(
+            levels,
+            temperatures,
+            flows_in,
+            flows_out,
+            mixing_terms,
+            heat_inputs,
+            env,
+            ops,
+        )
 
     def balance_residuals(self, x, u, env=None):
         """Independently reconstruct numeric mass and energy residuals.
@@ -948,8 +998,4 @@ class RecirculatingCascadeModel(ProcessModelContract):
         return super().sample_disturbance(event, current, rng)
 
 
-# Public topology name used by the unified compiler. The implementation owns
-# the shared recirculating mass/energy balance used by the laboratory subclass.
-RecirculatingTopology = RecirculatingCascadeModel
-
-__all__ = ["RecirculatingTopology"]
+__all__ = ["RecirculatingTopology", "ThreeTankPhysicsKernel"]

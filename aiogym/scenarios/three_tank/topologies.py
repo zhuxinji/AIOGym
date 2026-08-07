@@ -1,15 +1,15 @@
 import math
 
-from aiogym.core.backends import _NUMERIC_OPS, _casadi_ops, _maxv
-from aiogym.core.model import RHO_CP, ProcessModelContract
+from aiogym.core.backends import _NUMERIC_OPS, _casadi_ops
+from aiogym.core.model import RHO_CP
+
+from .physics import ThreeTankPhysicsKernel
 
 
-class CascadeModel(ProcessModelContract):
+class OpenCascadeTopology(ThreeTankPhysicsKernel):
     scenario = "three_tank"
     display_name = "Heated-tank cascade"
     summary = "Three interlinked heated tanks with level and temperature dynamics."
-    n = 3
-    dt_micro = 0.02
     state_names = ("h0", "T0", "h1", "T1", "h2", "T2")
     state_units = {"h0": "m", "h1": "m", "h2": "m", "T0": "degC", "T1": "degC", "T2": "degC"}
     action_names = ("feed_pump", "outlet_valve_0", "outlet_valve_1", "outlet_valve_2", "heater_0", "heater_1", "heater_2")
@@ -34,7 +34,7 @@ class CascadeModel(ProcessModelContract):
     supervisory_layout = (("y_sp", 3, 25, 80), ("y_sp", 4, 30, 82), ("y_sp", 5, 35, 85))
     param_units = {"area": "m2", "height_max": "m", "cv_out": "m2.5/s", "ua_loss": "W/K", "heater_max": "W", "pump_flow_max": "m3/s", "pump_power_max": "W", "t_cold": "degC", "t_amb": "degC", "h_floor": "m", "heater_min_level": "m", "temperature_trip": "degC", "temperature_hard_limit": "degC"}
     param_bounds = {"area": (0.01, 2.0), "height_max": (0.1, 5.0), "cv_out": (0.0, 0.02), "ua_loss": (0.0, 1000.0), "heater_max": (0.0, 500000.0), "pump_flow_max": (0.0, 0.02), "pump_power_max": (0.0, 10000.0), "t_cold": (0.0, 40.0), "t_amb": (0.0, 45.0), "h_floor": (1e-6, 0.1), "heater_min_level": (0.0, 0.8), "temperature_trip": (40.0, 120.0), "temperature_hard_limit": (92.0, 150.0)}
-    input_disturbances = ProcessModelContract.input_disturbances + (
+    input_disturbances = ThreeTankPhysicsKernel.input_disturbances + (
         {"name": "pump_flow_factor", "event": "pump_capacity_shift", "unit": "fraction", "bounds": (0.4, 1.4), "default": 1.0, "description": "feed-pump flow capacity multiplier"},
         {"name": "heater_efficiency", "event": "heater_efficiency_shift", "unit": "fraction", "bounds": (0.4, 1.0), "default": 1.0, "description": "fraction of heater electrical power transferred to the liquid"},
         {"name": "heat_loss_factor", "event": "heat_loss_shift", "unit": "fraction", "bounds": (0.3, 3.0), "default": 1.0, "description": "ambient heat-loss multiplier"},
@@ -96,32 +96,6 @@ class CascadeModel(ProcessModelContract):
         return [float(self.p["height_max"])] * 3
 
     @property
-    def state_bounds(self):
-        height_max = float(self.p["height_max"])
-        temperature_max = float(self.p["temperature_hard_limit"])
-        return {
-            "h0": (0.0, height_max),
-            "h1": (0.0, height_max),
-            "h2": (0.0, height_max),
-            "T0": (0.0, temperature_max),
-            "T1": (0.0, temperature_max),
-            "T2": (0.0, temperature_max),
-        }
-
-    @property
-    def output_bounds(self):
-        height_max = float(self.p["height_max"])
-        temperature_max = float(self.p["temperature_hard_limit"])
-        return {
-            "tank_0_level": (0.0, height_max),
-            "tank_1_level": (0.0, height_max),
-            "tank_2_level": (0.0, height_max),
-            "tank_0_temperature": (0.0, temperature_max),
-            "tank_1_temperature": (0.0, temperature_max),
-            "tank_2_temperature": (0.0, temperature_max),
-        }
-
-    @property
     def setpoint_bounds(self):
         height_max = float(self.p["height_max"])
         return {
@@ -157,75 +131,6 @@ class CascadeModel(ProcessModelContract):
                 "bounds": (None, float(self.p["temperature_hard_limit"])),
             },
         )
-
-    def pump_flow_factor(self, env=None):
-        env = env or {}
-        return env.get("pump_flow_factor", 1.0)
-
-    def heater_efficiency(self, env=None):
-        env = env or {}
-        return env.get("heater_efficiency", 1.0)
-
-    def heat_loss_factor(self, env=None):
-        env = env or {}
-        return env.get("heat_loss_factor", 1.0)
-
-    def _resolved_env(self, env=None, ops=None):
-        """Resolve and validate the six runtime inputs used by the dynamics.
-
-        CasADi builds the prediction graph with symbolic disturbance values, so
-        symbolic values cannot be checked for finiteness while the graph is
-        being constructed. Numeric values are validated here and also pass
-        through ``runtime_env``/``disturbance_vector`` before controller or
-        environment use.
-        """
-
-        values = dict(env or {})
-        resolved = {
-            "t_cold": values.get("t_cold", self.p["t_cold"]),
-            "t_amb": values.get("t_amb", self.p["t_amb"]),
-            "extra_outflow": values.get("extra_outflow", 0.0),
-            "pump_flow_factor": values.get("pump_flow_factor", 1.0),
-            "heater_efficiency": values.get("heater_efficiency", 1.0),
-            "heat_loss_factor": values.get("heat_loss_factor", 1.0),
-        }
-        if bool(getattr(ops, "symbolic", False)):
-            return resolved
-
-        clean = {}
-        for name, value in resolved.items():
-            try:
-                number = float(value)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"cascade disturbance {name!r} must be a finite number") from exc
-            if not math.isfinite(number):
-                raise ValueError(f"cascade disturbance {name!r} must be a finite number")
-            lower, upper = self._environment_bounds[name]
-            if lower is not None and number < float(lower):
-                raise ValueError(
-                    f"cascade disturbance {name!r} must be within [{lower}, {upper}], got {number}"
-                )
-            if upper is not None and number > float(upper):
-                raise ValueError(
-                    f"cascade disturbance {name!r} must be within [{lower}, {upper}], got {number}"
-                )
-            clean[name] = number
-        return clean
-
-    def runtime_env(self, disturbance_values):
-        return self._resolved_env(super().runtime_env(disturbance_values))
-
-    def disturbance_vector(self, values=None):
-        return super().disturbance_vector(self.runtime_env(values or {}))
-
-    def _effective_action(self, u, ops):
-        """Return plant-side bounded commands for numeric and CasADi dynamics."""
-
-        if not bool(getattr(ops, "symbolic", False)):
-            for value in u:
-                if not math.isfinite(float(value)):
-                    raise ValueError("cascade action values must be finite")
-        return [ops.min(ops.max(u[i], 0.0), 1.0) for i in range(self.action_dim())]
 
     @staticmethod
     def _hard_gate(condition, ops):
@@ -350,43 +255,39 @@ class CascadeModel(ProcessModelContract):
         return tuple(reasons)
 
     def _dynamics(self, x, u, env, ops):
-        p = self.p
         env = self._resolved_env(env, ops)
         u = self._effective_action(u, ops)
-        t_cold, t_amb = env["t_cold"], env["t_amb"]
-        heat_loss_factor = env.get("heat_loss_factor", 1.0)
-        h = [x[0], x[2], x[4]]
-        T = [x[1], x[3], x[5]]
-        qp, valve_flows, _, total_outflows = self._flow_terms(h, u, env, ops)
-        pheat, _, _, _, _ = self._heater_terms(h, T, u, env, ops)
-        dx = []
-        for i in range(3):
-            qin = qp if i == 0 else valve_flows[i - 1]
-            tin = t_cold if i == 0 else T[i - 1]
-            vol = p["area"] * ops.max(h[i], p["h_floor"])
-            qloss = p["ua_loss"] * heat_loss_factor * (T[i] - t_amb)
-            dx += [
-                (qin - total_outflows[i]) / p["area"],
-                qin * (tin - T[i]) / vol + (pheat[i] - qloss) / (RHO_CP * vol),
-            ]
-        return ops.vector(dx)
-
-    def display_outputs(self, x, backend="numeric", ca=None):
-        if backend == "casadi":
-            return {"levels": [x[0], x[2], x[4]], "temps": [x[1], x[3], x[5]]}
-        return {"levels": [_maxv(x[0], 0.0), _maxv(x[2], 0.0), _maxv(x[4], 0.0)], "temps": [x[1], x[3], x[5]]}
+        levels, temperatures = self._levels_temperatures(x)
+        pump_flow, valve_flows, _, flows_out = self._flow_terms(
+            levels, u, env, ops
+        )
+        heat_inputs, _, _, _, _ = self._heater_terms(
+            levels, temperatures, u, env, ops
+        )
+        flows_in = [pump_flow, valve_flows[0], valve_flows[1]]
+        inlet_temperatures = [
+            env["t_cold"],
+            temperatures[0],
+            temperatures[1],
+        ]
+        mixing_terms = [
+            flows_in[index]
+            * (inlet_temperatures[index] - temperatures[index])
+            for index in range(self.n)
+        ]
+        return self._assemble_dynamics(
+            levels,
+            temperatures,
+            flows_in,
+            flows_out,
+            mixing_terms,
+            heat_inputs,
+            env,
+            ops,
+        )
 
     def initial_state(self):
         return [0.30, 20.0, 0.30, 20.0, 0.30, 20.0]
-
-    def controlled_output(self, x, backend="numeric", ca=None):
-        # Control, KPI, and constraint consumers receive the same raw physical
-        # state for every backend.  Any cosmetic clipping belongs exclusively
-        # to ``display_outputs``.
-        return [x[0], x[2], x[4], x[1], x[3], x[5]]
-
-    def integral_observation_limits(self):
-        return [8.0, 8.0, 8.0, 300.0, 300.0, 300.0]
 
     # ---- KPI support ----
     energy_scored = True
@@ -542,9 +443,6 @@ class CascadeModel(ProcessModelContract):
             return list(requirements["action"])
         return super().default_action()
 
-    def mpc_init(self):
-        return self.default_action()
-
     def tracking_steady_state_action(self, y_sp):
         """Return the nominal steady input for a feasible tracking target."""
 
@@ -615,9 +513,5 @@ class CascadeModel(ProcessModelContract):
             )["ideal_energy_kw"]
         )
 
-
-# Public topology name used by the unified compiler. ``CascadeModel`` remains
-# temporarily importable only for the Phase-0 compatibility bridge.
-OpenCascadeTopology = CascadeModel
 
 __all__ = ["OpenCascadeTopology"]

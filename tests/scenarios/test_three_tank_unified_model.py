@@ -8,7 +8,13 @@ import pytest
 
 from aiogym.core import PlantConfig, ProcessControlEnv, ResolvedPlant, TaskSpec
 from aiogym.scenarios._shared import regulation_reward
+from aiogym.scenarios.three_tank.equipment import ThreeTankDesignModel
 from aiogym.scenarios.three_tank.model import ThreeTankModel
+from aiogym.scenarios.three_tank.physics import (
+    RecirculatingTopology,
+    ThreeTankPhysicsKernel,
+)
+from aiogym.scenarios.three_tank.topologies import OpenCascadeTopology
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -83,3 +89,24 @@ def test_unified_model_uses_two_topologies_and_variable_action_schemas():
             ]
         finally:
             env.close()
+
+
+def test_topologies_share_one_physics_kernel_without_per_plant_model_copies():
+    assert issubclass(OpenCascadeTopology, ThreeTankPhysicsKernel)
+    assert issubclass(RecirculatingTopology, ThreeTankPhysicsKernel)
+    assert issubclass(ThreeTankDesignModel, RecirculatingTopology)
+    shared_methods = {
+        "_assemble_dynamics",
+        "_effective_action",
+        "controlled_output",
+        "display_outputs",
+        "disturbance_vector",
+        "integral_observation_limits",
+        "mpc_init",
+    }
+    for topology in (
+        OpenCascadeTopology,
+        RecirculatingTopology,
+        ThreeTankDesignModel,
+    ):
+        assert shared_methods.isdisjoint(topology.__dict__)
