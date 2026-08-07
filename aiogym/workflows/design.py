@@ -14,6 +14,7 @@ from aiogym.controllers.base import make_controller
 from aiogym.core import (
     CheckResult,
     PlantConfig,
+    StudyContext,
     get_scenario,
     make_env,
     rollout,
@@ -69,40 +70,46 @@ def study(
 ) -> dict[str, Any]:
     plant = load_plant(source)
     plugin = get_scenario(plant.scenario)
-    resolved = plugin.resolve_plant(plant)
     provider = plugin.study_provider
     if provider is None:
         raise ValueError(f"scenario {plant.scenario!r} does not provide design studies")
-    checks = list(provider.checks(resolved))
-    default_samples, default_seed = provider.default_robustness(resolved)
-    sample_count = _nonnegative_int(
-        "robustness_samples",
-        default_samples if robustness_samples is None else robustness_samples,
-    )
-    resolved_seed = _nonnegative_int("seed", default_seed if seed is None else seed)
     identity_env = make_env(
         f"{plant.scenario}/regulation", plant=plant, condition=condition
     )
-    identity = identity_env.identity
-    identity_env.close()
-    dynamic = _dynamic_check(
-        plant,
-        provider,
-        condition=condition,
-        controller=controller,
-        disturbances={},
-    )
-    checks.append(dynamic)
-    robustness = _robustness_check(
-        plant,
-        resolved,
-        provider,
-        condition=condition,
-        controller=controller,
-        samples=sample_count,
-        seed=resolved_seed,
-    )
-    checks.append(robustness)
+    try:
+        context = StudyContext(
+            plant=identity_env.plant,
+            condition=identity_env.condition,
+            model=identity_env.model,
+        )
+        identity = identity_env.identity
+        checks = list(provider.checks(context))
+        default_samples, default_seed = provider.default_robustness(context)
+        sample_count = _nonnegative_int(
+            "robustness_samples",
+            default_samples if robustness_samples is None else robustness_samples,
+        )
+        resolved_seed = _nonnegative_int(
+            "seed", default_seed if seed is None else seed
+        )
+        dynamic = _dynamic_check(
+            context,
+            provider,
+            controller=controller,
+            disturbances={},
+        )
+        checks.append(dynamic)
+        robustness = _robustness_check(
+            context,
+            provider,
+            controller=controller,
+            samples=sample_count,
+            seed=resolved_seed,
+        )
+        checks.append(robustness)
+        study_inputs = provider.dynamic_requirements(context)
+    finally:
+        identity_env.close()
     passed = all(check.passed for check in checks)
     result = {
         "schema_version": STUDY_SCHEMA_VERSION,
@@ -126,6 +133,10 @@ def study(
             "Installed equipment and protection settings require field commissioning.",
         ],
         "plant_config": plant.as_dict(),
+        "study_context": {
+            "operation": dict(study_inputs["operation"]),
+            "requirements": dict(study_inputs["requirements"]),
+        },
         "checks": [_check_dict(check) for check in checks],
         "dynamic": dict(dynamic.metrics),
         "robustness": dict(robustness.metrics),
@@ -146,6 +157,8 @@ def sweep(
     *,
     parameter: str,
     values: Sequence[float],
+    condition=None,
+    controller="pid",
     robustness_samples: int | None = None,
     seed: int | None = None,
     output: str | Path | None = None,
@@ -165,6 +178,8 @@ def sweep(
         candidate["id"] = f"{base['id']}-{_slug(parameter)}-{index + 1}"
         result = study(
             candidate,
+            condition=condition,
+            controller=controller,
             robustness_samples=robustness_samples,
             seed=seed,
         )
@@ -196,15 +211,14 @@ def sweep(
     return result
 
 
-def _dynamic_check(
-    plant, provider, *, condition, controller, disturbances
-):
+def _dynamic_check(context, provider, *, controller, disturbances):
+    plant = context.plant.config
     env = make_env(
-        f"{plant.scenario}/regulation", plant=plant, condition=condition
+        f"{plant.scenario}/regulation", plant=plant, condition=context.condition
     )
     env.set_disturbances(disturbances)
     policy = make_controller(controller, env=env)
-    requirements = provider.dynamic_requirements(env.plant)
+    requirements = provider.dynamic_requirements(context)
     limits = requirements["requirements"]
     try:
         episode = rollout(env, policy, seed=0)
@@ -237,7 +251,7 @@ def _dynamic_check(
             env.model.action_energy_kw(
                 transition.action,
                 transition.info["true_state"],
-                disturbances,
+                transition.info["disturbance"],
             )
             * env.control_dt
             / 3600.0
@@ -249,11 +263,14 @@ def _dynamic_check(
         ) and np.all(np.abs(temperatures - target_temperatures) <= tolerance_t):
             heatup_time = transition.physical_time
     final = np.asarray(episode.transitions[-1].info["y"], dtype=float)
+    effective_disturbance = dict(episode.transitions[0].info["disturbance"])
     final_level_error = float(np.max(np.abs(final[:3] - target_levels)))
     final_temperature_error = float(
         np.max(np.abs(final[3:6] - target_temperatures))
     )
     reasons = []
+    if not limits["assessment_horizon_sufficient"]:
+        reasons.append("insufficient_assessment_horizon")
     if hard_reasons:
         reasons.append("hard process limit reached: " + ", ".join(sorted(hard_reasons)))
     if heatup_time is None or heatup_time > limits["maximum_heatup_time_s"]:
@@ -271,6 +288,8 @@ def _dynamic_check(
         "rollout_executor": "aiogym.core.rollout",
         "steps": len(episode.transitions),
         "duration_s": len(episode.transitions) * env.control_dt,
+        "available_duration_s": limits["available_duration_s"],
+        "maximum_heatup_time_s": limits["maximum_heatup_time_s"],
         "heatup_time_s": heatup_time,
         "energy_kwh": energy_kwh,
         "maximum_temperature_overshoot_degC": maximum_overshoot,
@@ -282,7 +301,11 @@ def _dynamic_check(
         "final_level_error_m": final_level_error,
         "hard_termination_reasons": sorted(hard_reasons),
         "protection_events": sorted(protection_events),
-        "disturbance": dict(disturbances),
+        "disturbance": effective_disturbance,
+        "condition_id": context.condition.id,
+        "condition_hash": context.condition.condition_hash,
+        "reference": list(context.condition.reference),
+        "initial_state": list(context.condition.initial_state),
     }
     return CheckResult(
         name="dynamic_commissioning",
@@ -293,18 +316,15 @@ def _dynamic_check(
     )
 
 
-def _robustness_check(
-    plant, resolved, provider, *, condition, controller, samples, seed
-):
+def _robustness_check(context, provider, *, controller, samples, seed):
     rng = np.random.default_rng(seed)
     cases = []
     for index in range(samples):
-        disturbances = provider.sample_disturbances(resolved, rng)
-        steady = provider.steady_check(resolved, disturbances)
+        disturbances = provider.sample_disturbances(context, rng)
+        steady = provider.steady_check(context, disturbances)
         dynamic = _dynamic_check(
-            plant,
+            context,
             provider,
-            condition=condition,
             controller=controller,
             disturbances=disturbances,
         )
@@ -314,6 +334,7 @@ def _robustness_check(
                 "sample": index,
                 "passed": passed,
                 "disturbance": disturbances,
+                "condition_hash": context.condition.condition_hash,
                 "steady": _check_dict(steady),
                 "dynamic": dict(dynamic.metrics),
             }
@@ -321,7 +342,9 @@ def _robustness_check(
     pass_count = sum(case["passed"] for case in cases)
     pass_rate = 1.0 if samples == 0 else pass_count / samples
     required = float(
-        plant.study.get("requirements", {}).get("robustness_pass_rate", 0.0)
+        context.plant.config.study.get("requirements", {}).get(
+            "robustness_pass_rate", 0.0
+        )
     )
     passed = pass_rate >= required
     metrics = {

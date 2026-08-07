@@ -7,7 +7,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 
-from .specs import PlantConfig, ResolvedPlant, TaskSpec
+from .specs import OperatingCondition, PlantConfig, ResolvedPlant, TaskSpec
 
 
 @runtime_checkable
@@ -47,7 +47,30 @@ class Policy(Protocol):
 
 @runtime_checkable
 class StudyProvider(Protocol):
-    def checks(self, plant: ResolvedPlant) -> Sequence[Any]: ...
+    def checks(self, context: "StudyContext") -> Sequence[Any]: ...
+
+    def dynamic_requirements(self, context: "StudyContext") -> Mapping[str, Any]: ...
+
+    def steady_check(
+        self,
+        context: "StudyContext",
+        disturbances: Mapping[str, float],
+    ) -> Any: ...
+
+    def default_robustness(self, context: "StudyContext") -> tuple[int, int]: ...
+
+    def sample_disturbances(
+        self,
+        context: "StudyContext",
+        rng: np.random.Generator,
+    ) -> dict[str, float]: ...
+
+
+@dataclass(frozen=True)
+class StudyContext:
+    plant: ResolvedPlant
+    condition: OperatingCondition
+    model: ProcessModel
 
 
 @dataclass(frozen=True)
@@ -74,4 +97,10 @@ class ScenarioPlugin:
                 raise ValueError("scenario task keys must match TaskSpec.objective")
 
 
-__all__ = ["Policy", "ProcessModel", "ScenarioPlugin", "StudyProvider"]
+__all__ = [
+    "Policy",
+    "ProcessModel",
+    "ScenarioPlugin",
+    "StudyContext",
+    "StudyProvider",
+]

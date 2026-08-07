@@ -126,6 +126,9 @@ class ProcessControlEnv(gym.Env):
         condition: OperatingCondition,
     ) -> None:
         super().__init__()
+        bind_condition = getattr(model, "bind_condition", None)
+        if callable(bind_condition):
+            bind_condition(condition)
         self.model = model
         self.task = task
         self.plant = plant

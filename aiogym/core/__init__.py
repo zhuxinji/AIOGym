@@ -1,5 +1,5 @@
 """Scenario-oriented AIO-Gym core with no optional dependency imports."""
-from .contracts import Policy, ProcessModel, ScenarioPlugin, StudyProvider
+from .contracts import Policy, ProcessModel, ScenarioPlugin, StudyContext, StudyProvider
 from .compat import (
     LEGACY_TASK_ALIASES,
     resolve_condition_alias,
@@ -49,6 +49,7 @@ __all__ = [
     "RolloutResult",
     "RunResult",
     "ScenarioPlugin",
+    "StudyContext",
     "StudyProvider",
     "TaskSpec",
     "Transition",

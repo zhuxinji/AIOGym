@@ -21,6 +21,7 @@ def _parser(prog):
     run = commands.add_parser("run", help="run the scenario design study")
     run.add_argument("plant", type=Path)
     run.add_argument("--condition")
+    run.add_argument("--controller", default="pid")
     run.add_argument("--output", type=Path)
     run.add_argument("--samples", type=int)
     run.add_argument("--seed", type=int)
@@ -29,6 +30,8 @@ def _parser(prog):
     scan.add_argument("plant", type=Path)
     scan.add_argument("--parameter", required=True)
     scan.add_argument("--values", nargs="+", required=True, type=float)
+    scan.add_argument("--condition")
+    scan.add_argument("--controller", default="pid")
     scan.add_argument("--output", type=Path)
     scan.add_argument("--samples", type=int)
     scan.add_argument("--seed", type=int)
@@ -63,6 +66,7 @@ def main(argv=None, *, prog="aiogym design"):
             result = study(
                 args.plant,
                 condition=args.condition,
+                controller=args.controller,
                 robustness_samples=args.samples,
                 seed=args.seed,
                 output=args.output,
@@ -73,6 +77,8 @@ def main(argv=None, *, prog="aiogym design"):
                 load_plant(args.plant),
                 parameter=args.parameter,
                 values=args.values,
+                condition=args.condition,
+                controller=args.controller,
                 robustness_samples=args.samples,
                 seed=args.seed,
                 output=args.output,

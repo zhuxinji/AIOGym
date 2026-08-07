@@ -5,7 +5,7 @@ import math
 
 from aiogym.core.backends import _NUMERIC_OPS, _casadi_ops
 from aiogym.core.model import RHO_CP
-from aiogym.core.specs import ResolvedPlant
+from aiogym.core.specs import OperatingCondition, ResolvedPlant
 
 from .topologies import RecirculatingTopology
 
@@ -44,7 +44,6 @@ class ThreeTankDesignModel(RecirculatingTopology):
         declaration = plant.config.plant
         if declaration.get("topology") != "recirculating_loop":
             raise ValueError("laboratory equipment requires recirculating_loop topology")
-        condition = plant.config.conditions[plant.config.default_condition]
         self.plant = plant
         self.plant_id = plant.id
         self.plant_hash = plant.plant_hash
@@ -53,16 +52,9 @@ class ThreeTankDesignModel(RecirculatingTopology):
         hydraulics = dict(declaration["hydraulics"])
         requirements = dict(plant.config.study.get("requirements", {}))
         requirements.update(dict(declaration.get("safety", {})))
-        self.operation = {
-            "circulation_flow_m3s": hydraulics["nominal_circulation_flow_m3s"],
-            "target_levels_m": list(condition.reference[:3]),
-            "target_temperatures_degC": list(condition.reference[3:]),
-            "initial_levels_m": list(condition.initial_state[0::2]),
-            "initial_temperatures_degC": list(condition.initial_state[1::2]),
-            "ambient_temperature_degC": condition.disturbances.get("t_amb", 20.0),
-            "control_dt_s": condition.control_dt,
-            "duration_s": condition.control_dt * condition.horizon,
-        }
+        self._circulation_flow_m3s = float(
+            hydraulics["nominal_circulation_flow_m3s"]
+        )
         self.requirements = requirements
         self.uncertainty = dict(plant.config.study.get("uncertainty", {}))
         self.references = list(plant.config.references)
@@ -95,34 +87,82 @@ class ThreeTankDesignModel(RecirculatingTopology):
                 "gravity_drop": list(hydraulics["gravity_drop_m"]),
                 "cv_overflow": list(hydraulics["cv_overflow"]),
                 "overflow_head_floor": hydraulics["overflow_head_floor_m"],
-                "t_amb": self.operation["ambient_temperature_degC"],
+                "t_amb": 20.0,
                 "temperature_trip": requirements["temperature_trip_degC"],
                 "temperature_hard_limit": requirements[
                     "temperature_hard_limit_degC"
                 ],
             }
         )
-        self._initial_state = _interleave(
-            self.operation["initial_levels_m"],
-            self.operation["initial_temperatures_degC"],
-        )
-        self._target_levels = list(self.operation["target_levels_m"])
-        self._target_temperatures = list(self.operation["target_temperatures_degC"])
+        # These neutral values are replaced by bind_condition() before an
+        # environment is exposed. Construction itself compiles only equipment.
+        self.operation = {
+            "circulation_flow_m3s": self._circulation_flow_m3s,
+            "target_levels_m": [0.1, 0.1, 0.1],
+            "target_temperatures_degC": [20.0, 20.0, 20.0],
+            "initial_levels_m": [0.1, 0.1, 0.1],
+            "initial_temperatures_degC": [20.0, 20.0, 20.0],
+            "ambient_temperature_degC": 20.0,
+            "control_dt_s": 1.0,
+            "duration_s": 1.0,
+        }
+        self._bound_condition = None
+        self._apply_operation(self.operation)
 
     def __deepcopy__(self, memo):
         del memo
-        return type(self)(self.plant)
+        copied = type(self)(self.plant)
+        if self._bound_condition is not None:
+            copied.bind_condition(self._bound_condition)
+        return copied
 
-    @property
-    def study_context(self):
-        """Engineering inputs derived directly from the resolved v2 plant."""
+    def study_context(self, condition: OperatingCondition):
+        """Build engineering inputs from one explicitly resolved condition."""
+
+        available_duration = float(condition.control_dt * condition.horizon)
+        requirements = dict(self.requirements)
+        maximum_heatup = float(
+            requirements.get("maximum_heatup_time_s", available_duration)
+        )
+        requirements["maximum_heatup_time_s"] = maximum_heatup
+        requirements["available_duration_s"] = available_duration
+        requirements["assessment_horizon_sufficient"] = (
+            maximum_heatup <= available_duration
+        )
+        operation = {
+            "circulation_flow_m3s": self._circulation_flow_m3s,
+            "target_levels_m": list(condition.reference[:3]),
+            "target_temperatures_degC": list(condition.reference[3:]),
+            "initial_levels_m": list(condition.initial_state[0::2]),
+            "initial_temperatures_degC": list(condition.initial_state[1::2]),
+            "ambient_temperature_degC": float(
+                condition.disturbances.get("t_amb", self.p["t_amb"])
+            ),
+            "control_dt_s": float(condition.control_dt),
+            "duration_s": available_duration,
+        }
 
         return {
-            "operation": dict(self.operation),
-            "requirements": dict(self.requirements),
+            "operation": operation,
+            "requirements": requirements,
             "uncertainty": dict(self.uncertainty),
             "references": list(self.references),
         }
+
+    def bind_condition(self, condition: OperatingCondition):
+        context = self.study_context(condition)
+        self._bound_condition = condition
+        self.operation = dict(context["operation"])
+        self.p["t_amb"] = self.operation["ambient_temperature_degC"]
+        self._apply_operation(self.operation)
+
+    def _apply_operation(self, operation):
+        self._initial_state = _interleave(
+            operation["initial_levels_m"],
+            operation["initial_temperatures_degC"],
+        )
+        self._target_levels = list(operation["target_levels_m"])
+        self._target_temperatures = list(operation["target_temperatures_degC"])
 
     @property
     def safety_constraints(self):

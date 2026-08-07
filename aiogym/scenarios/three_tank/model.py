@@ -59,6 +59,11 @@ class ThreeTankModel:
     def initial_state(self):
         return self._model.initial_state()
 
+    def bind_condition(self, condition):
+        binder = getattr(self._model, "bind_condition", None)
+        if callable(binder):
+            binder(condition)
+
     def sample_initial_state(self, rng, condition):
         del rng
         config = _condition_mapping(condition)

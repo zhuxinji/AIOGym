@@ -115,11 +115,18 @@ def _static_assessment(model: ThreeTankDesignModel, context: Mapping) -> dict:
         "installed_electric_heater_power_w": sum(model.p["heater_power"]),
         "installed_liquid_heat_capacity_w": installed_heat,
         "theoretical_heatup_lower_bound_s": theoretical_heatup,
+        "operation": dict(operation),
+        "requirements": dict(requirements),
     }
 
 
-def _steady_state_assessment(model, context, *, env=None):
-    equilibrium = model.nominal_steady_state(env=env)
+def _steady_state_assessment(model, context, *, reference, env=None):
+    target = [float(value) for value in reference]
+    equilibrium = model.nominal_steady_state(
+        levels=target[:3],
+        target_temperatures=target[3:],
+        env=env,
+    )
     requirements = context["requirements"]
     active_indices = [0, 1, 2] + [
         3 + index for index, installed in enumerate(model.heater_mask) if installed
@@ -166,6 +173,7 @@ def _steady_state_assessment(model, context, *, env=None):
         ],
         "maximum_derivative_residual": max_derivative,
         "environment": model._resolved_env(env),
+        "reference": target,
     }
 
 
