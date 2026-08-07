@@ -12,7 +12,7 @@ from aiogym.workflows import DatasetReader, load_checkpoint
 pytest.importorskip("stable_baselines3")
 
 SMALL_POLICY = {"policy_kwargs": {"net_arch": [8, 8]}}
-PLANT = Path("aiogym/scenarios/three_tank/default-design-v1.json")
+PLANT = Path("aiogym/scenarios/three_tank/plants/lab-three-tank-v1.json")
 
 
 def _sac_smoke(tmp_path, *, task, condition, plant=None):

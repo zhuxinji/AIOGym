@@ -35,8 +35,11 @@ model changes the equipment and heater layout while reusing the recirculating
 flow topology and the common balance assembly.
 
 The remaining modules are not per-plant dynamics: `controllers.py` stores
-plant-aware controller profiles; `schema.py`, `checks.py`, and `study.py` own
-engineering design validation; and `migration.py` reads the previous schema.
+plant-aware controller profiles; `equipment.py` compiles the laboratory
+equipment declaration; `checks.py` contains engineering assessments; and
+`study.py` adapts those assessments to the generic study workflow. All four
+consume the resolved PlantConfig v2 contract; there is no parallel design
+schema or migration layer.
 
 ```python
 import aiogym

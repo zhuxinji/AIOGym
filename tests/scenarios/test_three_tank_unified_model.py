@@ -10,11 +10,11 @@ from aiogym.core import PlantConfig, ProcessControlEnv, ResolvedPlant, TaskSpec
 from aiogym.scenarios._shared import regulation_reward
 from aiogym.scenarios.three_tank.equipment import ThreeTankDesignModel
 from aiogym.scenarios.three_tank.model import ThreeTankModel
-from aiogym.scenarios.three_tank.physics import (
+from aiogym.scenarios.three_tank.physics import ThreeTankPhysicsKernel
+from aiogym.scenarios.three_tank.topologies import (
+    OpenCascadeTopology,
     RecirculatingTopology,
-    ThreeTankPhysicsKernel,
 )
-from aiogym.scenarios.three_tank.topologies import OpenCascadeTopology
 
 
 ROOT = Path(__file__).resolve().parents[2]

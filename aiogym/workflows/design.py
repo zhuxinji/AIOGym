@@ -48,22 +48,7 @@ def load_plant(source: PlantConfig | str | Path | Mapping[str, Any]) -> PlantCon
                     f"unknown or ambiguous built-in plant {str(source)!r}"
                 )
             raw = matches[0]
-    if raw.get("schema_version") == "aiogym.design_spec.v1":
-        raw = convert_design_spec_v1(raw)
     return PlantConfig.from_mapping(raw)
-
-
-def convert_design_spec_v1(source: str | Path | Mapping[str, Any]) -> dict[str, Any]:
-    if isinstance(source, Mapping):
-        raw = copy.deepcopy(dict(source))
-    else:
-        raw = json.loads(Path(source).read_text(encoding="utf-8"))
-    raw.pop("design_hash", None)
-    if raw.get("schema_version") != "aiogym.design_spec.v1":
-        raise ValueError("source is not an aiogym.design_spec.v1 declaration")
-    from aiogym.scenarios.three_tank.migration import design_v1_to_plant_v2
-
-    return design_v1_to_plant_v2(raw)
 
 
 def validate_plant(source):
@@ -435,7 +420,6 @@ def _nonnegative_int(name, value):
 __all__ = [
     "STUDY_SCHEMA_VERSION",
     "SWEEP_SCHEMA_VERSION",
-    "convert_design_spec_v1",
     "load_plant",
     "render_study_report",
     "study",

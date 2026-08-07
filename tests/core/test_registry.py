@@ -75,9 +75,18 @@ def test_registry_is_the_single_scenario_and_task_index():
 
 
 def test_plant_hash_and_atomic_json_are_canonical(tmp_path):
+    with pytest.raises(ValueError, match="unsupported PlantConfig schema_version"):
+        PlantConfig.from_mapping(
+            {
+                "schema_version": "aiogym.plant.v1",
+                "id": "plant-a",
+                "scenario": "registry-toy",
+                "plant": {"b": 2, "a": 1},
+            }
+        )
     first = PlantConfig.from_mapping(
         {
-            "schema_version": "aiogym.plant.v1",
+            "schema_version": "aiogym.plant.v2",
             "id": "plant-a",
             "scenario": "registry-toy",
             "plant": {"b": 2, "a": 1},

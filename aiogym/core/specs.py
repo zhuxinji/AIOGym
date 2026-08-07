@@ -31,8 +31,6 @@ class PlantConfig:
     description: str = ""
     conditions: Mapping[str, Any] = field(default_factory=dict)
     default_condition: str = ""
-    # Transitional input for the v0.2 reader. New declarations use conditions.
-    operating_point: Mapping[str, Any] = field(default_factory=dict)
     study: Mapping[str, Any] = field(default_factory=dict)
     references: tuple[Any, ...] = ()
     schema_version: str = PLANT_SCHEMA_VERSION
@@ -62,7 +60,6 @@ class PlantConfig:
         if self.default_condition and self.default_condition not in conditions:
             raise ValueError("default_condition must be declared in conditions")
         object.__setattr__(self, "conditions", MappingProxyType(conditions))
-        object.__setattr__(self, "operating_point", _mapping(self.operating_point))
         object.__setattr__(self, "study", _mapping(self.study))
         object.__setattr__(self, "references", tuple(self.references))
         object.__setattr__(
@@ -92,7 +89,6 @@ class PlantConfig:
             "plant",
             "conditions",
             "default_condition",
-            "operating_point",
             "study",
             "references",
             "plant_hash",
@@ -104,7 +100,7 @@ class PlantConfig:
         if unknown:
             raise ValueError(f"unknown PlantConfig fields: {sorted(unknown)}")
         schema = str(value.get("schema_version", PLANT_SCHEMA_VERSION))
-        if schema not in {"aiogym.plant.v1", PLANT_SCHEMA_VERSION}:
+        if schema != PLANT_SCHEMA_VERSION:
             raise ValueError(f"unsupported PlantConfig schema_version {schema!r}")
         config = cls(
             schema_version=PLANT_SCHEMA_VERSION,
@@ -114,7 +110,6 @@ class PlantConfig:
             plant=dict(value.get("plant", {})),
             conditions=dict(value.get("conditions", {})),
             default_condition=str(value.get("default_condition", "")),
-            operating_point=dict(value.get("operating_point", {})),
             study=dict(value.get("study", {})),
             references=tuple(value.get("references", ())),
         )
@@ -146,8 +141,6 @@ class PlantConfig:
             "study": dict(self.study),
             "references": list(self.references),
         }
-        if self.operating_point:
-            payload["operating_point"] = dict(self.operating_point)
         if include_hash:
             payload["plant_hash"] = self.plant_hash
             payload["condition_hashes"] = dict(self.condition_hashes)

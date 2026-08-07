@@ -68,8 +68,8 @@ Optional Torch/SB3 imports occur only inside checkpoint loading or `train()`.
 
 - `ScenarioPlugin` vertically owns a numerical model factory, PlantConfig
   resolver, Tasks, controller defaults, and an optional study provider.
-- `PlantConfig` is the strict, hashable `aiogym.plant.v1` root declaration.
-  Scenario-specific fields stay inside `plant`, `operating_point`, and `study`.
+- `PlantConfig` is the strict, hashable `aiogym.plant.v2` root declaration.
+  Scenario-specific fields stay inside `plant`, `conditions`, and `study`.
 - `TaskSpec` owns objective, reward callable, formal metrics, primary metric,
   direction, horizon, control cadence, references, and presets. IDs are
   `<scenario>/<objective>`.

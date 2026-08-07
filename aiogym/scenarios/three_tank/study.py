@@ -7,7 +7,7 @@ import numpy as np
 
 from aiogym.core import CheckResult, ResolvedPlant
 
-from .model import ThreeTankModel, _legacy_design_spec
+from .model import ThreeTankModel
 
 
 class ThreeTankStudyProvider:
@@ -32,7 +32,7 @@ class ThreeTankStudyProvider:
                     ],
                 ),
             )
-        spec = _legacy_design_spec(plant)
+        context = model._model.study_context
         from .checks import (
             _safety_interlock_assessment,
             _static_assessment,
@@ -40,10 +40,10 @@ class ThreeTankStudyProvider:
         )
         from aiogym.core.validation import validate_model_readiness
 
-        static = _static_assessment(model._model, spec)
+        static = _static_assessment(model._model, context)
         readiness = validate_model_readiness(model._model)
-        steady = _steady_state_assessment(model._model, spec)
-        safety = _safety_interlock_assessment(model._model, spec)
+        steady = _steady_state_assessment(model._model, context)
+        safety = _safety_interlock_assessment(model._model, context)
         return (
             _result(
                 "static_engineering",
@@ -92,10 +92,10 @@ class ThreeTankStudyProvider:
                     "maximum_energy_kwh": 1.0e9,
                 },
             }
-        spec = _legacy_design_spec(plant)
+        context = ThreeTankModel(plant)._model.study_context
         return {
-            "operation": dict(spec["operation"]),
-            "requirements": dict(spec["requirements"]),
+            "operation": dict(context["operation"]),
+            "requirements": dict(context["requirements"]),
         }
 
     def steady_check(self, plant: ResolvedPlant, disturbances: Mapping):
@@ -113,10 +113,10 @@ class ThreeTankStudyProvider:
                 {"action": values},
                 [] if values is not None else ["steady-state action unavailable"],
             )
-        spec = _legacy_design_spec(plant)
+        context = model._model.study_context
         from .checks import _steady_state_assessment
 
-        metrics = _steady_state_assessment(model._model, spec, env=disturbances)
+        metrics = _steady_state_assessment(model._model, context, env=disturbances)
         return _result(
             "steady_state_feasibility",
             "steady_state",
@@ -132,11 +132,10 @@ class ThreeTankStudyProvider:
     def sample_disturbances(
         self, plant: ResolvedPlant, rng: np.random.Generator
     ) -> dict[str, float]:
-        uncertainty = dict(plant.parameters.get("uncertainties", {}))
         if "parameters" in plant.config.plant:
             defaults = ThreeTankModel(plant).default_disturbances()
             return dict(defaults)
-        operation = dict(_legacy_design_spec(plant)["operation"])
+        operation = ThreeTankModel(plant)._model.operation
         uncertainty = dict(plant.config.study.get("uncertainty", {}))
 
         def sample(name, default):

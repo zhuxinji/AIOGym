@@ -21,9 +21,11 @@ open cascade, plus `hydraulic-commissioning`, `disturbance-rejection`,
 `safety-recovery`, and `temperature-step` from the recirculating scenario,
 were not migrated because the 0.2 resources contained no behavior definition.
 
-PlantConfig v1 and `aiogym.design_spec.v1` remain readable through one-shot
-conversion. Newly emitted declarations use `aiogym.plant.v2` and separate
-`plant_hash`, `condition_hash`, `study_hash`, and `config_hash`.
+PlantConfig v1 and the separate design-v1 schema have been removed before the
+0.3 release. Inputs must use `aiogym.plant.v2`, which separates `plant_hash`,
+`condition_hash`, `study_hash`, and `config_hash`. The packaged
+`lab-three-tank-v1` declaration is the canonical replacement for the former
+default design file.
 
 SB3 training now writes `model/model.zip` and `model/contract.json`. Learned
 policies require compatible Task semantics and `interface_hash`; evaluating the

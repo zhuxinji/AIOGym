@@ -21,8 +21,7 @@ Removed:
 Added or renamed:
 
 - `aiogym/core/compat.py`, the only legacy task alias table
-- `aiogym/scenarios/three_tank/{physics,topologies,controllers,migration}.py`
-- `aiogym/scenarios/three_tank/schema.py` (renamed from `spec.py`)
+- `aiogym/scenarios/three_tank/{physics,topologies,equipment,checks,study,controllers}.py`
 - `aiogym/scenarios/three_tank/plants/{open-cascade-v1,recirculating-h1-v1,lab-three-tank-v1}.json`
 - `tests/core/test_specs_v2.py`
 - `tests/scenarios/test_three_tank_{phase0_golden,plants,unified_model}.py`
@@ -62,6 +61,10 @@ are therefore shared rather than copied per plant. The topology classes retain
 only their connection flows, installed actuators, interlocks, steady-state
 inverses, energy models, and topology-specific reporting.
 
+The same cleanup removed the separate design-v1 schema, default declaration,
+and conversion module. Equipment compilation and engineering studies now read
+the resolved PlantConfig v2 declaration directly.
+
 ## Removed empty condition names
 
 Only conditions with executable definitions were migrated. The unimplemented
@@ -72,7 +75,8 @@ removed rather than registered as empty shells.
 
 ## Validation summary
 
-- Source suite: **82 passed**; Ruff and `git diff --check` passed.
+- Source suite after legacy-schema removal: **80 passed**; Ruff and
+  `git diff --check` passed.
 - PID/MPC smoke: both controllers produced correctly shaped actions and one
   finite, non-terminal transition on all three plants.
 - Workflow E2E: design study passed for both supported topologies; Dataset v3

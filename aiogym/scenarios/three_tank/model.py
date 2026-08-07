@@ -7,55 +7,6 @@ from typing import Any
 import numpy as np
 
 
-def _legacy_design_spec(plant) -> dict[str, Any]:
-    declaration = plant.config.plant
-    if "operation" in plant.parameters:
-        parameters = plant.parameters
-        return {
-            "schema_version": "aiogym.design_spec.v1",
-            "id": plant.id,
-            "description": plant.config.description,
-            "topology": "three-tank-recirculating",
-            "tanks": list(parameters["tanks"]),
-            "heaters": list(parameters["heaters"]),
-            "pump": dict(parameters["pump"]),
-            "hydraulics": dict(parameters["hydraulics"]),
-            "operation": dict(parameters["operation"]),
-            "requirements": dict(parameters["requirements"]),
-            "uncertainties": dict(parameters.get("uncertainties", {})),
-            "references": list(plant.config.references),
-        }
-    condition = plant.config.conditions[plant.config.default_condition]
-    hydraulics = dict(declaration["hydraulics"])
-    circulation_flow = hydraulics.pop("nominal_circulation_flow_m3s")
-    safety = dict(declaration.get("safety", {}))
-    requirements = dict(plant.config.study.get("requirements", {}))
-    requirements.update(safety)
-    return {
-        "schema_version": "aiogym.design_spec.v1",
-        "id": plant.id,
-        "description": plant.config.description,
-        "topology": "three-tank-recirculating",
-        "tanks": list(declaration["tanks"]),
-        "heaters": list(declaration["heaters"]),
-        "pump": dict(declaration["pump"]),
-        "hydraulics": hydraulics,
-        "operation": {
-            "circulation_flow_m3s": circulation_flow,
-            "target_levels_m": list(condition.reference[:3]),
-            "target_temperatures_degC": list(condition.reference[3:]),
-            "initial_levels_m": list(condition.initial_state[0::2]),
-            "initial_temperatures_degC": list(condition.initial_state[1::2]),
-            "ambient_temperature_degC": condition.disturbances.get("t_amb", 20.0),
-            "control_dt_s": condition.control_dt,
-            "duration_s": condition.control_dt * condition.horizon,
-        },
-        "requirements": requirements,
-        "uncertainties": dict(plant.config.study.get("uncertainty", {})),
-        "references": list(plant.config.references),
-    }
-
-
 def _schema(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     result = []
     for raw in rows:
@@ -91,7 +42,7 @@ class ThreeTankModel:
                     OpenCascadeTopology(), dict(parameters)
                 )
             elif topology == "recirculating_loop":
-                from .physics import RecirculatingTopology
+                from .topologies import RecirculatingTopology
 
                 self._model = apply_parameters(
                     RecirculatingTopology(), dict(parameters)
@@ -101,7 +52,7 @@ class ThreeTankModel:
         else:
             from .equipment import ThreeTankDesignModel
 
-            self._model = ThreeTankDesignModel(_legacy_design_spec(plant))
+            self._model = ThreeTankDesignModel(plant)
         self._model.scenario = "three_tank"
         self.dt_micro = float(self._model.dt_micro)
 

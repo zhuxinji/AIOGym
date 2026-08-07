@@ -1,15 +1,13 @@
-"""Compiled, fixed-interface model for three-tank equipment designs."""
+"""PlantConfig-v2 equipment compiler for the laboratory three-tank rig."""
 from __future__ import annotations
 
-import copy
 import math
-from collections.abc import Mapping
 
 from aiogym.core.backends import _NUMERIC_OPS, _casadi_ops
 from aiogym.core.model import RHO_CP
-from .physics import RecirculatingTopology
+from aiogym.core.specs import ResolvedPlant
 
-from .schema import load_design_spec
+from .topologies import RecirculatingTopology
 
 
 class ThreeTankDesignModel(RecirculatingTopology):
@@ -39,19 +37,38 @@ class ThreeTankDesignModel(RecirculatingTopology):
     }
     dt_micro = 0.1
 
-    def __init__(self, design_spec: Mapping):
+    def __init__(self, plant: ResolvedPlant):
         super().__init__()
-        declaration = dict(design_spec)
-        declaration.pop("design_hash", None)
-        self.design_spec = load_design_spec(declaration)
-        tanks = self.design_spec["tanks"]
-        pump = self.design_spec["pump"]
-        hydraulics = self.design_spec["hydraulics"]
-        operation = self.design_spec["operation"]
-        requirements = self.design_spec["requirements"]
+        if not isinstance(plant, ResolvedPlant):
+            raise TypeError("ThreeTankDesignModel requires a resolved PlantConfig v2")
+        declaration = plant.config.plant
+        if declaration.get("topology") != "recirculating_loop":
+            raise ValueError("laboratory equipment requires recirculating_loop topology")
+        condition = plant.config.conditions[plant.config.default_condition]
+        self.plant = plant
+        self.plant_id = plant.id
+        self.plant_hash = plant.plant_hash
+        tanks = [dict(row) for row in declaration["tanks"]]
+        pump = dict(declaration["pump"])
+        hydraulics = dict(declaration["hydraulics"])
+        requirements = dict(plant.config.study.get("requirements", {}))
+        requirements.update(dict(declaration.get("safety", {})))
+        self.operation = {
+            "circulation_flow_m3s": hydraulics["nominal_circulation_flow_m3s"],
+            "target_levels_m": list(condition.reference[:3]),
+            "target_temperatures_degC": list(condition.reference[3:]),
+            "initial_levels_m": list(condition.initial_state[0::2]),
+            "initial_temperatures_degC": list(condition.initial_state[1::2]),
+            "ambient_temperature_degC": condition.disturbances.get("t_amb", 20.0),
+            "control_dt_s": condition.control_dt,
+            "duration_s": condition.control_dt * condition.horizon,
+        }
+        self.requirements = requirements
+        self.uncertainty = dict(plant.config.study.get("uncertainty", {}))
+        self.references = list(plant.config.references)
         powers = [0.0, 0.0, 0.0]
         efficiencies = [1.0, 1.0, 1.0]
-        for heater in self.design_spec["heaters"]:
+        for heater in declaration["heaters"]:
             index = heater["tank"] - 1
             powers[index] = heater["power_w"]
             efficiencies[index] = heater["efficiency"]
@@ -78,7 +95,7 @@ class ThreeTankDesignModel(RecirculatingTopology):
                 "gravity_drop": list(hydraulics["gravity_drop_m"]),
                 "cv_overflow": list(hydraulics["cv_overflow"]),
                 "overflow_head_floor": hydraulics["overflow_head_floor_m"],
-                "t_amb": operation["ambient_temperature_degC"],
+                "t_amb": self.operation["ambient_temperature_degC"],
                 "temperature_trip": requirements["temperature_trip_degC"],
                 "temperature_hard_limit": requirements[
                     "temperature_hard_limit_degC"
@@ -86,14 +103,26 @@ class ThreeTankDesignModel(RecirculatingTopology):
             }
         )
         self._initial_state = _interleave(
-            operation["initial_levels_m"],
-            operation["initial_temperatures_degC"],
+            self.operation["initial_levels_m"],
+            self.operation["initial_temperatures_degC"],
         )
-        self._target_levels = list(operation["target_levels_m"])
-        self._target_temperatures = list(operation["target_temperatures_degC"])
+        self._target_levels = list(self.operation["target_levels_m"])
+        self._target_temperatures = list(self.operation["target_temperatures_degC"])
 
     def __deepcopy__(self, memo):
-        return type(self)(copy.deepcopy(self.design_spec, memo))
+        del memo
+        return type(self)(self.plant)
+
+    @property
+    def study_context(self):
+        """Engineering inputs derived directly from the resolved v2 plant."""
+
+        return {
+            "operation": dict(self.operation),
+            "requirements": dict(self.requirements),
+            "uncertainty": dict(self.uncertainty),
+            "references": list(self.references),
+        }
 
     @property
     def safety_constraints(self):
@@ -139,7 +168,7 @@ class ThreeTankDesignModel(RecirculatingTopology):
     ):
         """Solve the algebraic hydraulic and per-tank thermal requirements."""
 
-        operation = self.design_spec["operation"]
+        operation = self.operation
         flow = float(
             operation["circulation_flow_m3s"]
             if circulation_flow is None
@@ -564,21 +593,11 @@ class ThreeTankDesignModel(RecirculatingTopology):
 
     def metadata(self):
         metadata = super().metadata()
-        metadata["design_id"] = self.design_spec["id"]
-        metadata["design_hash"] = self.design_spec["design_hash"]
+        metadata["plant_id"] = self.plant_id
+        metadata["plant_hash"] = self.plant_hash
         metadata["heater_mask"] = list(self.heater_mask)
         metadata["parameter_status"] = "user-supplied-design"
         return metadata
-
-
-def compile_design_model(source) -> ThreeTankDesignModel:
-    """Compile a validated design declaration into an executable model."""
-
-    if isinstance(source, Mapping):
-        declaration = dict(source)
-        declaration.pop("design_hash", None)
-        source = declaration
-    return ThreeTankDesignModel(load_design_spec(source))
 
 
 def _interleave(levels, temperatures):
@@ -599,4 +618,4 @@ def _finite_clip01(value):
     return min(1.0, max(0.0, number))
 
 
-__all__ = ["ThreeTankDesignModel", "compile_design_model"]
+__all__ = ["ThreeTankDesignModel"]

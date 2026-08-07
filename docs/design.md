@@ -19,9 +19,10 @@ same model, environment, PID Policy, and rollout executor used elsewhere.
 Outputs include `result.json`, `manifest.json`, and `report.md`; existing output
 is not overwritten by default.
 
-Legacy `aiogym.design_spec.v1` JSON can be loaded and is deterministically
-converted to `PlantConfig`. This is an input conversion only: the resulting run
-is governed by the 0.3 unified three-tank model and workflow.
+Only `aiogym.plant.v2` declarations are accepted. The retired design-v1 schema,
+default file, loader, and conversion API are not part of the runtime package.
+Use `aiogym/scenarios/three_tank/plants/lab-three-tank-v1.json` as the complete
+laboratory equipment example.
 
 A PASS is simulation-screening evidence. It is not a safety certification and
 does not replace procurement reconciliation, protection-layer review, hazard

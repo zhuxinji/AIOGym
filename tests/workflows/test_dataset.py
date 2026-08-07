@@ -13,7 +13,7 @@ from aiogym.workflows import DatasetReader, collect, load_plant
 
 DESIGN = (
     Path(__file__).resolve().parents[2]
-    / "aiogym/scenarios/three_tank/default-design-v1.json"
+    / "aiogym/scenarios/three_tank/plants/lab-three-tank-v1.json"
 )
 
 

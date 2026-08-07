@@ -8,7 +8,6 @@ import pytest
 
 from aiogym.core import make_env
 from aiogym.workflows.design import (
-    convert_design_spec_v1,
     load_plant,
     study,
     sweep,
@@ -16,22 +15,20 @@ from aiogym.workflows.design import (
 )
 
 
-DESIGN = (
+PLANT = (
     Path(__file__).resolve().parents[2]
-    / "aiogym/scenarios/three_tank/default-design-v1.json"
+    / "aiogym/scenarios/three_tank/plants/lab-three-tank-v1.json"
 )
 
 
-def _raw_design():
-    return json.loads(DESIGN.read_text(encoding="utf-8"))
+def _raw_plant():
+    return json.loads(PLANT.read_text(encoding="utf-8"))
 
 
-def test_design_v1_converts_to_generic_plant_and_shared_env_hash():
-    converted = convert_design_spec_v1(DESIGN)
-    assert converted["schema_version"] == "aiogym.plant.v2"
-    assert converted["scenario"] == "three_tank"
-    plant = load_plant(converted)
-    assert load_plant(DESIGN).plant_hash == plant.plant_hash
+def test_plant_v2_loads_with_shared_env_hash():
+    plant = load_plant(PLANT)
+    assert plant.schema_version == "aiogym.plant.v2"
+    assert plant.scenario == "three_tank"
     resolved = validate_plant(plant)
     env = make_env("three_tank/regulation", plant=plant, condition="commissioning")
     try:
@@ -43,7 +40,7 @@ def test_design_v1_converts_to_generic_plant_and_shared_env_hash():
 
 
 def test_design_study_preserves_gates_and_uses_common_dynamic_path():
-    result = study(DESIGN, robustness_samples=0, seed=7)
+    result = study(PLANT, robustness_samples=0, seed=7)
     assert result["verdict"] == "PASS"
     assert [row["category"] for row in result["checks"]] == [
         "static",
@@ -65,7 +62,7 @@ def test_design_study_preserves_gates_and_uses_common_dynamic_path():
 
 
 def test_inadequate_heater_fails_and_result_is_strict_json():
-    plant = convert_design_spec_v1(_raw_design())
+    plant = _raw_plant()
     plant["plant"]["heaters"][0]["power_w"] = 100.0
     result = study(plant, robustness_samples=0, seed=0)
     assert result["verdict"] == "FAIL"
@@ -76,7 +73,7 @@ def test_inadequate_heater_fails_and_result_is_strict_json():
 
 def test_sweep_changes_plant_hash_and_artifacts_are_no_overwrite(tmp_path):
     result = sweep(
-        DESIGN,
+        PLANT,
         parameter="plant.heaters.0.power_w",
         values=(1900.0, 2100.0),
         robustness_samples=0,
@@ -85,7 +82,7 @@ def test_sweep_changes_plant_hash_and_artifacts_are_no_overwrite(tmp_path):
     assert len({row["plant_hash"] for row in result["candidates"]}) == 2
     output = tmp_path / "study"
     written = study(
-        DESIGN,
+        PLANT,
         robustness_samples=0,
         seed=3,
         output=output,
@@ -103,7 +100,7 @@ def test_sweep_changes_plant_hash_and_artifacts_are_no_overwrite(tmp_path):
     assert manifest["env_hash"] == written["env_hash"]
     with pytest.raises(FileExistsError):
         study(
-            DESIGN,
+            PLANT,
             robustness_samples=0,
             seed=3,
             output=output,
@@ -111,8 +108,8 @@ def test_sweep_changes_plant_hash_and_artifacts_are_no_overwrite(tmp_path):
 
 
 def test_robustness_sampling_is_seeded_and_reports_same_samples():
-    first = study(DESIGN, robustness_samples=2, seed=7)
-    second = study(DESIGN, robustness_samples=2, seed=7)
+    first = study(PLANT, robustness_samples=2, seed=7)
+    second = study(PLANT, robustness_samples=2, seed=7)
     assert first["robustness"]["pass_rate"] == 1.0
     assert first["robustness"]["cases"] == second["robustness"]["cases"]
     assert all(np.isfinite(row["dynamic"]["energy_kwh"]) for row in first["robustness"]["cases"])

@@ -57,8 +57,8 @@ def resolve_plant(config: PlantConfig) -> ResolvedPlant:
         parameters=dict(config.plant),
         provenance={"source": "PlantConfig", "schema": config.schema_version},
     )
-    # Compilation is validation: actuator layout, parameters, and design schema
-    # must be coherent before an environment is returned.
+    # Compilation validates the v2 equipment declaration before an environment
+    # is returned.
     ThreeTankModel(resolved)
     return resolved
 
