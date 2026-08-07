@@ -128,13 +128,10 @@ def _steady_state_assessment(model, context, *, reference, env=None):
         env=env,
     )
     requirements = context["requirements"]
-    active_indices = [0, 1, 2] + [
-        3 + index for index, installed in enumerate(model.heater_mask) if installed
-    ]
     finite_actions = [
-        float(equilibrium["action"][index])
-        for index in active_indices
-        if math.isfinite(float(equilibrium["action"][index]))
+        float(value)
+        for value in equilibrium["action"]
+        if math.isfinite(float(value))
     ]
     max_action = max(finite_actions, default=0.0)
     required_maximum = 1.0 - requirements["minimum_actuator_margin"]
@@ -182,7 +179,22 @@ def _safety_interlock_assessment(model, context):
     target_levels = list(operation["target_levels_m"])
     target_temperatures = list(operation["target_temperatures_degC"])
     full_action = [1.0] * model.action_dim()
-    checks = []
+    expected_names = [
+        "pump_P101",
+        "valve_V12",
+        "valve_V23",
+        *(
+            f"heater_H{index + 1}"
+            for index, installed in enumerate(model.heater_mask)
+            if installed
+        ),
+    ]
+    checks = [
+        {
+            "name": "actuator_schema_matches_installed_equipment",
+            "passed": list(model.action_names) == expected_names,
+        }
+    ]
 
     low_levels = list(target_levels)
     low_levels[2] = max(0.0, model.p["low_level_trip"][2] - 0.001)
@@ -196,12 +208,6 @@ def _safety_interlock_assessment(model, context):
     )
     for index, installed in enumerate(model.heater_mask):
         if not installed:
-            checks.append(
-                {
-                    "name": f"H{index + 1}_absent_actuator_mask",
-                    "passed": info[f"H{index + 1}_electric_power_w"] == 0.0,
-                }
-            )
             continue
         heater_low_levels = list(target_levels)
         heater_low_levels[index] = max(

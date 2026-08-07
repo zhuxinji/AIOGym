@@ -1,6 +1,8 @@
 """Plant-aware, name-bound PID and MPC profiles for three_tank."""
 from __future__ import annotations
 
+import copy
+
 
 _OPEN_PID = {
     "loops": [
@@ -56,11 +58,26 @@ def resolve_controller_profile(
     else:
         family = "lab"
     if controller_id == "pid":
-        return {
+        profile = {
             "open": _OPEN_PID,
             "recirculating-h1": _RECIRCULATING_PID,
             "lab": _LAB_PID,
         }[family]
+        if family != "lab":
+            return profile
+        installed = {
+            f"heater_H{int(row['tank'])}"
+            for row in declaration["heaters"]
+            if float(row["power_w"]) > 0.0
+        }
+        resolved = copy.deepcopy(profile)
+        resolved["matrix_terms"] = [
+            row
+            for row in resolved["matrix_terms"]
+            if not row["actuator"].startswith("heater_")
+            or row["actuator"] in installed
+        ]
+        return resolved
     if controller_id == "mpc":
         key = {
             "open": "open-cascade-v1",

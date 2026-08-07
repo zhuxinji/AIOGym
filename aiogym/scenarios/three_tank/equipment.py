@@ -7,11 +7,12 @@ from aiogym.core.backends import _NUMERIC_OPS, _casadi_ops
 from aiogym.core.model import RHO_CP
 from aiogym.core.specs import OperatingCondition, ResolvedPlant
 
+from .actuators import ActuatorLayout
 from .topologies import RecirculatingTopology
 
 
 class ThreeTankDesignModel(RecirculatingTopology):
-    """Three-tank recirculating design with stable H1/H2/H3 actuator slots."""
+    """Three-tank recirculating design with compact public actuators."""
 
     scenario = "three_tank"
     display_name = "Parameterised recirculating three-tank design"
@@ -19,7 +20,7 @@ class ThreeTankDesignModel(RecirculatingTopology):
         "Three-tank P101-V12-V23 recirculating loop with independently optional "
         "H1, H2, and H3 heater slots."
     )
-    action_names = (
+    internal_action_names = (
         "pump_P101",
         "valve_V12",
         "valve_V23",
@@ -27,6 +28,7 @@ class ThreeTankDesignModel(RecirculatingTopology):
         "heater_H2",
         "heater_H3",
     )
+    action_names = internal_action_names
     action_kinds = {
         "pump_P101": "pump",
         "valve_V12": "valve",
@@ -60,12 +62,33 @@ class ThreeTankDesignModel(RecirculatingTopology):
         self.references = list(plant.config.references)
         powers = [0.0, 0.0, 0.0]
         efficiencies = [1.0, 1.0, 1.0]
+        declared_heater_tanks = set()
         for heater in declaration["heaters"]:
-            index = heater["tank"] - 1
-            powers[index] = heater["power_w"]
+            tank = heater["tank"]
+            if isinstance(tank, bool) or not isinstance(tank, int) or tank not in {1, 2, 3}:
+                raise ValueError("heater tank must be one of 1, 2, or 3")
+            if tank in declared_heater_tanks:
+                raise ValueError(f"heater tank {tank} is declared more than once")
+            power = float(heater["power_w"])
+            if not math.isfinite(power) or power <= 0.0:
+                raise ValueError("installed heater power_w must be finite and positive")
+            declared_heater_tanks.add(tank)
+            index = tank - 1
+            powers[index] = power
             efficiencies[index] = heater["efficiency"]
         self.heater_mask = tuple(power > 0.0 for power in powers)
         self.heater_efficiencies = tuple(efficiencies)
+        public_to_internal = (0, 1, 2, *(
+            3 + index for index, installed in enumerate(self.heater_mask) if installed
+        ))
+        self.action_layout = ActuatorLayout(
+            public_names=tuple(
+                self.internal_action_names[index] for index in public_to_internal
+            ),
+            internal_names=self.internal_action_names,
+            public_to_internal=tuple(public_to_internal),
+        )
+        self.action_names = self.action_layout.public_names
         self.p.update(
             {
                 "area": [tank["area_m2"] for tank in tanks],
@@ -296,8 +319,8 @@ class ThreeTankDesignModel(RecirculatingTopology):
             )
             for i in range(2)
         ]
-        action = [pump_command, *valve_commands, *heater_commands]
-        for label, command in zip(self.action_names, action):
+        internal_action = [pump_command, *valve_commands, *heater_commands]
+        for label, command in zip(self.internal_action_names, internal_action):
             if not math.isfinite(command) or command < 0.0 or command > 1.0:
                 reasons.append(f"{label} command is outside [0, 1]")
         if h[2] < self.p["low_level_trip"][2]:
@@ -316,6 +339,7 @@ class ThreeTankDesignModel(RecirculatingTopology):
 
         state = _interleave(h, temperatures)
         pump_power = pump_command**3 * self.p["pump_power_max"]
+        action = self.action_layout.compress(internal_action)
         return {
             "feasible": not reasons,
             "infeasible_reasons": tuple(dict.fromkeys(reasons)),
@@ -323,6 +347,7 @@ class ThreeTankDesignModel(RecirculatingTopology):
             "state": state,
             "y_sp": [*h, *temperatures],
             "action": action,
+            "internal_action": internal_action,
             "heater_to_liquid_power_w": liquid_heat,
             "heater_electric_power_w": electric_heat,
             "P101_electric_power_w": pump_power,
@@ -341,6 +366,39 @@ class ThreeTankDesignModel(RecirculatingTopology):
             target_temperatures=requested[3:],
         )
         return list(equilibrium["action"]) if equilibrium["feasible"] else None
+
+    def _effective_internal_action(self, u, ops):
+        length = int(u.shape[0]) if hasattr(u, "shape") else len(u)
+        internal = (
+            [u[index] for index in range(length)]
+            if length == len(self.internal_action_names)
+            else self.action_layout.expand(u)
+        )
+        if not bool(getattr(ops, "symbolic", False)):
+            for value in internal:
+                if not math.isfinite(float(value)):
+                    raise ValueError("three_tank action values must be finite")
+        return [ops.min(ops.max(value, 0.0), 1.0) for value in internal]
+
+    def dynamics(self, x, u, env=None, backend="numeric", ca=None):
+        if backend == "casadi":
+            if ca is None:
+                raise ValueError("backend='casadi' requires the casadi module as ca=...")
+            return self._dynamics(
+                x,
+                self.action_layout.expand(u),
+                self.dynamics_disturbance_map(env),
+                _casadi_ops(ca),
+            )
+        if backend != "numeric":
+            raise ValueError(f"unknown dynamics backend: {backend!r}")
+        public = self.action_vector(u)
+        return self._dynamics(
+            self.state_vector(x),
+            self.action_layout.expand(public),
+            env or {},
+            _NUMERIC_OPS,
+        )
 
     def _heater_vectors(self, levels, temperatures, u, env, ops):
         heat_to_liquid = []
@@ -369,7 +427,7 @@ class ThreeTankDesignModel(RecirculatingTopology):
 
     def _dynamics(self, x, u, env, ops):
         env = self._resolved_env(env, ops)
-        u = self._effective_action(u, ops)
+        u = self._effective_internal_action(u, ops)
         levels = [x[0], x[2], x[4]]
         temperatures = [x[1], x[3], x[5]]
         pump_flow, q12, q23, overflow_flows, _ = self._flow_terms(
@@ -401,13 +459,13 @@ class ThreeTankDesignModel(RecirculatingTopology):
 
     def balance_residuals(self, x, u, env=None):
         state = self.state_vector(x)
-        action = self._effective_action(self.action_vector(u), _NUMERIC_OPS)
+        action = self._effective_internal_action(self.action_vector(u), _NUMERIC_OPS)
         context = self._resolved_env(env)
         levels = [state[0], state[2], state[4]]
         temperatures = [state[1], state[3], state[5]]
         if any(level <= self.p["h_floor"] for level in levels):
             raise ValueError("balance_residuals requires levels above h_floor")
-        dx = list(self.dynamics(state, action, context))
+        dx = list(self._dynamics(state, action, context, _NUMERIC_OPS))
         pump_flow, q12, q23, overflow_flows, _ = self._flow_terms(
             levels, action, context, _NUMERIC_OPS
         )
@@ -507,7 +565,7 @@ class ThreeTankDesignModel(RecirculatingTopology):
             values, ops = u, _casadi_ops(ca)
         else:
             raise ValueError(f"unknown dynamics backend: {backend!r}")
-        effective = self._effective_action(values, ops)
+        effective = self._effective_internal_action(values, ops)
         energy = (
             effective[0] ** 3 * self.p["pump_power_max"]
             + sum(
@@ -518,9 +576,9 @@ class ThreeTankDesignModel(RecirculatingTopology):
         return float(energy) if backend == "numeric" else energy
 
     def action_energy_kw(self, act, x=None, env=None):
-        action = self._effective_action(self.action_vector(act), _NUMERIC_OPS)
+        action = self._effective_internal_action(self.action_vector(act), _NUMERIC_OPS)
         if x is None:
-            return self.energy_kw(action)
+            return self.energy_kw(self.action_layout.compress(action))
         context = self._resolved_env(env)
         levels = [float(x[0]), float(x[2]), float(x[4])]
         temperatures = [float(x[1]), float(x[3]), float(x[5])]
@@ -547,7 +605,7 @@ class ThreeTankDesignModel(RecirculatingTopology):
 
     def process_info(self, x, levels, temps, env, action=None):
         context = self._resolved_env(env)
-        u = self._effective_action(
+        u = self._effective_internal_action(
             self.action_vector(self.default_action() if action is None else action),
             _NUMERIC_OPS,
         )
