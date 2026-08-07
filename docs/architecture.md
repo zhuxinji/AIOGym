@@ -1,71 +1,73 @@
 # Architecture
 
-AIO-Gym 0.3 has five domain concepts and one execution direction:
+AIO-Gym 0.4 has one resolution and execution direction:
 
 ```text
 ScenarioPlugin -> PlantConfig -> OperatingCondition -> TaskSpec -> ProcessControlEnv
                                                          -> Policy -> Run result
 ```
 
-- `ScenarioPlugin` is the vertical owner of a model factory, plant resolver,
-  supported tasks, controller defaults, and optional design-study provider.
-- `PlantConfig` describes equipment independently of an operating objective.
-- `OperatingCondition` owns initial state, reference, disturbances, schedules,
-  horizon, control cadence, and policy observation mode.
-- `TaskSpec` owns objective, stable reward identity, metric suite, and required
-  plant capabilities.
-- A run is an explicit design, collection, training, or evaluation workflow.
+- `PlantConfig` contains physical equipment, topology, actuators, parameters,
+  safety settings, study metadata, and named conditions.
+- `OperatingCondition` contains the initial state, reference, disturbances,
+  schedules, `control_dt`, horizon, and observation mode.
+- `TaskSpec` contains reward and metric semantics, capabilities, revision, and
+  immutable objective coefficients.
+- `EnvironmentIdentity` combines `task_hash`, `plant_hash`, `condition_hash`,
+  `interface_hash`, and the integrator ID.
+
+All specification and resolved-plant mappings are recursively immutable.
+Serialized derivative hashes are checked rather than trusted when a PlantConfig
+is loaded.
 
 ## Package boundaries
 
 ```text
 aiogym/
-├── core/          contracts, immutable specs, registry, environment, rollout, I/O
-├── scenarios/     vertical scenario plugins and physical models
-├── controllers/   Policy implementations and environment-bound construction
-├── workflows/     design, Dataset v3, collection, training, evaluation, artifacts
+├── core/          contracts, specs, registry, environment, rollout, I/O
+├── scenarios/     vertical plugins and physical models
+├── controllers/   environment-bound PID, MPC, baseline, and learned policies
+├── workflows/     design, Dataset v4, collect, train, evaluate, artifacts
 └── cli/           list, design, collect, train, evaluate adapters
 ```
 
-Dependency direction is one-way. `core` imports no scenario, controller,
-workflow, or optional training dependency. Scenario plugins depend on `core`.
-Controllers depend on an already-created environment. Workflows compose these
-parts and own persistent artifacts. CLI modules only translate user input into
-workflow calls.
+`core` imports no scenario or optional training dependency. Scenarios own
+models and Task definitions. Controllers consume an already-resolved
+environment. Workflows own persistent artifacts and share one policy-target
+contract resolver.
 
-Within `three_tank`, all topology models inherit one
-`ThreeTankPhysicsKernel`. Plant JSON files select equipment and topology; they
-do not select independent copies of the environment or balance equations.
+## Runtime channels
 
-Scenario modules use `model.py` for the environment-facing adapter or compiler
-and `physics.py` for physical equations. A fixed-topology scenario such as
-`quadruple` has one `QuadruplePhysicsModel`; `three_tank` additionally needs
-topology and equipment modules because one adapter compiles multiple plant
-interfaces.
+State, observation, action, reward, and formal metrics are separate:
 
-## State, observation, action, reward, and metric
-
-These channels remain separate:
-
-- model state is the physical integration state;
-- observation is the policy-facing measurement;
-- the policy returns a commanded action in `env.action_space`;
-- the environment records the applied action and constraint channels;
+- the state is integrated by the physical model;
+- the observation is the policy-facing measurement;
+- a policy returns a public action in `env.action_space`;
+- a model may expand that public action into private physical slots;
 - reward is the Task's per-transition learning signal;
-- formal metrics are accumulated by `workflows.evaluate`, independently of
-  reward shaping.
+- evaluation accumulates formal episode metrics.
 
-`control_dt` is the policy cadence. A model may perform smaller internal solver
-steps without changing the Task horizon or Dataset transition cadence.
+`control_dt` is the policy cadence. Smaller internal integration steps do not
+change action cadence or Dataset transition cadence.
 
-## Identity and artifacts
+## Schedule semantics
 
-`PlantConfig.plant_hash` binds equipment declarations. `TaskSpec.task_hash`
-binds objective semantics. `condition_hash`, `interface_hash`, and `env_hash`
-bind the operating and policy-facing contracts. Dataset v3 manifests and run
-artifacts record these identities plus policy metadata, seeds, and checksums. Writers refuse to
-replace an existing artifact unless the caller explicitly enables overwrite or
-resume behavior.
+At reset, event `schedule[0]` is applied before `observation_0` is returned.
+For action `k`, the policy sees schedule state `k`; integration and reward use
+that same transition context. The environment then applies `schedule[k+1]`
+before returning the next observation. Step info distinguishes:
 
-No Track, Anchor, Goal, RewardSpec, Case, Distribution, Curriculum, Claim,
-artifact-compatibility, or ranking layer participates in the 0.3 runtime.
+- `transition_reference` / `transition_disturbance`: context used by the action,
+  dynamics, and reward;
+- `reference` / `disturbance`: context represented by the returned observation.
+
+## Policy target contracts
+
+Bound PID/MPC policies must exactly match every explicitly requested selector.
+Checkpoint Task and interface hashes always match strictly. Plant and condition
+transfer are rejected by default and require explicit flags; those flags and
+both contracts are written to evaluation results and Dataset manifests.
+
+There is no runtime Track, Anchor, Goal registry, RewardSpec registry, Case
+registry, Distribution registry, Claim, Scorecard, final-test lock, or ranking
+layer.

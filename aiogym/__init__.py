@@ -1,10 +1,10 @@
-"""Small public API for AIO-Gym 0.2."""
+"""Small public API for AIO-Gym 0.4."""
 from __future__ import annotations
 
 import warnings
 
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 
 def _register():

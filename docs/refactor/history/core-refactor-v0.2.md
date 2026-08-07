@@ -1,4 +1,7 @@
-# AIO-Gym core refactor report
+# AIO-Gym core refactor report (historical)
+
+> Historical 0.2 refactor snapshot. For the current architecture, see
+> `docs/architecture.md` and `docs/refactor/v0.4-hardening-report.md`.
 
 Date: 2026-08-06
 Branch: `refactor/core-scenario-workflows`

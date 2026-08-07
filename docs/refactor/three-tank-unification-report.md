@@ -1,4 +1,7 @@
-# Three-tank unification report
+# Three-tank unification report (historical 0.3 snapshot)
+
+> This report records the 0.3 unification. See `docs/three-tank.md` and
+> `docs/refactor/v0.4-hardening-report.md` for current behavior.
 
 Date: 2026-08-06
 

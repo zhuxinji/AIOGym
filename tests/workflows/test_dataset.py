@@ -165,7 +165,7 @@ def test_v2_migration_is_one_shot_and_preserves_legacy_metadata(tmp_path):
     import json
 
     from aiogym.core import file_sha256
-    from scripts.migrate_dataset_v2_to_v3 import migrate
+    from scripts.migrate_dataset_v2_to_v4 import migrate
 
     source = tmp_path / "v2"
     shard = source / "shards/part-00000000.npz"

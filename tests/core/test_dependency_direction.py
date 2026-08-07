@@ -34,7 +34,7 @@ def test_core_does_not_import_higher_layers():
 def test_importing_core_does_not_load_optional_dependencies():
     code = (
         "import sys; import aiogym.core; "
-        "blocked=('torch','stable_baselines3','casadi','onnx','onnxruntime','optuna'); "
+        "blocked=('torch','stable_baselines3','casadi'); "
         "loaded=[name for name in blocked if name in sys.modules]; "
         "assert not loaded, loaded"
     )

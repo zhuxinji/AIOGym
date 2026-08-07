@@ -16,8 +16,7 @@ output/
 tmp/
 venv/
 .env
-runs/*
-!runs/.gitignore
+runs/
 /datasets/
 checkpoints/
 *.log

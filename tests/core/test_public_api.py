@@ -6,7 +6,7 @@ import aiogym
 
 
 def test_public_api_is_task_oriented_and_small():
-    assert aiogym.__version__ == "0.3.0"
+    assert aiogym.__version__ == "0.4.0"
     assert set(aiogym.__all__) == {
         "__version__",
         "collect",

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Five-command AIO-Gym 0.2 command-line interface."""
+"""Five-command AIO-Gym 0.4 command-line interface."""
 from __future__ import annotations
 
 import argparse

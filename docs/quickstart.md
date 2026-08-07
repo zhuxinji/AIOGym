@@ -4,7 +4,7 @@
 
 ```bash
 aiogym list scenarios
-aiogym list tasks --scenario quadruple
+aiogym list tasks --scenario three_tank
 aiogym list plants --scenario three_tank
 ```
 
@@ -13,48 +13,57 @@ import aiogym
 
 env = aiogym.make_env("quadruple/regulation", condition="minimum-phase")
 observation, info = env.reset(seed=0)
-action = env.action_space.sample()
-next_observation, reward, terminated, truncated, info = env.step(action)
+next_observation, reward, terminated, truncated, info = env.step(
+    env.action_space.sample()
+)
 env.close()
 ```
 
-Task IDs use `<scenario>/<objective>`. `plant=` accepts a `PlantConfig`, a
-mapping, or a JSON path. Omitting it uses the scenario's built-in plant.
-
-## Evaluate a controller
+## Evaluate and collect
 
 ```python
-import aiogym
-
 env = aiogym.make_env(
     "three_tank/regulation",
     plant="open-cascade-v1",
     condition="continuous-benchmark",
 )
 pid = aiogym.make_controller("pid", env=env)
-result = aiogym.evaluate(pid, seeds=[0, 1, 2], output="runs/evaluate/cascade-pid")
+result = aiogym.evaluate(pid, seeds=[0, 1, 2])
 env.close()
-print(result["aggregate"])
-```
 
-## Collect Dataset v3
-
-```python
 dataset = aiogym.collect(
     task="quadruple/regulation",
     condition="minimum-phase",
     policy="pid",
     episodes=3,
     seed=0,
-    output="runs/data/quadruple-pid-v3",
+    output="runs/data/quadruple-pid-v4",
 )
 ```
 
-Each episode is one checksummed `.npz` file; `manifest.json` records Task,
-Plant, policy, seeds, array schemas, and aggregate counts. Use
-`aiogym.workflows.DatasetReader` for direct reading.
+Dataset v4 stores checksummed episode `.npz` files. Its manifest records Task,
+Plant, Condition, interface, policy contracts, transfer flags, schemas, seeds,
+and `schedule_semantics = pre-action-v1`.
 
-## Train and evaluate
+## Explicit checkpoint transfer
+
+Checkpoint transfer is opt-in for Plant or Condition changes:
+
+```python
+result = aiogym.evaluate(
+    checkpoint_policy,
+    task="three_tank/regulation",
+    plant="recirculating-h1-v1",
+    condition=custom_condition,
+    allow_condition_transfer=True,
+)
+```
+
+Task and interface hashes must still match. A six-action checkpoint cannot run
+on a four-action Plant. Bound PID/MPC policies never transfer implicitly; build
+a new controller against the target environment.
+
+## Train
 
 ```python
 run = aiogym.train(
@@ -68,5 +77,4 @@ run = aiogym.train(
 )
 ```
 
-This saves an SB3 checkpoint and evaluates the reloaded policy. A short budget
-only validates the pipeline; it is not credible research-scale evidence.
+Short budgets prove pipeline execution only, not control performance.

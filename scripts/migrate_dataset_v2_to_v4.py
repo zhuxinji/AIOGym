@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-shot Dataset v2 to v3 conversion; v3 runtime stays compatibility-free."""
+"""One-shot Dataset v2 to v4 conversion; v4 runtime stays compatibility-free."""
 from __future__ import annotations
 
 import argparse
