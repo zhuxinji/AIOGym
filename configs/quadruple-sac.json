@@ -1,0 +1,7 @@
+{
+  "batch_size": 256,
+  "ent_coef": 0.0005,
+  "gamma": 0.995,
+  "learning_rate": 0.001,
+  "learning_starts": 0
+}

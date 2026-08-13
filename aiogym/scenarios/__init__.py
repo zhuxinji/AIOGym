@@ -1,13 +1,13 @@
-"""Built-in vertical ScenarioPlugin registrations."""
+"""Built-in Scenario registrations."""
 from __future__ import annotations
 
-from aiogym.core import list_scenarios, register_scenario
+from aiogym.core.registry import list_scenarios, register_scenario
 
-from .quadruple import PLUGIN as QUADRUPLE
-from .three_tank import PLUGIN as THREE_TANK
+from .quadruple import SCENARIO as QUADRUPLE
+from .three_tank import SCENARIO as THREE_TANK
 
 
-BUILTIN_PLUGINS = (
+BUILTIN_SCENARIOS = (
     QUADRUPLE,
     THREE_TANK,
 )
@@ -15,11 +15,11 @@ BUILTIN_PLUGINS = (
 
 def register_builtin_scenarios() -> None:
     registered = set(list_scenarios())
-    for plugin in BUILTIN_PLUGINS:
-        if plugin.id not in registered:
-            register_scenario(plugin)
+    for scenario in BUILTIN_SCENARIOS:
+        if scenario.id not in registered:
+            register_scenario(scenario)
 
 
 register_builtin_scenarios()
 
-__all__ = ["BUILTIN_PLUGINS", "register_builtin_scenarios"]
+__all__ = ["BUILTIN_SCENARIOS", "register_builtin_scenarios"]

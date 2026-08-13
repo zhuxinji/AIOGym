@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aiogym"
-version = "0.4.0"
-description = "Scenario-oriented process-control models, tasks, datasets, and workflows."
+version = "0.7.0"
+description = "Scenario-oriented process-control models, rewards, datasets, and workflows."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -70,8 +70,3 @@ aiogym = "aiogym.cli.main:main"
 [tool.setuptools.packages.find]
 include = ["aiogym*"]
 exclude = ["tests*"]
-
-[tool.setuptools.package-data]
-aiogym = [
-  "scenarios/three_tank/plants/*.json",
-]

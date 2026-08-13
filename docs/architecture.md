@@ -1,73 +1,95 @@
 # Architecture
 
-AIO-Gym 0.4 has one resolution and execution direction:
+AIO-Gym has one small dependency direction:
 
 ```text
-ScenarioPlugin -> PlantConfig -> OperatingCondition -> TaskSpec -> ProcessControlEnv
-                                                         -> Policy -> Run result
+scenarios -> core <- controllers
+                  <- workflows <- CLI
+experimental (opt-in)
 ```
 
-- `PlantConfig` contains physical equipment, topology, actuators, parameters,
-  safety settings, study metadata, and named conditions.
-- `OperatingCondition` contains the initial state, reference, disturbances,
-  schedules, `control_dt`, horizon, and observation mode.
-- `TaskSpec` contains reward and metric semantics, capabilities, revision, and
-  immutable objective coefficients.
-- `EnvironmentIdentity` combines `task_hash`, `plant_hash`, `condition_hash`,
-  `interface_hash`, and the integrator ID.
+Users need six concepts:
 
-All specification and resolved-plant mappings are recursively immutable.
-Serialized derivative hashes are checked rather than trusted when a PlantConfig
-is loaded.
+- Scenario: one physical process model, default episode, and training sampler;
+- Benchmark: one fixed evaluation protocol and its ranking metrics;
+- Reward: the step reward and non-benchmark episode metrics;
+- Env: the Gymnasium `reset()` and `step()` interface;
+- Policy: PID, MPC, hold, random, or a loaded SB3 model;
+- Workflow: collect, train, evaluate, or compare.
 
-## Package boundaries
+`EpisodeSpec` is an internal resolved value containing initial state, reference,
+horizon, disturbances, and schedules. It is not another public selector.
+
+## Environment boundary
+
+`make_env()` is the only public environment-construction entry point:
 
 ```text
-aiogym/
-├── core/          contracts, specs, registry, environment, rollout, I/O
-├── scenarios/     vertical plugins and physical models
-├── controllers/   environment-bound PID, MPC, baseline, and learned policies
-├── workflows/     design, Dataset v4, collect, train, evaluate, artifacts
-└── cli/           list, design, collect, train, evaluate adapters
+resolved model + default/benchmark/training episode
+    -> process environment
+    -> episode sampling (randomize=True)
+    -> action delay and actuator fault
+    -> observation delay and noise
 ```
 
-`core` imports no scenario or optional training dependency. Scenarios own
-models and Task definitions. Controllers consume an already-resolved
-environment. Workflows own persistent artifacts and share one policy-target
-contract resolver.
+Every mode of one Scenario keeps the same observation and physical action
+meaning. `quadruple` uses an 8-dimensional observation and two pump actions.
+`three_tank` uses a 17-dimensional observation and five physical actions.
 
-## Runtime channels
+Policy actions pass through action delay and loss-of-effectiveness before the
+base environment applies physical actuator slew limits. Step info distinguishes
+the original `commanded_action`, the delivered `channel_action`, and the final
+`applied_action`. Observation noise is normalized policy-channel noise, not a
+claim about a particular physical sensor. Controllers consume the same noisy
+observation exposed to every other policy.
 
-State, observation, action, reward, and formal metrics are separate:
+Episode, observation, delay, and fault sampling use independent random streams.
+For the same reset seed, enabling observation noise does not change the sampled
+episode.
 
-- the state is integrated by the physical model;
-- the observation is the policy-facing measurement;
-- a policy returns a public action in `env.action_space`;
-- a model may expand that public action into private physical slots;
-- reward is the Task's per-transition learning signal;
-- evaluation accumulates formal episode metrics.
+## Benchmark and training boundary
 
-`control_dt` is the policy cadence. Smaller internal integration steps do not
-change action cadence or Dataset transition cadence.
+Each Scenario owns exactly:
 
-## Schedule semantics
+- `tracking`;
+- `disturbance-rejection`;
+- `boundary-safety`.
 
-At reset, event `schedule[0]` is applied before `observation_0` is returned.
-For action `k`, the policy sees schedule state `k`; integration and reward use
-that same transition context. The environment then applies `schedule[k+1]`
-before returning the next observation. Step info distinguishes:
+Benchmarks are fixed and evaluation-only. They always use the Scenario's
+default resolved model parameters, default Reward, and Benchmark-declared
+measurement noise. `make_env()` rejects caller overrides of parameters, Reward,
+randomization, or channel variation, and `train()` rejects a benchmark
+environment. Randomized training episodes cover the same three challenge
+families without copying the fixed benchmark timelines and values.
 
-- `transition_reference` / `transition_disturbance`: context used by the action,
-  dynamics, and reward;
-- `reference` / `disturbance`: context represented by the returned observation.
+Safety constraints are evaluated before the Reward result is finalized. A
+terminal safety violation adds the Reward's explicit safety penalty. Formal
+benchmark metrics include unsafe rate, safety margin, time to violation,
+tracking error, and disturbance recovery where applicable.
 
-## Policy target contracts
+## Workflow boundary
 
-Bound PID/MPC policies must exactly match every explicitly requested selector.
-Checkpoint Task and interface hashes always match strictly. Plant and condition
-transfer are rejected by default and require explicit flags; those flags and
-both contracts are written to evaluation results and Dataset manifests.
+Python workflows receive an environment constructed by the caller. They never
+reconstruct it from names and never close it. The CLI parses arguments, creates
+one environment, calls one workflow, closes the environment, and prints JSON.
 
-There is no runtime Track, Anchor, Goal registry, RewardSpec registry, Case
-registry, Distribution registry, Claim, Scorecard, final-test lock, or ranking
-layer.
+Artifacts are deliberately small:
+
+- Dataset: `metadata.json` plus one `episode-*.npz` per episode;
+- training: `model.zip`, `metadata.json`, `training_curve.json`, and a
+  dependency-free `training_curve.svg`;
+- evaluation: one JSON file with raw per-seed trajectories and summaries;
+- comparison: `comparison.json` and `comparison.svg`; benchmark comparisons
+  default to `runs/<scenario>/<benchmark>/` and replace those two managed files.
+
+There is one evaluation path. Without `benchmark=`, metrics come from Reward.
+With `benchmark=`, metrics and lexicographic ranking come from Benchmark.
+Comparison reuses those evaluation results, ranks metric medians, and overlays
+trajectory medians with seed-wise minimum/maximum bands.
+
+## Experimental hardware
+
+Hardware transport, calibration, and real-log code lives under
+`aiogym.experimental.three_tank_hardware`. The hardware environment uses the
+Three-Tank tracking benchmark protocol, including its complete six-output
+steady references, and is not imported by the default package.

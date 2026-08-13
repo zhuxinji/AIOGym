@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 import aiogym
+from aiogym.core.specs import EpisodeSpec
 
 
 GOLDEN = json.loads(
@@ -17,12 +18,17 @@ GOLDEN = json.loads(
 
 
 def test_quadruple_phase0_fixture_is_reproducible():
-    env = aiogym.make_env(
-        "quadruple/regulation",
-        condition=GOLDEN["condition"],
-    )
+    env = aiogym.make_env("quadruple", reward="regulation")
     try:
-        observation, _ = env.reset(seed=GOLDEN["seed"])
+        source = GOLDEN["condition"]
+        episode = EpisodeSpec(
+            initial_state=tuple(source["initial_state"]),
+            reference=tuple(source["reference"]),
+            horizon=source["horizon"],
+        )
+        observation, _ = env.reset(
+            seed=GOLDEN["seed"], options={"episode": episode}
+        )
         assert observation == pytest.approx(GOLDEN["initial_observation"], abs=1e-8)
 
         action = np.asarray(GOLDEN["fixed_action"], dtype=np.float32)

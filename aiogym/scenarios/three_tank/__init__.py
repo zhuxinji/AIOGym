@@ -1,4 +1,9 @@
+from .definition import SCENARIO
 from .model import ThreeTankModel
-from .plugin import PLUGIN
+from .wrappers import Tank3ResidualWrapper
 
-__all__ = ["PLUGIN", "ThreeTankModel"]
+__all__ = [
+    "SCENARIO",
+    "Tank3ResidualWrapper",
+    "ThreeTankModel",
+]

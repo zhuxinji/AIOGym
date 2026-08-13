@@ -1,13 +1,18 @@
 # AIO-Gym documentation
 
-AIO-Gym 0.4 follows one Scenario -> PlantConfig -> OperatingCondition -> Task -> Run path.
+Start with the [Quickstart](quickstart.md), then use:
 
-- [Quickstart](quickstart.md) — environments, Dataset v4, contracts, and SB3.
-- [Architecture](architecture.md) — package boundaries, identity, and schedule semantics.
-- [Plant design](design.md) — condition-bound studies and sweeps.
-- [Unified three-tank](three-tank.md) — topology, actuators, and economics.
-- [Migration to 0.4](migration-v0.4.md) — intentional identity and schema changes.
-- [Migration to 0.3](migration-v0.3.md) — historical three-tank ID transition.
+- [Architecture](architecture.md) for module and data-flow boundaries;
+- [Reproducibility](reproducibility.md) for the metadata that is recorded.
 
-The supported CLI consists of `list`, `design`, `collect`, `train`, and
-`evaluate`.
+Scenario-specific documentation lives under `docs/scenarios/`, with one page
+named after each Scenario id:
+
+- [Quadruple-Tank](scenarios/quadruple.md);
+- [Three-Tank](scenarios/three_tank.md).
+
+The public pipeline is:
+
+```text
+make_env -> rollout -> collect/train -> load -> evaluate/compare
+```

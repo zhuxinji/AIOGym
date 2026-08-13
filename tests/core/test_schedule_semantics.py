@@ -3,16 +3,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from aiogym.core import (
-    ResolvedPlant,
-    ScenarioPlugin,
-    TaskSpec,
-    make_env,
-    register_scenario,
-    rollout,
-    unregister_scenario,
-)
-from aiogym.workflows import DatasetReader, collect
+from aiogym.core.contracts import Scenario
+from aiogym.core.env import make_env
+from aiogym.core.registry import register_scenario, unregister_scenario
+from aiogym.core.rollout import rollout
+from aiogym.core.specs import Benchmark, EpisodeSpec, Reward
+from aiogym.scenarios._metrics import regulation_episode_metrics
+from aiogym.workflows import DatasetReader, collect, evaluate
 
 
 REWARD_CONTEXTS = []
@@ -20,6 +17,12 @@ REWARD_CONTEXTS = []
 
 class ScheduleModel:
     scenario = "schedule-toy"
+    dt_micro = 1.0
+
+    def __init__(self, parameters=None):
+        if parameters:
+            raise ValueError("schedule toy has no parameters")
+        self.resolved_parameters = {}
 
     def initial_state(self):
         return [0.0]
@@ -37,16 +40,15 @@ class ScheduleModel:
     def state_schema(self):
         return [{"name": "x", "low": -100.0, "high": 100.0}]
 
-    def observation_schema(self, condition):
-        del condition
+    def observation_schema(self):
         return [
             {"name": "x", "low": -100.0, "high": 100.0},
             {"name": "reference", "low": 0.0, "high": 1.0},
             {"name": "gain", "low": 0.0, "high": 10.0},
         ]
 
-    def observation(self, state, reference, previous_action, disturbances, condition):
-        del previous_action, condition
+    def observation(self, state, reference, previous_action, disturbances):
+        del previous_action
         return [float(state[0]), float(reference[0]), float(disturbances["gain"])]
 
     def default_action(self):
@@ -55,11 +57,36 @@ class ScheduleModel:
     def default_setpoint_vector(self):
         return [0.1]
 
+    def controlled_output_scales(self):
+        return [1.0]
+
     def default_disturbances(self):
         return {"gain": 1.0}
 
+    def output_schema(self):
+        return [{"name": "x", "low": -100.0, "high": 100.0}]
+
+    def action_slew_limits(self):
+        return None
+
+    def clamp_state(self, state):
+        return state
+
+    def constraint_costs(self, state, disturbances):
+        del state, disturbances
+        return {}
+
+    def safety_margins(self, state, disturbances):
+        del state, disturbances
+        return {"state": 1.0}
+
+    def step_info(self, state, action, disturbances):
+        del action, disturbances
+        return {"y": self.outputs(state), "energy_kw": 0.0}
 
 class RecordingPolicy:
+    env = None
+
     def __init__(self):
         self.calls = []
 
@@ -98,60 +125,56 @@ def _reward(state, action, next_state, context):
 
 
 @pytest.fixture
-def schedule_plugin():
+def schedule_scenario():
     unregister_scenario("schedule-toy")
     REWARD_CONTEXTS.clear()
-    task = TaskSpec(
-        id="schedule-toy/regulation",
-        scenario="schedule-toy",
-        objective="regulation",
-        reward=_reward,
-        metrics=("return",),
+    reward = Reward(
+        id="regulation",
+        function=_reward,
+        episode_metric_function=regulation_episode_metrics,
         primary_metric="return",
         metric_direction="maximize",
     )
-    plugin = ScenarioPlugin(
-        id="schedule-toy",
-        make_model=lambda plant: ScheduleModel(),
-        default_plant=lambda: {
-            "schema_version": "aiogym.plant.v2",
-            "id": "schedule-plant",
-            "scenario": "schedule-toy",
-            "plant": {},
-            "conditions": {
-                "scheduled": {
-                    "id": "scheduled",
-                    "initial_state": [0.0],
-                    "reference": [0.1],
-                    "control_dt": 1.0,
-                    "horizon": 3,
-                    "disturbances": {"gain": 2.0},
-                    "reference_schedule": {
-                        0: [0.2],
-                        1: [0.4],
-                        2: [0.6],
-                    },
-                    "disturbance_schedule": {
-                        0: {"gain": 4.0},
-                        1: {"gain": 5.0},
-                        2: {"gain": 6.0},
-                    },
-                }
-            },
-            "default_condition": "scheduled",
+    episode = EpisodeSpec(
+        initial_state=(0.0,),
+        reference=(0.1,),
+        horizon=3,
+        disturbances={"gain": 2.0},
+        reference_schedule={0: (0.2,), 1: (0.4,), 2: (0.6,)},
+        disturbance_schedule={
+            0: {"gain": 4.0},
+            1: {"gain": 5.0},
+            2: {"gain": 6.0},
         },
-        resolve_plant=lambda config: ResolvedPlant(config, config.plant),
-        tasks={"regulation": task},
     )
-    register_scenario(plugin)
+    benchmarks = {
+        name: Benchmark(
+            id=name,
+            make_episode=lambda model, value=episode: value,
+            metric_function=regulation_episode_metrics,
+            ranking_metrics=(("tracking_iae", "minimize"),),
+        )
+        for name in ("tracking", "disturbance-rejection", "boundary-safety")
+    }
+    scenario = Scenario(
+        id="schedule-toy",
+        make_model=ScheduleModel,
+        control_dt=1.0,
+        make_default_episode=lambda model: episode,
+        sample_training_episode=lambda model, rng: (episode, "tracking"),
+        benchmarks=benchmarks,
+        rewards={"regulation": reward},
+        default_reward="regulation",
+    )
+    register_scenario(scenario)
     try:
         yield
     finally:
         unregister_scenario("schedule-toy")
 
 
-def test_events_are_visible_before_corresponding_actions(schedule_plugin):
-    env = make_env("schedule-toy/regulation")
+def test_events_are_visible_before_corresponding_actions(schedule_scenario):
+    env = make_env("schedule-toy")
     env.set_disturbances({"gain": 3.0})
     policy = RecordingPolicy()
     try:
@@ -209,21 +232,23 @@ def test_events_are_visible_before_corresponding_actions(schedule_plugin):
     ]
 
 
-def test_dataset_v4_records_both_transition_and_next_contexts(
-    schedule_plugin, tmp_path
+def test_dataset_records_both_transition_and_next_contexts(
+    schedule_scenario, tmp_path
 ):
-    result = collect(
-        task="schedule-toy/regulation",
-        policy=RecordingPolicy(),
-        episodes=1,
-        output=tmp_path / "schedule-v4",
-        max_steps=3,
-    )
-    reader = DatasetReader(result["path"], verify_checksums=True)
+    env = make_env("schedule-toy")
+    try:
+        result = collect(
+            env=env,
+            policy=RecordingPolicy(),
+            episodes=1,
+            output=tmp_path / "schedule",
+            max_steps=3,
+        )
+    finally:
+        env.close()
+    reader = DatasetReader(result["path"])
     episode = reader.load_episode(0)
-    assert reader.manifest["schema_version"] == "aiogym.dataset.v4"
-    assert reader.manifest["schedule_semantics"] == "pre-action-v1"
-    assert episode.metadata["schema_version"] == "aiogym.dataset.episode.v4"
+    assert reader.metadata["schema_version"] == "aiogym.dataset.v2"
     assert np.allclose(
         episode.array("transition_reference"), [[0.2], [0.4], [0.6]]
     )
@@ -236,9 +261,28 @@ def test_dataset_v4_records_both_transition_and_next_contexts(
     assert episode.array("disturbance").tolist() == [[5.0], [6.0], [6.0]]
 
 
+def test_evaluation_metrics_use_the_same_transition_reference_as_reward(
+    schedule_scenario,
+):
+    env = make_env("schedule-toy", reward="regulation")
+    try:
+        result = evaluate(
+            env=env,
+            policy=RecordingPolicy(),
+            seeds=(0,),
+            max_steps=3,
+        )
+    finally:
+        env.close()
+    assert result["schema_version"] == "aiogym.evaluation.v3"
+    assert result["episodes"][0]["metrics"]["tracking_iae"] == pytest.approx(
+        8.8
+    )
+
+
 def test_quadruple_schedule_changes_context_at_declared_physical_time():
-    env = make_env("quadruple/regulation", condition="minimum-phase")
-    action = np.asarray(env.model.default_action(), dtype=np.float32)
+    env = make_env("quadruple", benchmark="tracking")
+    action = np.asarray(env.unwrapped.model.default_action(), dtype=np.float32)
     try:
         _, info = env.reset(seed=0)
         initial_reference = info["reference"].copy()
@@ -249,9 +293,7 @@ def test_quadruple_schedule_changes_context_at_declared_physical_time():
         assert info["step_index"] == 120
         assert info["physical_time"] == 120.0
         assert info["transition_reference"] == pytest.approx(initial_reference)
-        assert info["reference"] == pytest.approx(
-            [13.2629675195507, 11.783158403008972]
-        )
+        assert info["reference"] == pytest.approx([16.0, 10.0])
         _, _, _, _, next_info = env.step(action)
         assert next_info["transition_reference"] == pytest.approx(info["reference"])
         assert next_info["transition_step_index"] == 120

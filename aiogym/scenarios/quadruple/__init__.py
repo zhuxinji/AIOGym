@@ -1,4 +1,4 @@
 from .model import QuadrupleModel
-from .plugin import PLUGIN
+from .definition import SCENARIO
 
-__all__ = ["PLUGIN", "QuadrupleModel"]
+__all__ = ["QuadrupleModel", "SCENARIO"]

@@ -4,283 +4,74 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 import math
-from pathlib import Path
-from types import MappingProxyType
 from typing import Any, Literal
 
-from .io import deep_freeze, deep_thaw, stable_hash
+from .io import deep_freeze, deep_thaw
 
 
-PLANT_SCHEMA_VERSION = "aiogym.plant.v2"
 MetricDirection = Literal["minimize", "maximize"]
 RewardFunction = Callable[
     [Sequence[float], Sequence[float], Sequence[float], Mapping[str, Any]],
     float | tuple[float, Mapping[str, float]],
 ]
-
-
-def _mapping(value: Mapping[str, Any] | None) -> Mapping[str, Any]:
-    return MappingProxyType(dict(value or {}))
-
-
-def _deep_mapping(value: Mapping[str, Any] | None) -> Mapping[str, Any]:
-    return deep_freeze(value or {})
+EpisodeMetricFunction = Callable[[Any, Any], Mapping[str, float]]
+EpisodeFactory = Callable[[Any], "EpisodeSpec"]
 
 
 @dataclass(frozen=True)
-class PlantConfig:
-    id: str
-    scenario: str
-    plant: Mapping[str, Any]
-    description: str = ""
-    conditions: Mapping[str, Any] = field(default_factory=dict)
-    default_condition: str = ""
-    study: Mapping[str, Any] = field(default_factory=dict)
-    references: tuple[Any, ...] = ()
-    schema_version: str = PLANT_SCHEMA_VERSION
-    plant_hash: str = field(init=False)
-    condition_hashes: Mapping[str, str] = field(init=False)
-    study_hash: str = field(init=False)
-    config_hash: str = field(init=False)
+class EpisodeSpec:
+    """One fully resolved process episode.
 
-    def __post_init__(self) -> None:
-        if self.schema_version != PLANT_SCHEMA_VERSION:
-            raise ValueError(
-                f"schema_version must be {PLANT_SCHEMA_VERSION!r}, got {self.schema_version!r}"
-            )
-        if not isinstance(self.id, str) or not self.id.strip():
-            raise ValueError("plant id must be a non-empty string")
-        if not isinstance(self.scenario, str) or not self.scenario.strip():
-            raise ValueError("plant scenario must be a non-empty string")
-        object.__setattr__(self, "plant", _deep_mapping(self.plant))
-        conditions = {
-            str(name): (
-                value
-                if isinstance(value, OperatingCondition)
-                else OperatingCondition.from_mapping(value, default_id=str(name))
-            )
-            for name, value in self.conditions.items()
-        }
-        if self.default_condition and self.default_condition not in conditions:
-            raise ValueError("default_condition must be declared in conditions")
-        object.__setattr__(self, "conditions", MappingProxyType(conditions))
-        object.__setattr__(self, "study", _deep_mapping(self.study))
-        object.__setattr__(self, "references", deep_freeze(self.references))
-        object.__setattr__(
-            self,
-            "plant_hash",
-            stable_hash({"scenario": self.scenario, "plant": self.plant}),
-        )
-        object.__setattr__(
-            self,
-            "condition_hashes",
-            MappingProxyType(
-                {name: condition.condition_hash for name, condition in conditions.items()}
-            ),
-        )
-        object.__setattr__(self, "study_hash", stable_hash(self.study))
-        object.__setattr__(
-            self, "config_hash", stable_hash(self.as_dict(include_hash=False))
-        )
+    This is an internal runtime value. Public environment selection is expressed
+    through ``benchmark=`` or ``randomize=True`` rather than named episodes.
+    """
 
-    @classmethod
-    def from_mapping(cls, value: Mapping[str, Any]) -> "PlantConfig":
-        allowed = {
-            "schema_version",
-            "id",
-            "scenario",
-            "description",
-            "plant",
-            "conditions",
-            "default_condition",
-            "study",
-            "references",
-            "plant_hash",
-            "condition_hashes",
-            "study_hash",
-            "config_hash",
-        }
-        unknown = set(value) - allowed
-        if unknown:
-            raise ValueError(f"unknown PlantConfig fields: {sorted(unknown)}")
-        schema = str(value.get("schema_version", PLANT_SCHEMA_VERSION))
-        if schema != PLANT_SCHEMA_VERSION:
-            raise ValueError(f"unsupported PlantConfig schema_version {schema!r}")
-        config = cls(
-            schema_version=PLANT_SCHEMA_VERSION,
-            id=str(value.get("id", "")),
-            scenario=str(value.get("scenario", "")),
-            description=str(value.get("description", "")),
-            plant=dict(value.get("plant", {})),
-            conditions=dict(value.get("conditions", {})),
-            default_condition=str(value.get("default_condition", "")),
-            study=dict(value.get("study", {})),
-            references=tuple(value.get("references", ())),
-        )
-        declared = value.get("plant_hash")
-        if declared is not None and str(declared) != config.plant_hash:
-            raise ValueError("declared plant_hash does not match resolved PlantConfig")
-        declared_condition_hashes = value.get("condition_hashes")
-        if declared_condition_hashes is not None:
-            if not isinstance(declared_condition_hashes, Mapping):
-                raise ValueError("declared condition_hashes must be a mapping")
-            declared_hashes = {
-                str(name): str(hash_value)
-                for name, hash_value in declared_condition_hashes.items()
-            }
-            expected_hashes = dict(config.condition_hashes)
-            if declared_hashes.keys() != expected_hashes.keys():
-                raise ValueError(
-                    "declared condition_hashes keys do not match resolved PlantConfig"
-                )
-            mismatched = [
-                name
-                for name, expected in expected_hashes.items()
-                if declared_hashes[name] != expected
-            ]
-            if mismatched:
-                raise ValueError(
-                    "declared condition_hashes do not match resolved PlantConfig: "
-                    + ", ".join(sorted(mismatched))
-                )
-        for field_name in ("study_hash", "config_hash"):
-            declared_hash = value.get(field_name)
-            if declared_hash is not None and str(declared_hash) != getattr(
-                config, field_name
-            ):
-                raise ValueError(
-                    f"declared {field_name} does not match resolved PlantConfig"
-                )
-        return config
-
-    def as_dict(self, *, include_hash: bool = True) -> dict[str, Any]:
-        payload = {
-            "schema_version": self.schema_version,
-            "id": self.id,
-            "scenario": self.scenario,
-            "description": self.description,
-            "plant": deep_thaw(self.plant),
-            "conditions": {
-                name: condition.as_dict(include_hash=False)
-                for name, condition in sorted(self.conditions.items())
-            },
-            "default_condition": self.default_condition,
-            "study": deep_thaw(self.study),
-            "references": deep_thaw(self.references),
-        }
-        if include_hash:
-            payload["plant_hash"] = self.plant_hash
-            payload["condition_hashes"] = dict(self.condition_hashes)
-            payload["study_hash"] = self.study_hash
-            payload["config_hash"] = self.config_hash
-        return payload
-
-
-@dataclass(frozen=True)
-class OperatingCondition:
-    id: str
     initial_state: tuple[float, ...]
     reference: tuple[float, ...]
-    control_dt: float
     horizon: int
     disturbances: Mapping[str, float] = field(default_factory=dict)
     reference_schedule: Mapping[int, tuple[float, ...]] = field(default_factory=dict)
     disturbance_schedule: Mapping[int, Mapping[str, float]] = field(
         default_factory=dict
     )
-    observation: str = "state-reference-disturbance"
-    condition_hash: str = field(init=False)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.id, str) or not self.id.strip():
-            raise ValueError("condition id must be a non-empty string")
         initial_state = _finite_tuple("initial_state", self.initial_state)
         reference = _finite_tuple("reference", self.reference)
-        control_dt = float(self.control_dt)
-        if not math.isfinite(control_dt) or control_dt <= 0:
-            raise ValueError("control_dt must be finite and positive")
-        if isinstance(self.horizon, bool) or int(self.horizon) <= 0:
+        if isinstance(self.horizon, bool) or int(self.horizon) != self.horizon:
+            raise ValueError("horizon must be a positive integer")
+        horizon = int(self.horizon)
+        if horizon <= 0:
             raise ValueError("horizon must be a positive integer")
         disturbances = _finite_mapping("disturbances", self.disturbances)
-        reference_schedule = {}
+        reference_schedule: dict[int, tuple[float, ...]] = {}
         for raw_step, values in self.reference_schedule.items():
-            step = _schedule_step(raw_step, int(self.horizon))
+            step = _schedule_step(raw_step, horizon)
             resolved = _finite_tuple(f"reference_schedule[{step}]", values)
             if len(resolved) != len(reference):
                 raise ValueError("scheduled references must match reference length")
             reference_schedule[step] = resolved
-        disturbance_schedule = {}
+        disturbance_schedule: dict[int, dict[str, float]] = {}
         for raw_step, values in self.disturbance_schedule.items():
-            step = _schedule_step(raw_step, int(self.horizon))
+            step = _schedule_step(raw_step, horizon)
             disturbance_schedule[step] = _finite_mapping(
                 f"disturbance_schedule[{step}]", values
             )
         object.__setattr__(self, "initial_state", initial_state)
         object.__setattr__(self, "reference", reference)
-        object.__setattr__(self, "control_dt", control_dt)
-        object.__setattr__(self, "horizon", int(self.horizon))
+        object.__setattr__(self, "horizon", horizon)
         object.__setattr__(self, "disturbances", deep_freeze(disturbances))
         object.__setattr__(
             self, "reference_schedule", deep_freeze(reference_schedule)
         )
         object.__setattr__(
-            self,
-            "disturbance_schedule",
-            deep_freeze(disturbance_schedule),
-        )
-        object.__setattr__(
-            self, "condition_hash", stable_hash(self.as_dict(include_hash=False))
+            self, "disturbance_schedule", deep_freeze(disturbance_schedule)
         )
 
-    @classmethod
-    def from_mapping(
-        cls, value: Mapping[str, Any], *, default_id: str = ""
-    ) -> "OperatingCondition":
-        allowed = {
-            "id",
-            "initial_state",
-            "reference",
-            "control_dt",
-            "horizon",
-            "disturbances",
-            "reference_schedule",
-            "disturbance_schedule",
-            "observation",
-            "condition_hash",
-        }
-        unknown = set(value) - allowed
-        if unknown:
-            raise ValueError(f"unknown OperatingCondition fields: {sorted(unknown)}")
-        condition = cls(
-            id=str(value.get("id", default_id)),
-            initial_state=tuple(value.get("initial_state", ())),
-            reference=tuple(value.get("reference", ())),
-            control_dt=float(value.get("control_dt", 0.0)),
-            horizon=value.get("horizon", 0),
-            disturbances=dict(value.get("disturbances", {})),
-            reference_schedule={
-                int(step): tuple(values)
-                for step, values in value.get("reference_schedule", {}).items()
-            },
-            disturbance_schedule={
-                int(step): dict(values)
-                for step, values in value.get("disturbance_schedule", {}).items()
-            },
-            observation=str(
-                value.get("observation", "state-reference-disturbance")
-            ),
-        )
-        declared = value.get("condition_hash")
-        if declared is not None and str(declared) != condition.condition_hash:
-            raise ValueError("declared condition_hash does not match condition")
-        return condition
-
-    def as_dict(self, *, include_hash: bool = True) -> dict[str, Any]:
-        payload = {
-            "id": self.id,
+    def as_dict(self) -> dict[str, Any]:
+        return {
             "initial_state": list(self.initial_state),
             "reference": list(self.reference),
-            "control_dt": self.control_dt,
             "horizon": self.horizon,
             "disturbances": deep_thaw(self.disturbances),
             "reference_schedule": {
@@ -291,11 +82,86 @@ class OperatingCondition:
                 str(step): deep_thaw(values)
                 for step, values in sorted(self.disturbance_schedule.items())
             },
-            "observation": self.observation,
         }
-        if include_hash:
-            payload["condition_hash"] = self.condition_hash
-        return payload
+
+
+@dataclass(frozen=True)
+class Benchmark:
+    """A fixed evaluation protocol owned by one scenario."""
+
+    id: str
+    make_episode: EpisodeFactory
+    metric_function: EpisodeMetricFunction
+    ranking_metrics: tuple[tuple[str, MetricDirection], ...]
+    measurement_noise: Mapping[str, float] | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.id, str) or not self.id.strip() or "/" in self.id:
+            raise ValueError("benchmark id must be a non-empty local name")
+        if not callable(self.make_episode):
+            raise TypeError("benchmark make_episode must be callable")
+        if not callable(self.metric_function):
+            raise TypeError("benchmark metric_function must be callable")
+        if not self.ranking_metrics:
+            raise ValueError("benchmark must declare at least one ranking metric")
+        names: set[str] = set()
+        for name, direction in self.ranking_metrics:
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("ranking metric names must be non-empty strings")
+            if name in names:
+                raise ValueError("benchmark ranking metric names must be unique")
+            if direction not in {"minimize", "maximize"}:
+                raise ValueError("ranking metric direction must be minimize or maximize")
+            names.add(name)
+        if self.measurement_noise is None:
+            noise = None
+        elif not isinstance(self.measurement_noise, Mapping):
+            raise TypeError("benchmark measurement_noise must be a mapping or None")
+        else:
+            noise = {str(name): float(value) for name, value in self.measurement_noise.items()}
+            if set(noise) != {"std", "bias_std"}:
+                raise ValueError(
+                    "benchmark measurement_noise must contain exactly std and bias_std"
+                )
+            if not all(math.isfinite(value) and value >= 0.0 for value in noise.values()):
+                raise ValueError(
+                    "benchmark measurement_noise values must be finite and non-negative"
+                )
+            noise = deep_freeze(noise)
+        object.__setattr__(self, "measurement_noise", noise)
+
+
+@dataclass(frozen=True)
+class Reward:
+    id: str
+    function: RewardFunction
+    episode_metric_function: EpisodeMetricFunction | None = None
+    primary_metric: str | None = None
+    metric_direction: MetricDirection = "minimize"
+    safety_violation_penalty: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.id, str) or not self.id.strip() or "/" in self.id:
+            raise ValueError("reward id must be a non-empty local name")
+        if not callable(self.function):
+            raise TypeError("reward function must be callable")
+        if self.metric_direction not in {"minimize", "maximize"}:
+            raise ValueError("metric_direction must be minimize or maximize")
+        if self.episode_metric_function is not None and not callable(
+            self.episode_metric_function
+        ):
+            raise TypeError("episode_metric_function must be callable")
+        if self.primary_metric is not None and (
+            not isinstance(self.primary_metric, str)
+            or not self.primary_metric.strip()
+        ):
+            raise ValueError("primary_metric must be a non-empty string or None")
+        if self.episode_metric_function is None and self.primary_metric is not None:
+            raise ValueError("primary_metric requires an episode_metric_function")
+        penalty = float(self.safety_violation_penalty)
+        if not math.isfinite(penalty) or penalty < 0:
+            raise ValueError("safety_violation_penalty must be finite and non-negative")
+        object.__setattr__(self, "safety_violation_penalty", penalty)
 
 
 def _finite_tuple(name: str, values: Sequence[float]) -> tuple[float, ...]:
@@ -321,170 +187,11 @@ def _schedule_step(value: Any, horizon: int) -> int:
     return step
 
 
-@dataclass(frozen=True)
-class ResolvedPlant:
-    config: PlantConfig
-    parameters: Mapping[str, Any]
-    provenance: Mapping[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "parameters", _deep_mapping(self.parameters))
-        object.__setattr__(self, "provenance", _deep_mapping(self.provenance))
-
-    @property
-    def id(self) -> str:
-        return self.config.id
-
-    @property
-    def scenario(self) -> str:
-        return self.config.scenario
-
-    @property
-    def plant_hash(self) -> str:
-        return self.config.plant_hash
-
-
-@dataclass(frozen=True)
-class TaskSpec:
-    id: str
-    scenario: str
-    objective: str
-    reward: RewardFunction
-    metrics: tuple[str, ...]
-    primary_metric: str
-    metric_direction: MetricDirection
-    revision: int = 1
-    reward_id: str = "reward-v1"
-    metric_suite_id: str = "metrics-v1"
-    required_capabilities: tuple[str, ...] = ()
-    reward_term_names: tuple[str, ...] = ()
-    objective_config: Mapping[str, Any] = field(default_factory=dict)
-    task_hash: str = field(init=False)
-
-    def __post_init__(self) -> None:
-        if self.id != f"{self.scenario}/{self.objective}":
-            raise ValueError("task id must use '<scenario>/<objective>'")
-        if self.metric_direction not in {"minimize", "maximize"}:
-            raise ValueError("metric_direction must be minimize or maximize")
-        if self.primary_metric not in self.metrics:
-            raise ValueError("primary_metric must appear in metrics")
-        if isinstance(self.revision, bool) or int(self.revision) <= 0:
-            raise ValueError("revision must be a positive integer")
-        if not self.reward_id or not self.metric_suite_id:
-            raise ValueError("reward_id and metric_suite_id must be non-empty")
-        object.__setattr__(self, "metrics", tuple(self.metrics))
-        object.__setattr__(self, "required_capabilities", tuple(self.required_capabilities))
-        object.__setattr__(self, "reward_term_names", tuple(self.reward_term_names))
-        object.__setattr__(self, "objective_config", deep_freeze(self.objective_config))
-        object.__setattr__(self, "task_hash", stable_hash(self.identity()))
-
-    def identity(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "objective": self.objective,
-            "revision": int(self.revision),
-            "reward_id": self.reward_id,
-            "metric_suite_id": self.metric_suite_id,
-            "reward_term_names": list(self.reward_term_names),
-            "metrics": list(self.metrics),
-            "primary_metric": self.primary_metric,
-            "metric_direction": self.metric_direction,
-            "required_capabilities": list(self.required_capabilities),
-            "objective_config": deep_thaw(self.objective_config),
-        }
-
-
-@dataclass(frozen=True)
-class EnvironmentIdentity:
-    task_id: str
-    task_hash: str
-    plant_id: str
-    plant_hash: str
-    condition_id: str
-    condition_hash: str
-    interface_hash: str
-    integrator_id: str = "rk4-v1"
-    env_hash: str = field(init=False)
-
-    def __post_init__(self) -> None:
-        for name in (
-            "task_id",
-            "task_hash",
-            "plant_id",
-            "plant_hash",
-            "condition_id",
-            "condition_hash",
-            "interface_hash",
-            "integrator_id",
-        ):
-            if not str(getattr(self, name)).strip():
-                raise ValueError(f"{name} must be non-empty")
-        object.__setattr__(
-            self,
-            "env_hash",
-            stable_hash(
-                {
-                    "task_hash": self.task_hash,
-                    "plant_hash": self.plant_hash,
-                    "condition_hash": self.condition_hash,
-                    "interface_hash": self.interface_hash,
-                    "integrator_id": self.integrator_id,
-                }
-            ),
-        )
-
-    def as_dict(self) -> dict[str, str]:
-        return {
-            "task_id": self.task_id,
-            "task_hash": self.task_hash,
-            "plant_id": self.plant_id,
-            "plant_hash": self.plant_hash,
-            "condition_id": self.condition_id,
-            "condition_hash": self.condition_hash,
-            "interface_hash": self.interface_hash,
-            "integrator_id": self.integrator_id,
-            "env_hash": self.env_hash,
-        }
-
-
-@dataclass(frozen=True)
-class RunResult:
-    workflow: str
-    output: Path | None
-    manifest: Mapping[str, Any]
-    metrics: Mapping[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "output", None if self.output is None else Path(self.output))
-        object.__setattr__(self, "manifest", _mapping(self.manifest))
-        object.__setattr__(self, "metrics", _mapping(self.metrics))
-
-
-@dataclass(frozen=True)
-class CheckResult:
-    name: str
-    category: str
-    passed: bool
-    summary: str
-    metrics: Mapping[str, Any] = field(default_factory=dict)
-    warnings: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        if not self.name or not self.category:
-            raise ValueError("check name and category must be non-empty")
-        object.__setattr__(self, "metrics", _mapping(self.metrics))
-        object.__setattr__(self, "warnings", tuple(self.warnings))
-
-
 __all__ = [
+    "Benchmark",
+    "EpisodeMetricFunction",
+    "EpisodeSpec",
     "MetricDirection",
-    "CheckResult",
-    "EnvironmentIdentity",
-    "OperatingCondition",
-    "PLANT_SCHEMA_VERSION",
-    "PlantConfig",
-    "ResolvedPlant",
+    "Reward",
     "RewardFunction",
-    "RunResult",
-    "TaskSpec",
 ]

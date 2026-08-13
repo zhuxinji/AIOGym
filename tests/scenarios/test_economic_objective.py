@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import replace
-
 import numpy as np
 import pytest
 
-from aiogym.core import get_task, make_env
+from aiogym.core.env import make_env
+from aiogym.core.registry import get_reward
 from aiogym.scenarios._shared import economic_reward
 from aiogym.workflows import evaluate
 
@@ -24,7 +23,7 @@ class FixedEconomicModel:
         return self.power_kw
 
 
-def _reward(*, flow, power, dt, value=100000.0, price=0.7):
+def _reward(*, flow, power, dt):
     return economic_reward(
         [0.0],
         [0.0],
@@ -36,11 +35,6 @@ def _reward(*, flow, power, dt, value=100000.0, price=0.7):
             ),
             "disturbances": {},
             "control_dt": dt,
-            "objective_config": {
-                "value_unit": "normalized_value",
-                "product_value_per_m3": value,
-                "electricity_price_per_kwh": price,
-            },
         },
     )
 
@@ -68,38 +62,19 @@ def test_zero_flow_and_zero_power_isolate_the_two_terms():
     assert product_only == product_terms["product_value"] > 0.0
 
 
-def test_economic_task_identity_contains_revision_units_and_coefficients():
-    task = get_task("three_tank/economic")
-    assert task.revision == 2
-    assert task.reward_id == "net-economic-value-v2"
-    assert task.metric_suite_id == "economic-core-v2"
-    assert task.objective_config == {
-        "value_unit": "normalized_value",
-        "product_value_per_m3": 100000.0,
-        "electricity_price_per_kwh": 0.7,
-    }
-    with pytest.raises(TypeError):
-        task.objective_config["product_value_per_m3"] = 1.0
-    changed = replace(
-        task,
-        objective_config={
-            **dict(task.objective_config),
-            "electricity_price_per_kwh": 0.8,
-        },
-    )
-    assert changed.task_hash != task.task_hash
-    assert task.identity()["objective_config"]["value_unit"] == "normalized_value"
+def test_economic_reward_has_only_the_public_metric_description():
+    reward = get_reward("three_tank", "economic")
+    assert reward.primary_metric == "economic_objective"
+    assert reward.metric_direction == "maximize"
+    assert callable(reward.function)
+    assert callable(reward.episode_metric_function)
 
 
-def test_open_cascade_economic_env_reports_integrated_units():
-    env = make_env(
-        "three_tank/economic",
-        plant="open-cascade-v1",
-        condition="continuous-benchmark",
-    )
+def test_three_tank_economic_env_reports_integrated_units():
+    env = make_env("three_tank", reward="economic")
     try:
         env.reset(seed=0)
-        action = np.asarray([0.5, 0.5, 0.5, 0.5, 0.0, 0.0, 0.0], dtype=np.float32)
+        action = np.asarray([0.5, 0.5, 0.5, 0.5, 0.0], dtype=np.float32)
         _, reward, _, _, info = env.step(action)
         terms = info["reward_terms"]
         assert reward == pytest.approx(sum(terms.values()))
@@ -113,16 +88,13 @@ def test_open_cascade_economic_env_reports_integrated_units():
     finally:
         env.close()
 
-    result = evaluate(
-        "pid",
-        task="three_tank/economic",
-        plant="open-cascade-v1",
-        condition="continuous-benchmark",
-        seeds=(0,),
-        max_steps=3,
-    )
+    env = make_env("three_tank", reward="economic")
+    try:
+        result = evaluate(env=env, policy="pid", seeds=(0,), max_steps=3)
+    finally:
+        env.close()
     metrics = result["episodes"][0]["metrics"]
-    assert result["schema_version"] == "aiogym.evaluation.v2"
+    assert result["schema_version"] == "aiogym.evaluation.v3"
     assert metrics["economic_objective"] == pytest.approx(metrics["return"])
     assert metrics["net_economic_value"] == pytest.approx(metrics["return"])
     assert metrics["product_value"] - metrics["energy_cost"] == pytest.approx(
@@ -132,47 +104,7 @@ def test_open_cascade_economic_env_reports_integrated_units():
     assert metrics["energy_kwh"] == pytest.approx(metrics["energy"])
 
 
-def test_non_product_flow_plant_cannot_create_economic_env():
-    with pytest.raises(ValueError, match="requires capability product_flow"):
-        make_env("three_tank/economic", plant="recirculating-h1-v1")
-
-
-class OldEconomicPolicy:
-    def __init__(self, contract):
-        self.contract = contract
-
-    def reset(self, seed=None):
-        del seed
-
-    def act(self, observation, context):
-        del observation, context
-        return np.zeros(7, dtype=np.float32)
-
-    def metadata(self):
-        return {"id": "old-economic", "training_contract": self.contract}
-
-
-def test_old_economic_training_contract_is_rejected_and_regulation_is_unchanged():
-    env = make_env(
-        "three_tank/economic",
-        plant="open-cascade-v1",
-        condition="continuous-benchmark",
-    )
-    try:
-        old_contract = env.identity.as_dict()
-    finally:
-        env.close()
-    old_contract["task_hash"] = "0" * 64
-    with pytest.raises(ValueError, match="task_hash"):
-        evaluate(
-            OldEconomicPolicy(old_contract),
-            task="three_tank/economic",
-            plant="open-cascade-v1",
-            condition="continuous-benchmark",
-            max_steps=1,
-        )
-
-    regulation = get_task("three_tank/regulation")
-    assert dict(regulation.objective_config) == {}
-    assert regulation.revision == 1
-    assert regulation.reward_id == "normalized-tracking-mse-v1"
+def test_regulation_reward_is_unchanged_by_economic_metrics():
+    regulation = get_reward("three_tank", "regulation")
+    assert regulation.primary_metric == "tracking_iae"
+    assert regulation.metric_direction == "minimize"

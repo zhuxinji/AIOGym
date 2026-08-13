@@ -1,130 +1,157 @@
-"""CLI adapters for collect, train, and evaluate."""
+"""Thin command-line adapters for collect, train, evaluate, and compare."""
 from __future__ import annotations
 
 import argparse
 import json
 from pathlib import Path
 
-from aiogym.core import jsonable
+from aiogym.core.io import jsonable
 
 
-def _common(parser):
-    parser.add_argument("task")
-    parser.add_argument("--plant")
-    parser.add_argument("--condition")
-    parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--allow-plant-transfer", action="store_true")
-    parser.add_argument("--allow-condition-transfer", action="store_true")
+def _environment_arguments(parser):
+    parser.add_argument("scenario")
+    parser.add_argument("--reward")
+    parser.add_argument("--parameters", type=Path)
+    parser.add_argument("--benchmark")
+    parser.add_argument("--randomize", action="store_true")
+    parser.add_argument("--noise", choices=("on", "off"), default="off")
+    parser.add_argument("--delay", choices=("on", "off"), default="off")
+    parser.add_argument("--fault", choices=("on", "off"), default="off")
 
 
 def _parser(command):
     parser = argparse.ArgumentParser(prog=f"aiogym {command}")
+    _environment_arguments(parser)
     if command == "collect":
-        _common(parser)
         parser.add_argument("--controller", default="random")
         parser.add_argument("--episodes", type=int, default=1)
         parser.add_argument("--seed", type=int, default=0)
         parser.add_argument("--max-steps", type=int)
-        parser.add_argument("--resume", action="store_true")
+        parser.add_argument("--output", required=True, type=Path)
     elif command == "train":
-        parser.add_argument("task", nargs="?")
-        parser.add_argument("algorithm", nargs="?")
-        parser.add_argument("--config", type=Path)
-        parser.add_argument("--plant")
-        parser.add_argument("--condition")
-        parser.add_argument("--steps", type=int)
-        parser.add_argument("--seed", type=int, default=None)
-        parser.add_argument("--eval-seeds", nargs="+", type=int)
-        parser.add_argument("--algorithm-kwargs", default=None)
-        parser.add_argument("--output", type=Path)
-        parser.add_argument("--force", action="store_true")
-    else:
-        _common(parser)
+        parser.add_argument("algorithm", choices=("sac", "ppo", "td3", "ddpg"))
+        parser.add_argument("--steps", required=True, type=int)
+        parser.add_argument("--seed", type=int, default=0)
+        parser.add_argument("--algorithm-kwargs", type=Path)
+        parser.add_argument("--record-every", type=int, default=500)
+        parser.add_argument("--output", required=True, type=Path)
+    elif command == "evaluate":
         source = parser.add_mutually_exclusive_group(required=True)
         source.add_argument("--controller")
         source.add_argument("--checkpoint", type=Path)
         parser.add_argument("--algorithm", choices=("sac", "ppo", "td3", "ddpg"))
-        parser.add_argument("--seeds", nargs="+", type=int, default=(0,))
+        parser.add_argument("--seeds", nargs="+", required=True, type=int)
         parser.add_argument("--max-steps", type=int)
-        parser.add_argument("--force", action="store_true")
+        parser.add_argument("--output", required=True, type=Path)
+    else:
+        parser.add_argument(
+            "--controllers",
+            nargs="+",
+            required=True,
+            choices=("hold", "mpc", "pid", "random"),
+        )
+        parser.add_argument("--seeds", nargs="+", required=True, type=int)
+        parser.add_argument("--max-steps", type=int)
+        parser.add_argument("--output", type=Path)
     return parser
 
 
-def _train_arguments(args, parser):
-    values = {}
-    if args.config:
-        values = json.loads(args.config.read_text(encoding="utf-8"))
-        if not isinstance(values, dict):
-            parser.error("training config must be a JSON object")
-    overrides = {
-        "task": args.task,
-        "algorithm": args.algorithm,
-        "plant": args.plant,
-        "condition": args.condition,
-        "steps": args.steps,
-        "seed": args.seed,
-        "eval_seeds": args.eval_seeds,
-        "output": args.output,
-    }
-    values.update({key: value for key, value in overrides.items() if value is not None})
-    if args.algorithm_kwargs is not None:
-        values["algorithm_kwargs"] = json.loads(args.algorithm_kwargs)
-    values["overwrite"] = args.force
-    required = {"task", "algorithm", "steps", "output"}
-    missing = sorted(required - set(values))
-    if missing:
-        parser.error("missing training values: " + ", ".join(missing))
-    return values
+def _json_object_file(path, parser, label):
+    if path is None:
+        return None
+    try:
+        payload = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        parser.error(f"could not read {label} {path}: {error}")
+    try:
+        value = json.loads(payload)
+    except json.JSONDecodeError as error:
+        parser.error(
+            f"{label} is not valid JSON: {error.msg} "
+            f"(line {error.lineno}, column {error.colno})"
+        )
+    if not isinstance(value, dict):
+        parser.error(f"{label} must be a JSON object")
+    return value
 
 
 def main(command, argv=None):
     parser = _parser(command)
     args = parser.parse_args(argv)
+    parameters = _json_object_file(args.parameters, parser, "parameters")
+    env = None
     try:
-        if command == "collect":
-            from aiogym import collect
+        import aiogym
 
-            result = collect(
-                task=args.task,
-                plant=args.plant,
-                condition=args.condition,
+        env = aiogym.make_env(
+            args.scenario,
+            reward=args.reward,
+            parameters=parameters,
+            benchmark=args.benchmark,
+            randomize=args.randomize,
+            noise=args.noise == "on",
+            delay=args.delay == "on",
+            fault=args.fault == "on",
+        )
+        if command == "collect":
+            result = aiogym.collect(
+                env=env,
                 policy=args.controller,
                 episodes=args.episodes,
                 seed=args.seed,
                 max_steps=args.max_steps,
                 output=args.output,
-                resume=args.resume,
-                allow_plant_transfer=args.allow_plant_transfer,
-                allow_condition_transfer=args.allow_condition_transfer,
             )
         elif command == "train":
-            from aiogym import train
-
-            result = train(**_train_arguments(args, parser))
-        else:
-            from aiogym import evaluate
-
-            policy = args.controller
-            if args.checkpoint:
-                if not args.algorithm:
+            algorithm_kwargs = _json_object_file(
+                args.algorithm_kwargs,
+                parser,
+                "algorithm kwargs",
+            )
+            result = aiogym.train(
+                env=env,
+                algorithm=args.algorithm,
+                steps=args.steps,
+                seed=args.seed,
+                algorithm_kwargs=algorithm_kwargs,
+                record_every=args.record_every,
+                output=args.output,
+            )
+        elif command == "evaluate":
+            if args.checkpoint is not None:
+                if args.algorithm is None:
                     parser.error("--algorithm is required with --checkpoint")
-                from aiogym.workflows import load_checkpoint
-
-                policy = load_checkpoint(args.checkpoint, algorithm=args.algorithm)
-            result = evaluate(
-                policy,
-                task=args.task,
-                plant=args.plant,
-                condition=args.condition,
+                policy = aiogym.load_policy(
+                    args.checkpoint,
+                    algorithm=args.algorithm,
+                    env=env,
+                )
+            else:
+                if args.algorithm is not None:
+                    parser.error("--algorithm is only valid with --checkpoint")
+                policy = args.controller
+            result = aiogym.evaluate(
+                env=env,
+                policy=policy,
                 seeds=args.seeds,
                 max_steps=args.max_steps,
                 output=args.output,
-                overwrite=args.force,
-                allow_plant_transfer=args.allow_plant_transfer,
-                allow_condition_transfer=args.allow_condition_transfer,
+            )
+        else:
+            if len(set(args.controllers)) != len(args.controllers):
+                parser.error("--controllers must not contain duplicates")
+            result = aiogym.compare_policies(
+                env=env,
+                policies={name: name for name in args.controllers},
+                seeds=args.seeds,
+                max_steps=args.max_steps,
+                output=args.output,
             )
     except (FileExistsError, FileNotFoundError, KeyError, TypeError, ValueError) as error:
         parser.error(str(error))
+    finally:
+        if env is not None:
+            env.close()
     print(json.dumps(jsonable(result), indent=2, sort_keys=True, allow_nan=False))
     return 0
 

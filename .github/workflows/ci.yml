@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -19,6 +20,8 @@ jobs:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -26,9 +29,19 @@ jobs:
           cache-dependency-path: pyproject.toml
       - run: python -m pip install -e ".[dev]"
       - run: python -m compileall -q aiogym
-      - run: python -m ruff check aiogym tests scripts
+      - run: python -m ruff check aiogym tests
       - run: python -m pytest -q
-      - run: git diff --check
+      - name: Check committed changes for whitespace errors
+        shell: bash
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            git diff --check "${{ github.event.pull_request.base.sha }}...HEAD"
+          elif [[ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]] \
+            && git cat-file -e "${{ github.event.before }}^{commit}" 2>/dev/null; then
+            git diff --check "${{ github.event.before }}...HEAD"
+          else
+            git show --check --format= HEAD
+          fi
 
   package:
     runs-on: ubuntu-latest
@@ -42,6 +55,17 @@ jobs:
       - run: python -m pip install build twine
       - run: python -m build
       - run: python -m twine check dist/*
+      - name: Release tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          python - <<'PY'
+          import os
+          import tomllib
+
+          with open("pyproject.toml", "rb") as handle:
+              version = tomllib.load(handle)["project"]["version"]
+          assert os.environ["GITHUB_REF_NAME"] == f"v{version}"
+          PY
       - run: python -m venv /tmp/aiogym-wheel-only
       - name: Install wheel outside the source tree
         working-directory: /tmp
@@ -51,16 +75,16 @@ jobs:
       - name: Wheel-only import, CLI, resources, and environment smoke
         working-directory: /tmp
         run: |
-          /tmp/aiogym-wheel-only/bin/python -c "import sys, aiogym; assert 'torch' not in sys.modules; assert 'stable_baselines3' not in sys.modules; print(aiogym.__version__)"
+          /tmp/aiogym-wheel-only/bin/python -c "import sys, aiogym; from importlib.metadata import version; assert version('aiogym') == aiogym.__version__; assert 'torch' not in sys.modules; assert 'stable_baselines3' not in sys.modules; print(aiogym.__version__)"
           /tmp/aiogym-wheel-only/bin/aiogym list scenarios
-          /tmp/aiogym-wheel-only/bin/aiogym list tasks
+          /tmp/aiogym-wheel-only/bin/aiogym list rewards --scenario three_tank
           /tmp/aiogym-wheel-only/bin/python - <<'PY'
           import numpy as np
           import aiogym
 
           env = aiogym.make_env(
-              "quadruple/regulation",
-              condition="minimum-phase",
+              "quadruple",
+              reward="regulation",
           )
           try:
               observation, _ = env.reset(seed=0)
@@ -74,19 +98,77 @@ jobs:
               assert next_observation.shape == env.observation_space.shape
               assert float(reward) == float(reward)
               policy = aiogym.make_controller("pid", env=env)
-              result = aiogym.evaluate(policy, seeds=(0,), max_steps=2)
-              assert result["episodes"][0]["steps"] == 2
+              result = aiogym.evaluate(
+                  env=env,
+                  policy=policy,
+                  seeds=(0,),
+                  max_steps=2,
+              )
+              assert result["episodes"][0]["length"] == 2
           finally:
               env.close()
           PY
+      - run: python -m venv /tmp/aiogym-sdist-only
+      - name: Install sdist outside the source tree
+        working-directory: /tmp
+        run: |
+          /tmp/aiogym-sdist-only/bin/python -m pip install "$GITHUB_WORKSPACE"/dist/*.tar.gz
+          /tmp/aiogym-sdist-only/bin/python -m pip check
+      - name: Sdist-only import, CLI, and environment smoke
+        working-directory: /tmp
+        run: |
+          /tmp/aiogym-sdist-only/bin/python -c "import aiogym; from importlib.metadata import version; assert version('aiogym') == aiogym.__version__; print(aiogym.__version__)"
+          /tmp/aiogym-sdist-only/bin/aiogym list scenarios
+          /tmp/aiogym-sdist-only/bin/python - <<'PY'
+          import aiogym
 
-  rl-smoke:
+          env = aiogym.make_env(
+              "three_tank",
+              reward="regulation",
+          )
+          try:
+              observation, _ = env.reset(seed=0)
+              next_observation, reward, _, _, _ = env.step(env.action_space.sample())
+              assert observation.shape == env.observation_space.shape
+              assert next_observation.shape == env.observation_space.shape
+              assert float(reward) == float(reward)
+          finally:
+              env.close()
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aiogym-distributions
+          path: dist/*
+          if-no-files-found: error
+
+  symbolic-smoke:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: python -m pip install -e ".[symbolic,test]"
+      - name: CasADi dynamics smoke
+        run: python -m pytest -q tests/scenarios/test_symbolic_backend.py
+
+  rl-smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: pyproject.toml
       - run: python -m pip install -e ".[rl,test]"

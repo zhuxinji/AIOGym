@@ -1,184 +1,329 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-
+import re
+import xml.etree.ElementTree as ET
 import numpy as np
 import pytest
 
-import aiogym.scenarios  # noqa: F401
-from aiogym.controllers.base import make_controller
-from aiogym.core import make_env
-from aiogym.workflows import evaluate, load_plant
+from aiogym import compare_policies, evaluate, make_controller, make_env
 
 
-DESIGN = (
-    Path(__file__).resolve().parents[2]
-    / "aiogym/scenarios/three_tank/plants/lab-three-tank-v1.json"
-)
+def test_evaluate_preserves_seed_order_and_aggregates_metrics():
+    env = make_env("quadruple")
+    try:
+        result = evaluate(
+            env=env,
+            policy="pid",
+            seeds=(4, 3),
+            max_steps=4,
+        )
+        observation, _ = env.reset(seed=20)
+        assert observation.shape == env.observation_space.shape
+    finally:
+        env.close()
 
-
-def test_regulation_evaluate_aggregates_explicit_seeds():
-    result = evaluate(
-        "pid",
-        task="quadruple/regulation",
-        condition="minimum-phase",
-        seeds=(3, 4),
-        max_steps=4,
+    assert result["schema_version"] == "aiogym.evaluation.v3"
+    assert result["ranking_metrics"] == [
+        {"name": "tracking_iae", "direction": "minimize"}
+    ]
+    assert [row["seed"] for row in result["episodes"]] == [4, 3]
+    assert [row["length"] for row in result["episodes"]] == [4, 4]
+    assert set(result["aggregate"]["episode_return"]) == {
+        "mean",
+        "std",
+        "median",
+        "mad",
+        "min",
+        "max",
+    }
+    returns = np.asarray([row["return"] for row in result["episodes"]])
+    assert result["aggregate"]["episode_return"] == pytest.approx(
+        {
+            "mean": float(returns.mean()),
+            "std": float(returns.std()),
+            "median": float(np.median(returns)),
+            "mad": float(np.median(np.abs(returns - np.median(returns)))),
+            "min": float(returns.min()),
+            "max": float(returns.max()),
+        }
     )
-    assert result["primary_metric"] == "tracking_iae"
-    assert result["metric_direction"] == "minimize"
-    assert [row["seed"] for row in result["episodes"]] == [3, 4]
-    assert result["aggregate"]["return"]["std"] == pytest.approx(0.0)
-    assert result["aggregate"]["constraint_violations"]["mean"] == 0.0
-    assert result["aggregate"]["termination"]["mean"] == 0.0
+    assert result["aggregate"]["episode_length"] == {
+        "mean": 4.0,
+        "std": 0.0,
+        "median": 4.0,
+        "mad": 0.0,
+        "min": 4.0,
+        "max": 4.0,
+    }
     assert "tracking_ise" in result["aggregate"]
+    assert result["return_distribution"] == pytest.approx(returns.tolist())
+    assert result["episodes"][0]["trajectory"]["physical_time"] == pytest.approx(
+        [1.0, 2.0, 3.0, 4.0]
+    )
+    assert len(result["episodes"][0]["trajectory"]["true_state"]) == 4
+    assert result["trajectory_summary"]["output"]["samples"] == [2, 2, 2, 2]
+    assert result["trajectory_schema"]["output"][0]["name"] == "lower_tank_1_level"
+    assert result["trajectory_schema"]["output"][0]["low"] == 0.0
+    assert result["trajectory_schema"]["output"][0]["high"] == 20.0
 
 
-def test_economic_and_regulation_are_distinct_tasks_on_same_plant():
-    regulation = evaluate(
-        "pid",
-        task="three_tank/regulation",
-        plant="open-cascade-v1",
-        condition="continuous-benchmark",
-        seeds=(0,),
-        max_steps=3,
-    )
-    economic = evaluate(
-        "pid",
-        task="three_tank/economic",
-        plant="open-cascade-v1",
-        condition="continuous-benchmark",
-        seeds=(0,),
-        max_steps=3,
-    )
-    assert regulation["plant_hash"] == economic["plant_hash"]
-    assert regulation["task_hash"] != economic["task_hash"]
+def test_reward_metric_sets_remain_distinct():
+    regulation_env = make_env("three_tank", reward="regulation")
+    economic_env = make_env("three_tank", reward="economic")
+    try:
+        regulation = evaluate(
+            env=regulation_env,
+            policy="pid",
+            seeds=(0,),
+            max_steps=3,
+        )
+        economic = evaluate(
+            env=economic_env,
+            policy="pid",
+            seeds=(0,),
+            max_steps=3,
+        )
+    finally:
+        regulation_env.close()
+        economic_env.close()
     assert "tracking_iae" in regulation["aggregate"]
     assert "economic_objective" in economic["aggregate"]
     assert "tracking_iae" not in economic["aggregate"]
 
 
-def test_bound_policy_evaluate_keeps_plant_and_task_identity():
-    plant = load_plant(DESIGN)
-    env = make_env("three_tank/regulation", plant=plant)
+def test_tank3_reward_reports_diagnostic_metrics():
+    env = make_env(
+        "three_tank",
+        reward="tank3-regulation",
+    )
     try:
-        policy = make_controller("pid", env=env)
-        result = evaluate(
-            policy,
-            task="three_tank/regulation",
-            plant=plant,
-            seeds=(8, 9),
-            max_steps=3,
-        )
-        assert result["plant_hash"] == plant.plant_hash
-        assert result["policy"]["kind"] == "matrix_pid"
-        assert np.isfinite(result["aggregate"]["energy"]["mean"])
+        result = evaluate(env=env, policy="hold", seeds=(0,), max_steps=3)
     finally:
         env.close()
+    assert result["ranking_metrics"] == [
+        {"name": "tank3_tracking_iae", "direction": "minimize"}
+    ]
+    for metric in (
+        "tank3_level_iae",
+        "tank3_temperature_iae",
+        "upstream_level_iae",
+        "upstream_level_max_error",
+        "final_tank3_level_error_m",
+        "action_slew_violation_count",
+        "heater_total_variation",
+    ):
+        assert metric in result["aggregate"]
 
 
-def test_evaluate_artifacts_and_seed_validation(tmp_path):
-    output = tmp_path / "evaluation"
-    result = evaluate(
-        "hold",
-        task="quadruple/regulation",
-        condition="minimum-phase",
-        seeds=(1,),
-        max_steps=2,
-        output=output,
-    )
-    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["workflow"] == "evaluate"
-    assert manifest["plant_hash"] == result["plant_hash"]
-    assert manifest["seeds"] == [1]
-    assert manifest["policy"]["id"] == "hold"
-    assert (output / "report.json").is_file()
-    assert (output / "report.md").is_file()
-    with pytest.raises(FileExistsError):
-        evaluate(
-            "hold",
-            task="quadruple/regulation",
-            condition="minimum-phase",
+def test_evaluate_writes_one_json_and_rejects_overwrite(tmp_path):
+    output = tmp_path / "evaluation.json"
+    env = make_env("quadruple")
+    try:
+        result = evaluate(
+            env=env,
+            policy="hold",
             seeds=(1,),
             max_steps=2,
             output=output,
         )
-    with pytest.raises(ValueError, match="duplicates"):
-        evaluate("hold", task="quadruple/regulation", seeds=(1, 1), max_steps=1)
-    with pytest.raises(TypeError, match="non-negative integers"):
-        evaluate("hold", task="quadruple/regulation", seeds=(True,), max_steps=1)
-
-
-def test_evaluate_source_has_no_ranking_protocol_dependencies():
-    source = (
-        Path(__file__).resolve().parents[2] / "aiogym/workflows/evaluate.py"
-    ).read_text(encoding="utf-8")
-    for retired in ("Track", "Anchor", "Scorecard", "Goal registry", "ranking"):
-        assert retired not in source
-
-
-class _ContractPolicy:
-    def __init__(self, action_dim, contract):
-        self.action_dim = action_dim
-        self.contract = contract
-
-    def reset(self, seed=None):
-        del seed
-
-    def act(self, observation, context):
-        del observation, context
-        return np.zeros(self.action_dim, dtype=np.float32)
-
-    def metadata(self):
-        return {
-            "id": "contract-test",
-            "training_contract": self.contract,
-        }
-
-
-def test_checkpoint_interface_rejection_and_condition_transfer_flags():
-    source = make_env(
-        "three_tank/regulation", plant="recirculating-h1-v1"
-    )
-    try:
-        contract = source.identity.as_dict()
-        policy = _ContractPolicy(4, contract)
+        with pytest.raises(FileExistsError):
+            evaluate(
+                env=env,
+                policy="hold",
+                seeds=(1,),
+                max_steps=2,
+                output=output,
+            )
     finally:
-        source.close()
-    with pytest.raises(ValueError, match="interface_hash"):
-        evaluate(
-            policy,
-            task="three_tank/regulation",
-            plant="lab-three-tank-v1",
-            seeds=(0,),
-            max_steps=1,
-        )
+        env.close()
+    assert json.loads(output.read_text(encoding="utf-8")) == result
+    assert [path.name for path in tmp_path.iterdir()] == ["evaluation.json"]
 
-    base = load_plant("recirculating-h1-v1").conditions["commissioning"]
-    changed = base.as_dict(include_hash=False)
-    changed["id"] = "transfer-condition"
-    changed["reference"] = [*base.reference[:3], 31.0, *base.reference[4:]]
-    with pytest.raises(ValueError, match="allow_condition_transfer"):
-        evaluate(
-            policy,
-            task="three_tank/regulation",
-            plant="recirculating-h1-v1",
-            condition=changed,
-            seeds=(0,),
+
+@pytest.mark.parametrize(
+    ("seeds", "error"),
+    [
+        ((), ValueError),
+        ((1, 1), ValueError),
+        ((True,), TypeError),
+        ((-1,), ValueError),
+    ],
+)
+def test_evaluate_validates_seeds(seeds, error):
+    env = make_env("quadruple")
+    try:
+        with pytest.raises(error):
+            evaluate(env=env, policy="hold", seeds=seeds, max_steps=1)
+    finally:
+        env.close()
+
+
+def test_compare_matches_individual_evaluation_and_minimize_ordering(tmp_path):
+    env = make_env("quadruple")
+    try:
+        pid = make_controller("pid", env=env)
+        single = evaluate(env=env, policy=pid, seeds=(3, 4), max_steps=3)
+        comparison = compare_policies(
+            env=env,
+            policies={"pid": pid, "hold": "hold"},
+            seeds=(3, 4),
+            max_steps=3,
+            output=tmp_path / "comparison",
+        )
+    finally:
+        env.close()
+    assert comparison["seeds"] == [3, 4]
+    assert comparison["evaluations"]["pid"] == single
+    medians = {
+        label: result["aggregate"]["tracking_iae"]["median"]
+        for label, result in comparison["evaluations"].items()
+    }
+    assert comparison["ordering"] == sorted(
+        medians, key=lambda label: (medians[label], label)
+    )
+
+
+def test_compare_uses_maximize_direction_and_writes_json_and_svg(tmp_path):
+    output = tmp_path / "comparison"
+    env = make_env("three_tank", reward="economic")
+    try:
+        result = compare_policies(
+            env=env,
+            policies={"pid": "pid", "hold": "hold"},
+            seeds=(0, 1),
+            max_steps=2,
+            output=output,
+        )
+    finally:
+        env.close()
+    medians = {
+        label: evaluation["aggregate"]["economic_objective"]["median"]
+        for label, evaluation in result["evaluations"].items()
+    }
+    assert result["ranking_metrics"] == [
+        {"name": "economic_objective", "direction": "maximize"}
+    ]
+    assert result["ordering"] == sorted(
+        medians, key=lambda label: (-medians[label], label)
+    )
+    assert json.loads((output / "comparison.json").read_text(encoding="utf-8")) == result
+    svg_path = output / "comparison.svg"
+    ET.parse(svg_path)
+    svg = svg_path.read_text(encoding="utf-8")
+    return_svg = svg.split(">Cumulative return by policy</text>", 1)[1]
+    assert ">pid</text>" in return_svg
+    assert ">hold</text>" in return_svg
+    assert ">episode return (higher is better)</text>" in return_svg
+    assert "circles: evaluation seeds; diamond: median" in return_svg
+    series_svg = svg.split(">Cumulative return by policy</text>", 1)[0]
+    x_axis_starts = re.findall(
+        r'<text class="tick" text-anchor="middle" x="76\.00" y="[^"]+">([^<]+)</text>',
+        series_svg,
+    )
+    assert x_axis_starts
+    assert set(x_axis_starts) == {"0"}
+    first_level = svg.split(">Output: tank_1_level [m]</text>", 1)[1]
+    first_level = first_level.split('<text class="panel-title"', 1)[0]
+    level_ticks = re.findall(
+        r'<text class="tick" text-anchor="end" x="68\.0" y="[^"]+">([^<]+)</text>',
+        first_level,
+    )
+    assert level_ticks == ["0", "0.133", "0.267", "0.4"]
+    first_action = svg.split(">Applied action: pump_P101 [fraction]</text>", 1)[1]
+    first_action = first_action.split('<text class="panel-title"', 1)[0]
+    action_ticks = re.findall(
+        r'<text class="tick" text-anchor="end" x="68\.0" y="[^"]+">([^<]+)</text>',
+        first_action,
+    )
+    assert action_ticks == ["0", "0.333", "0.667", "1"]
+    assert sorted(path.name for path in output.iterdir()) == [
+        "comparison.json",
+        "comparison.svg",
+    ]
+
+    env = make_env("three_tank", reward="economic")
+    try:
+        with pytest.raises(FileExistsError, match="non-empty directory"):
+            compare_policies(
+                env=env,
+                policies={"pid": "pid", "hold": "hold"},
+                seeds=(0,),
+                max_steps=1,
+                output=output,
+            )
+    finally:
+        env.close()
+
+
+def test_compare_uses_benchmark_declared_lexicographic_ranking(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.chdir(tmp_path)
+    env = make_env("quadruple", benchmark="disturbance-rejection")
+    try:
+        result = compare_policies(
+            env=env,
+            policies={"pid": "pid", "hold": "hold"},
+            seeds=(0, 1),
+            max_steps=2,
+        )
+    finally:
+        env.close()
+    assert result["ranking_metrics"] == [
+        {"name": "unsafe_rate", "direction": "minimize"},
+        {"name": "disturbance_iae", "direction": "minimize"},
+        {"name": "recovery_time", "direction": "minimize"},
+    ]
+    output = tmp_path / "runs" / "quadruple" / "disturbance-rejection"
+    assert json.loads((output / "comparison.json").read_text(encoding="utf-8")) == result
+    ET.parse(output / "comparison.svg")
+
+    env = make_env("quadruple", benchmark="disturbance-rejection")
+    try:
+        replacement = compare_policies(
+            env=env,
+            policies={"pid": "pid", "hold": "hold"},
+            seeds=(2,),
             max_steps=1,
         )
-    result = evaluate(
-        policy,
-        task="three_tank/regulation",
-        plant="recirculating-h1-v1",
-        condition=changed,
-        seeds=(0,),
-        max_steps=1,
-        allow_condition_transfer=True,
-    )
-    assert result["transfer_flags"] == {
-        "is_transfer": True,
-        "plant_changed": False,
-        "condition_changed": True,
-    }
+    finally:
+        env.close()
+    assert json.loads((output / "comparison.json").read_text(encoding="utf-8")) == replacement
+    assert sorted(path.name for path in output.iterdir()) == [
+        "comparison.json",
+        "comparison.svg",
+    ]
+
+
+def test_compare_default_output_rejects_unmanaged_entries(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    output = tmp_path / "runs" / "three-tank" / "tracking"
+    output.mkdir(parents=True)
+    (output / "notes.txt").write_text("keep", encoding="utf-8")
+    env = make_env("three_tank", benchmark="tracking")
+    try:
+        with pytest.raises(FileExistsError, match="unmanaged entries"):
+            compare_policies(
+                env=env,
+                policies={"pid": "pid", "hold": "hold"},
+                seeds=(0,),
+                max_steps=1,
+            )
+    finally:
+        env.close()
+
+
+def test_compare_requires_explicit_output_without_benchmark():
+    env = make_env("quadruple")
+    try:
+        with pytest.raises(ValueError, match="outside a benchmark"):
+            compare_policies(
+                env=env,
+                policies={"pid": "pid", "hold": "hold"},
+                seeds=(0,),
+                max_steps=1,
+            )
+    finally:
+        env.close()

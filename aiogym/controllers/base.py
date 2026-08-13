@@ -6,95 +6,54 @@ from collections.abc import Mapping
 import numpy as np
 
 
-class _LegacyPolicyAdapter:
-    def __init__(self, controller, env):
-        self.controller = controller
-        self.env = env
-
-    def reset(self, seed=None):
-        self.controller.reset(seed=seed)
-
-    def act(self, observation, context):
-        from .contracts import build_context
-
-        legacy_context = build_context(self.env, context.get("info"))
-        return np.asarray(
-            self.controller.act(observation, legacy_context), dtype=np.float32
-        )
-
-    def metadata(self):
-        metadata = dict(self.controller.metadata())
-        metadata["action_contract"] = "env.action_space"
-        metadata["adapter"] = "core-policy"
-        metadata["interface_hash"] = self.env.identity.interface_hash
-        return metadata
-
-
 def make_controller(
     controller_id: str,
     *,
     env,
-    profile: str | None = None,
     config: Mapping | None = None,
 ):
     import aiogym.scenarios  # noqa: F401
-    from aiogym.core import get_scenario
+    from aiogym.core.registry import get_scenario
 
     key = str(controller_id).lower()
-    plugin = get_scenario(env.task.scenario)
-    profiles = plugin.controller_defaults.get(key, {})
-    profile_id = profile or env.condition.id
-    if plugin.resolve_controller_profile is not None:
+    base_env = env.unwrapped
+    scenario = get_scenario(base_env.scenario.id)
+    if key in {"pid", "mpc"}:
+        if scenario.controller_config is None:
+            raise ValueError(f"scenario {scenario.id!r} has no controller config")
         defaults = dict(
-            plugin.resolve_controller_profile(
-                key,
-                plant_id=env.plant.id,
-                plant=env.plant,
-                condition_id=env.condition.id,
-                objective=env.task.objective,
-            )
+            scenario.controller_config(key, base_env.reward.id)
         )
     else:
-        defaults = dict(profiles.get(profile_id, profiles.get(env.task.objective, {})))
-    defaults.update(dict(config or {}))
-    defaults = _compile_named_profile(defaults, env)
+        defaults = {}
+    defaults.update({} if config is None else dict(config))
+    defaults = _compile_named_profile(defaults, base_env)
     if key == "pid":
         from .pid import MatrixPIDPolicy
 
-        if defaults.get("kp"):
-            bias = defaults.pop("bias", None)
+        if "kp" in defaults:
+            bias = defaults.pop("bias") if "bias" in defaults else None
             if isinstance(bias, str) and bias == "default_action":
-                bias = env.model.default_action()
-            return MatrixPIDPolicy(env, bias=bias, **defaults)
-        if not defaults.get("loops"):
-            raise ValueError(
-                f"scenario {plugin.id!r} has no PID profile {profile_id!r}"
-            )
-        from .pid import PIDAgent
+                bias = base_env.model.default_action()
+            return MatrixPIDPolicy(base_env, bias=bias, **defaults)
+        if "loops" not in defaults or not defaults["loops"]:
+            raise ValueError(f"scenario {scenario.id!r} has no PID controller")
+        from .pid import FixedSetpointPIDPolicy
 
-        model = getattr(env.model, "_model", env.model)
-        return _LegacyPolicyAdapter(PIDAgent(model, **defaults), env)
+        return FixedSetpointPIDPolicy(base_env, **defaults)
     if key == "mpc":
-        from .mpc import MPCAgent
+        from .mpc import FixedSetpointMPCPolicy
 
-        model = getattr(env.model, "_model", env.model)
-        return _LegacyPolicyAdapter(MPCAgent(model, **defaults), env)
+        return FixedSetpointMPCPolicy(base_env, **defaults)
     if key == "hold":
         from .policies import HoldPolicy
 
-        return HoldPolicy(env, action=defaults.get("action"))
+        action = defaults["action"] if "action" in defaults else None
+        return HoldPolicy(base_env, action=action)
     if key == "random":
         from .policies import RandomPolicy
 
         return RandomPolicy(env)
-    if key == "sb3":
-        from .policies import SB3CheckpointPolicy
-
-        return SB3CheckpointPolicy.load(
-            defaults["checkpoint"],
-            algorithm=defaults["algorithm"],
-            device=defaults.get("device", "auto"),
-        )
     raise ValueError(f"unsupported core controller {controller_id!r}")
 
 
@@ -146,7 +105,7 @@ def _compile_named_profile(profile, env):
             row = index(action_names, term["actuator"], "actuator")
             column = index(output_names, term["output"], "output")
             for name in matrices:
-                matrices[name][row, column] += float(term.get(name, 0.0))
+                matrices[name][row, column] += float(term[name])
         resolved.update({name: value.tolist() for name, value in matrices.items()})
     return resolved
 

@@ -1,13 +1,13 @@
-"""Topology-neutral mass and energy balance kernel for three-tank plants."""
+"""Mass and energy balance kernel for three-tank models."""
 from __future__ import annotations
 
 import math
 
 from aiogym.core.backends import _maxv
-from aiogym.core.model import RHO_CP, ProcessModelContract
+from aiogym.core.model import RHO_CP, PhysicsModelBase
 
 
-class ThreeTankPhysicsKernel(ProcessModelContract):
+class _ThreeTankPhysicsKernel(PhysicsModelBase):
     """Topology-neutral state, I/O, validation, and balance assembly.
 
     A topology supplies flow connections, mixing terms, and heat inputs. This
@@ -68,13 +68,12 @@ class ThreeTankPhysicsKernel(ProcessModelContract):
         return self.default_action()
 
     def _resolved_env(self, env=None, ops=None):
-        values = dict(env or {})
+        values = {} if env is None else dict(env)
         resolved = {}
         for row in self.input_disturbances:
             name = row["name"]
-            default = row.get("default", self.p.get(name, 0.0))
-            resolved[name] = values.get(name, default)
-        if bool(getattr(ops, "symbolic", False)):
+            resolved[name] = values[name] if name in values else row["default"]
+        if ops is not None and ops.symbolic:
             return resolved
 
         clean = {}
@@ -107,10 +106,11 @@ class ThreeTankPhysicsKernel(ProcessModelContract):
         return self._resolved_env(super().runtime_env(disturbance_values))
 
     def disturbance_vector(self, values=None):
-        return super().disturbance_vector(self.runtime_env(values or {}))
+        supplied = {} if values is None else values
+        return super().disturbance_vector(self.runtime_env(supplied))
 
     def _effective_action(self, u, ops):
-        if not bool(getattr(ops, "symbolic", False)):
+        if not ops.symbolic:
             for value in u:
                 if not math.isfinite(float(value)):
                     raise ValueError("three_tank action values must be finite")
@@ -149,4 +149,4 @@ class ThreeTankPhysicsKernel(ProcessModelContract):
         return ops.vector(derivatives)
 
 
-__all__ = ["ThreeTankPhysicsKernel"]
+__all__ = []

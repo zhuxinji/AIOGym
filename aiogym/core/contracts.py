@@ -2,17 +2,23 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 
-from .specs import OperatingCondition, PlantConfig, ResolvedPlant, TaskSpec
+from .specs import Benchmark, EpisodeSpec, Reward
 
 
 @runtime_checkable
 class ProcessModel(Protocol):
     scenario: str
+    dt_micro: float
+    parameter_units: Mapping[str, str]
+
+    @property
+    def resolved_parameters(self) -> Mapping[str, Any]: ...
 
     def initial_state(self) -> Sequence[float]: ...
 
@@ -33,9 +39,68 @@ class ProcessModel(Protocol):
 
     def default_setpoint_vector(self) -> Sequence[float]: ...
 
+    def default_disturbances(self) -> Mapping[str, float]: ...
+
+    def output_schema(self) -> Sequence[Mapping[str, Any]]: ...
+
+    def observation_schema(self) -> Sequence[Mapping[str, Any]]: ...
+
+    def action_slew_limits(self) -> Sequence[float] | None: ...
+
+    def action_dim(self) -> int: ...
+
+    def action_vector(self, action: Sequence[float]) -> Sequence[float]: ...
+
+    def controlled_output_scales(self) -> Sequence[float]: ...
+
+    def measurement(
+        self,
+        state: Sequence[float],
+        disturbances: Mapping[str, float] | None = None,
+    ) -> Mapping[str, Any]: ...
+
+    def measurement_from_observation(
+        self,
+        observation: Sequence[float],
+        disturbances: Mapping[str, float] | None = None,
+    ) -> Mapping[str, Any]: ...
+
+    def tracking_steady_state_action(
+        self,
+        reference: Sequence[float],
+        disturbances: Mapping[str, float] | None = None,
+    ) -> Sequence[float] | None: ...
+
+    def clamp_state(self, state: Sequence[float]) -> Sequence[float]: ...
+
+    def observation(
+        self,
+        state: Sequence[float],
+        reference: Sequence[float],
+        previous_action: Sequence[float],
+        disturbances: Mapping[str, float],
+    ) -> Sequence[float]: ...
+
+    def constraint_costs(
+        self, state: Sequence[float], disturbances: Mapping[str, float]
+    ) -> Mapping[str, float]: ...
+
+    def safety_margins(
+        self, state: Sequence[float], disturbances: Mapping[str, float]
+    ) -> Mapping[str, float]: ...
+
+    def step_info(
+        self,
+        state: Sequence[float],
+        action: Sequence[float] | None,
+        disturbances: Mapping[str, float],
+    ) -> Mapping[str, Any]: ...
+
 
 @runtime_checkable
 class Policy(Protocol):
+    env: Any | None
+
     def reset(self, seed: int | None = None) -> None: ...
 
     def act(
@@ -45,62 +110,65 @@ class Policy(Protocol):
     def metadata(self) -> Mapping[str, Any]: ...
 
 
-@runtime_checkable
-class StudyProvider(Protocol):
-    def checks(self, context: "StudyContext") -> Sequence[Any]: ...
-
-    def dynamic_requirements(self, context: "StudyContext") -> Mapping[str, Any]: ...
-
-    def steady_check(
-        self,
-        context: "StudyContext",
-        disturbances: Mapping[str, float],
-    ) -> Any: ...
-
-    def default_robustness(self, context: "StudyContext") -> tuple[int, int]: ...
-
-    def sample_disturbances(
-        self,
-        context: "StudyContext",
-        rng: np.random.Generator,
-    ) -> dict[str, float]: ...
+EpisodeSampler = Callable[
+    [ProcessModel, np.random.Generator], tuple[EpisodeSpec, str]
+]
+ControllerConfig = Callable[[str, str], Mapping[str, Any]]
 
 
 @dataclass(frozen=True)
-class StudyContext:
-    plant: ResolvedPlant
-    condition: OperatingCondition
-    model: ProcessModel
-
-
-@dataclass(frozen=True)
-class ScenarioPlugin:
+class Scenario:
     id: str
-    make_model: Callable[[ResolvedPlant], ProcessModel]
-    default_plant: str | Callable[[], Mapping[str, Any] | PlantConfig]
-    resolve_plant: Callable[[PlantConfig], ResolvedPlant]
-    tasks: Mapping[str, TaskSpec]
-    built_in_plants: Mapping[
-        str, Callable[[], Mapping[str, Any] | PlantConfig]
-    ] = field(default_factory=dict)
-    controller_defaults: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
-    resolve_controller_profile: Callable[..., Mapping[str, Any]] | None = None
-    study_provider: StudyProvider | None = None
+    make_model: Callable[[Mapping[str, Any] | None], ProcessModel]
+    control_dt: float
+    make_default_episode: Callable[[ProcessModel], EpisodeSpec]
+    sample_training_episode: EpisodeSampler
+    benchmarks: Mapping[str, Benchmark]
+    rewards: Mapping[str, Reward]
+    default_reward: str
+    controller_config: ControllerConfig | None = None
 
     def __post_init__(self) -> None:
-        if not self.id:
-            raise ValueError("scenario plugin id must be non-empty")
-        for objective, task in self.tasks.items():
-            if task.scenario != self.id:
-                raise ValueError(f"task {task.id!r} does not belong to scenario {self.id!r}")
-            if objective != task.objective:
-                raise ValueError("scenario task keys must match TaskSpec.objective")
+        if not isinstance(self.id, str) or not self.id.strip():
+            raise ValueError("scenario id must be non-empty")
+        control_dt = float(self.control_dt)
+        if not np.isfinite(control_dt) or control_dt <= 0:
+            raise ValueError("scenario control_dt must be finite and positive")
+        if not callable(self.make_default_episode):
+            raise TypeError("scenario make_default_episode must be callable")
+        if not callable(self.sample_training_episode):
+            raise TypeError("scenario sample_training_episode must be callable")
+        required_benchmarks = {
+            "tracking",
+            "disturbance-rejection",
+            "boundary-safety",
+        }
+        if set(self.benchmarks) != required_benchmarks:
+            raise ValueError(
+                "scenario benchmarks must be exactly tracking, "
+                "disturbance-rejection, and boundary-safety"
+            )
+        for benchmark_id, benchmark in self.benchmarks.items():
+            if benchmark_id != benchmark.id:
+                raise ValueError("scenario benchmark keys must match Benchmark.id")
+        if not self.rewards:
+            raise ValueError("scenario must declare at least one reward")
+        if self.default_reward not in self.rewards:
+            raise ValueError("default_reward must be declared in rewards")
+        for reward_id, reward in self.rewards.items():
+            if reward_id != reward.id:
+                raise ValueError("scenario reward keys must match Reward.id")
+        model = self.make_model(None)
+        if model.scenario != self.id:
+            raise ValueError("scenario model does not belong to scenario id")
+        if not isinstance(self.make_default_episode(model), EpisodeSpec):
+            raise TypeError("make_default_episode must return EpisodeSpec")
+        for benchmark in self.benchmarks.values():
+            if not isinstance(benchmark.make_episode(model), EpisodeSpec):
+                raise TypeError("benchmark make_episode must return EpisodeSpec")
+        object.__setattr__(self, "control_dt", control_dt)
+        object.__setattr__(self, "benchmarks", MappingProxyType(dict(self.benchmarks)))
+        object.__setattr__(self, "rewards", MappingProxyType(dict(self.rewards)))
 
 
-__all__ = [
-    "Policy",
-    "ProcessModel",
-    "ScenarioPlugin",
-    "StudyContext",
-    "StudyProvider",
-]
+__all__ = ["Policy", "ProcessModel", "Scenario"]

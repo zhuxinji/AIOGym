@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import json
 
 import numpy as np
 
@@ -29,7 +28,6 @@ class HoldPolicy:
             "id": "hold",
             "kind": "fixed_action",
             "action": self.action.tolist(),
-            "action_contract": "env.action_space",
         }
 
 
@@ -52,7 +50,6 @@ class RandomPolicy:
         return {
             "id": "random",
             "kind": "uniform_random",
-            "action_contract": "env.action_space",
         }
 
 
@@ -63,47 +60,11 @@ class SB3CheckpointPolicy:
         *,
         algorithm: str,
         checkpoint: str | Path,
-        training_contract=None,
     ):
+        self.env = None
         self.model = model
         self.algorithm = algorithm.lower()
         self.checkpoint = str(checkpoint)
-        self.training_contract = (
-            None if training_contract is None else dict(training_contract)
-        )
-
-    @classmethod
-    def load(
-        cls,
-        checkpoint: str | Path,
-        *,
-        algorithm: str,
-        device: str = "auto",
-    ):
-        key = algorithm.lower()
-        try:
-            from stable_baselines3 import DDPG, PPO, SAC, TD3
-        except ModuleNotFoundError as error:
-            raise RuntimeError(
-                "Stable-Baselines3 is required for checkpoint policies; "
-                "install `aiogym[rl]`"
-            ) from error
-        algorithms = {"sac": SAC, "ppo": PPO, "td3": TD3, "ddpg": DDPG}
-        if key not in algorithms:
-            raise ValueError(f"unsupported SB3 algorithm {algorithm!r}")
-        model = algorithms[key].load(str(checkpoint), device=device)
-        contract_path = Path(checkpoint).with_name("contract.json")
-        contract = (
-            json.loads(contract_path.read_text(encoding="utf-8"))
-            if contract_path.is_file()
-            else None
-        )
-        return cls(
-            model,
-            algorithm=key,
-            checkpoint=checkpoint,
-            training_contract=contract,
-        )
 
     def reset(self, seed=None):
         del seed
@@ -115,16 +76,12 @@ class SB3CheckpointPolicy:
         return np.asarray(action, dtype=np.float32)
 
     def metadata(self):
-        metadata = {
+        return {
             "id": "sb3_checkpoint",
             "kind": "learned_policy",
             "algorithm": self.algorithm,
             "checkpoint": self.checkpoint,
-            "action_contract": "env.action_space",
         }
-        if self.training_contract is not None:
-            metadata["training_contract"] = dict(self.training_contract)
-        return metadata
 
 
 __all__ = ["HoldPolicy", "RandomPolicy", "SB3CheckpointPolicy"]

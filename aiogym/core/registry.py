@@ -1,69 +1,102 @@
-"""The single Scenario/Task registry."""
+"""The single Scenario/Reward registry."""
 from __future__ import annotations
 
-from collections.abc import Iterable
-
-from .contracts import ScenarioPlugin
-from .specs import TaskSpec
+from .contracts import Scenario
+from .specs import Benchmark, Reward
 
 
-_SCENARIOS: dict[str, ScenarioPlugin] = {}
+_SCENARIOS: dict[str, Scenario] = {}
 
 
-def register_scenario(plugin: ScenarioPlugin, *, replace: bool = False) -> None:
-    if not isinstance(plugin, ScenarioPlugin):
-        raise TypeError("plugin must be a ScenarioPlugin")
-    if plugin.id in _SCENARIOS and not replace:
-        raise ValueError(f"scenario {plugin.id!r} is already registered")
-    _SCENARIOS[plugin.id] = plugin
+def register_scenario(definition: Scenario, *, replace: bool = False) -> None:
+    if not isinstance(definition, Scenario):
+        raise TypeError("scenario must be a Scenario")
+    if definition.id in _SCENARIOS and not replace:
+        raise ValueError(f"scenario {definition.id!r} is already registered")
+    _SCENARIOS[definition.id] = definition
 
 
 def unregister_scenario(scenario: str) -> None:
-    _SCENARIOS.pop(scenario, None)
+    if scenario in _SCENARIOS:
+        del _SCENARIOS[scenario]
 
 
-def get_scenario(scenario: str) -> ScenarioPlugin:
+def get_scenario(scenario: str) -> Scenario:
     try:
         return _SCENARIOS[scenario]
     except KeyError as error:
-        available = ", ".join(list_scenarios()) or "<none>"
+        available = ", ".join(list_scenarios())
         raise KeyError(f"unknown scenario {scenario!r}; available: {available}") from error
 
 
-def get_task(task_id: str) -> TaskSpec:
-    if not isinstance(task_id, str) or task_id.count("/") != 1:
-        raise ValueError("task id must use '<scenario>/<objective>'")
-    scenario, objective = task_id.split("/", 1)
-    plugin = get_scenario(scenario)
+def get_reward(scenario: str, reward: str) -> Reward:
+    definition = get_scenario(scenario)
     try:
-        return plugin.tasks[objective]
+        return definition.rewards[reward]
     except KeyError as error:
-        raise KeyError(f"unknown task {task_id!r}") from error
+        available = ", ".join(sorted(definition.rewards))
+        raise KeyError(
+            f"unknown reward {reward!r} for scenario {scenario!r}; available: {available}"
+        ) from error
+
+
+def get_benchmark(scenario: str, benchmark: str) -> Benchmark:
+    definition = get_scenario(scenario)
+    try:
+        return definition.benchmarks[benchmark]
+    except KeyError as error:
+        available = ", ".join(sorted(definition.benchmarks))
+        raise KeyError(
+            f"unknown benchmark {benchmark!r} for scenario {scenario!r}; "
+            f"available: {available}"
+        ) from error
 
 
 def list_scenarios() -> tuple[str, ...]:
     return tuple(sorted(_SCENARIOS))
 
 
-def list_tasks(*, scenario: str | None = None) -> tuple[str, ...]:
-    plugins: Iterable[ScenarioPlugin]
-    if scenario is None:
-        plugins = _SCENARIOS.values()
-    else:
-        plugins = (get_scenario(scenario),)
-    return tuple(sorted(task.id for plugin in plugins for task in plugin.tasks.values()))
+def list_rewards(*, scenario: str) -> tuple[str, ...]:
+    return tuple(sorted(get_scenario(scenario).rewards))
 
 
-def list_plants(*, scenario: str) -> tuple[str, ...]:
-    return tuple(sorted(get_scenario(scenario).built_in_plants))
+def list_benchmarks(*, scenario: str) -> tuple[str, ...]:
+    return tuple(sorted(get_scenario(scenario).benchmarks))
+
+
+def list_parameters(*, scenario: str) -> tuple[dict[str, object], ...]:
+    model = get_scenario(scenario).make_model(None)
+    defaults = model.resolved_parameters
+    units = model.parameter_units
+    missing_units = sorted(set(defaults) - set(units))
+    unknown_units = sorted(set(units) - set(defaults))
+    if missing_units or unknown_units:
+        raise ValueError(
+            f"parameter unit metadata mismatch for scenario {scenario!r}; "
+            f"missing: {missing_units}; unknown: {unknown_units}"
+        )
+    invalid_units = sorted(
+        name for name, unit in units.items() if not isinstance(unit, str) or not unit
+    )
+    if invalid_units:
+        raise ValueError(
+            f"parameter units must be non-empty strings for scenario {scenario!r}: "
+            f"{invalid_units}"
+        )
+    return tuple(
+        {"name": name, "default": defaults[name], "unit": units[name]}
+        for name in sorted(defaults)
+    )
 
 
 __all__ = [
     "get_scenario",
-    "get_task",
+    "get_reward",
+    "get_benchmark",
     "list_scenarios",
-    "list_plants",
-    "list_tasks",
+    "list_benchmarks",
+    "list_parameters",
+    "list_rewards",
     "register_scenario",
     "unregister_scenario",
 ]

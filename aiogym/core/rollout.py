@@ -27,6 +27,7 @@ class Transition:
 @dataclass(frozen=True)
 class RolloutResult:
     seed: int
+    reset_info: Mapping[str, Any]
     transitions: tuple[Transition, ...]
     policy_metadata: Mapping[str, Any]
 
@@ -41,21 +42,24 @@ def rollout(
     *,
     seed: int = 0,
     max_steps: int | None = None,
+    policy_metadata: Mapping[str, Any] | None = None,
 ) -> RolloutResult:
     observation, reset_info = env.reset(seed=seed)
     policy.reset(seed=seed)
-    info: Mapping[str, Any] = reset_info or {}
+    if not isinstance(reset_info, Mapping):
+        raise TypeError("environment reset info must be a mapping")
+    info: Mapping[str, Any] = reset_info
     rows: list[Transition] = []
-    limit = max_steps
-    if limit is None:
-        limit = int(getattr(env, "episode_steps", 0)) or None
-    while limit is None or len(rows) < limit:
+    limit = int(env.unwrapped.episode_steps) if max_steps is None else int(max_steps)
+    if limit <= 0:
+        raise ValueError("rollout max_steps must be positive")
+    while len(rows) < limit:
         context = {
             "env": env,
             "info": info,
             "step_index": len(rows),
-            "physical_time": float(info.get("physical_time", 0.0)),
-            "reference": info.get("reference"),
+            "physical_time": float(info["physical_time"]),
+            "reference": info["reference"],
         }
         action = np.asarray(policy.act(np.asarray(observation), context), dtype=np.float32)
         if action.shape != env.action_space.shape or not env.action_space.contains(action):
@@ -70,7 +74,7 @@ def rollout(
                 terminated=bool(terminated),
                 truncated=bool(truncated),
                 step_index=len(rows),
-                physical_time=float(next_info.get("physical_time", len(rows) + 1)),
+                physical_time=float(next_info["physical_time"]),
                 info=dict(next_info),
             )
         )
@@ -80,8 +84,11 @@ def rollout(
             break
     return RolloutResult(
         seed=int(seed),
+        reset_info=dict(reset_info),
         transitions=tuple(rows),
-        policy_metadata=dict(policy.metadata()),
+        policy_metadata=dict(
+            policy.metadata() if policy_metadata is None else policy_metadata
+        ),
     )
 
 

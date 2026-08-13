@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from ._context import controller_inputs
+
 
 def _clip01(v):
     return 0.0 if v < 0 else 1.0 if v > 1 else v
@@ -16,8 +18,8 @@ def _loop_spec(row):
             int(row["u_index"]),
             int(row["y_index"]),
             row["pid"],
-            bool(row.get("reverse", False)),
-            float(row.get("bias", 0.0)),
+            bool(row["reverse"] if "reverse" in row else False),
+            float(row["bias"] if "bias" in row else 0.0),
         )
     if len(row) == 3:
         u_index, y_index, pid = row
@@ -60,57 +62,66 @@ class PIDLoop:
         return out
 
 
-class PIDAgent:
-    name = "PID"
-    controller_api_version = "aiogym.controller.v1"
-    action_mode = "actuator"
+class FixedSetpointPIDPolicy:
+    """Scenario-configured fixed-setpoint PID implementing the core Policy API."""
+
+    name = "pid"
     control_structure = "fixed_sp_pid"
 
-    def __init__(self, model, loops=None, holds=None, demand_u_index=None):
-        self.model = model
-        self.nu = model.action_dim()
+    def __init__(self, env, loops=None, holds=None, demand_u_index=None):
+        self.env = env
+        self.model = env.model
+        self.nu = self.model.action_dim()
         if loops is None:
-            raise ValueError("PID loops must come from ScenarioPlugin controller defaults")
-        cfg = {}
+            raise ValueError("PID loops must come from Scenario controller defaults")
         self.loops_config = list(loops)
         self.demand_u_index = demand_u_index
         self.demand_valve = 0.5
-        self.holds = list(holds if holds is not None else cfg.get("holds", []))
+        self.holds = [] if holds is None else list(holds)
         self.hold_specs = [_hold_spec(row) for row in self.holds]
         loop_specs = [_loop_spec(row) for row in self.loops_config]
-        _validate_pid_config(model, loop_specs, self.hold_specs, self.demand_u_index)
+        _validate_pid_config(
+            self.model, loop_specs, self.hold_specs, self.demand_u_index
+        )
         self.loops = [
             (u_index, y_index, PIDLoop(pid, reverse, bias))
             for u_index, y_index, pid, reverse, bias in loop_specs
         ]
 
     def metadata(self):
-        return {"name": self.name, "class": self.__class__.__name__,
-                "kind": "fixed_setpoint_pid", "scenario": self.model.scenario,
-                "api": self.controller_api_version,
-                "action_mode": self.action_mode, "control_structure": self.control_structure,
-                "loops": self.loops_config,
-                "holds": self.holds,
-                "demand_u_index": self.demand_u_index}
+        return {
+            "id": self.name,
+            "class": self.__class__.__name__,
+            "kind": "fixed_setpoint_pid",
+            "scenario": self.model.scenario,
+            "control_structure": self.control_structure,
+            "loops": self.loops_config,
+            "holds": self.holds,
+            "demand_u_index": self.demand_u_index,
+        }
 
     def reset(self, seed=None):
         for *_, loop in self.loops:
             loop.reset()
 
     def act(self, obs, context):
-        action = self.compute(context.measurement, context.setpoint, context.control_dt)
+        measurement, setpoint, control_dt = controller_inputs(
+            self.env,
+            obs,
+            context,
+        )
+        action = self.compute(measurement, setpoint, control_dt)
         return np.asarray(self.model.action_vector(action), dtype=np.float32)
 
     def compute(self, meas, sp, dt):
-        y_sp = list(sp.get("y_sp") or self.model.default_setpoint_vector())
-        y = list(meas.get("y") or self.model.controlled_output(meas["x"]))
+        y_sp = list(sp["y_sp"])
+        y = list(meas["y"])
         u = [0.0] * self.nu
         for u_index, value in self.hold_specs:
-            if 0 <= u_index < len(u):
-                u[u_index] = value
+            u[u_index] = value
         for u_index, y_index, loop in self.loops:
             u[u_index] = loop.update(y_sp[y_index], y[y_index], dt)
-        if self.demand_u_index is not None and 0 <= self.demand_u_index < len(u):
+        if self.demand_u_index is not None:
             u[self.demand_u_index] = self.demand_valve
         return u
 
@@ -120,21 +131,33 @@ class MatrixPIDPolicy:
 
     name = "pid"
 
-    def __init__(self, env, *, kp, ki=None, kd=None, bias=None):
+    def __init__(
+        self,
+        env,
+        *,
+        kp,
+        ki=None,
+        kd=None,
+        bias=None,
+        feedforward=None,
+    ):
         self.env = env
         action_dim = int(env.action_space.shape[0])
-        observation_dim = int(env.observation_space.shape[0])
-        self.kp = _gain_matrix("kp", kp, action_dim, observation_dim)
+        output_dim = len(env.model.outputs(env.model.initial_state()))
+        self.kp = _gain_matrix("kp", kp, action_dim, output_dim)
         self.ki = _gain_matrix(
-            "ki", np.zeros_like(self.kp) if ki is None else ki, action_dim, observation_dim
+            "ki", np.zeros_like(self.kp) if ki is None else ki, action_dim, output_dim
         )
         self.kd = _gain_matrix(
-            "kd", np.zeros_like(self.kp) if kd is None else kd, action_dim, observation_dim
+            "kd", np.zeros_like(self.kp) if kd is None else kd, action_dim, output_dim
         )
         default_bias = np.asarray(env.model.default_action(), dtype=float)
         self.bias = np.asarray(default_bias if bias is None else bias, dtype=float)
         if self.bias.shape != (action_dim,):
             raise ValueError(f"PID bias must have shape {(action_dim,)}, got {self.bias.shape}")
+        if feedforward not in (None, "tracking_steady_state_action"):
+            raise ValueError(f"unsupported PID feedforward {feedforward!r}")
+        self.feedforward = feedforward
         self.reset()
 
     def reset(self, seed=None):
@@ -143,14 +166,16 @@ class MatrixPIDPolicy:
         self.previous_measurement = None
 
     def act(self, observation, context):
-        measurement = np.asarray(observation, dtype=float).reshape(-1)
-        reference = context.get("reference")
-        if reference is None:
-            reference = self.env.model.default_setpoint_vector()
-        reference = np.asarray(reference, dtype=float).reshape(-1)
+        measured, setpoint, _ = controller_inputs(
+            self.env,
+            observation,
+            context,
+        )
+        measurement = np.asarray(measured["y"], dtype=float).reshape(-1)
+        reference = np.asarray(setpoint["y_sp"], dtype=float).reshape(-1)
         if reference.shape != measurement.shape:
             raise ValueError("PID reference and observation shapes must match")
-        dt = float(getattr(self.env, "control_dt", 1.0))
+        dt = float(self.env.control_dt)
         error = reference - measurement
         derivative = (
             np.zeros_like(measurement)
@@ -159,7 +184,8 @@ class MatrixPIDPolicy:
         )
         self.previous_measurement = measurement.copy()
         candidate_integral = self.integral + self.ki @ error * dt
-        raw = self.bias + self.kp @ error + candidate_integral - self.kd @ derivative
+        bias = self._resolved_bias(reference)
+        raw = bias + self.kp @ error + candidate_integral - self.kd @ derivative
         clipped = np.clip(raw, self.env.action_space.low, self.env.action_space.high)
         correction = self.ki @ error
         accept = np.logical_or(
@@ -172,6 +198,19 @@ class MatrixPIDPolicy:
         self.integral = np.where(accept, candidate_integral, self.integral)
         return clipped.astype(np.float32)
 
+    def _resolved_bias(self, reference):
+        if self.feedforward is None:
+            return self.bias
+        resolver = self.env.model.tracking_steady_state_action
+        disturbances = dict(self.env.disturbances)
+        candidate = resolver(reference, disturbances)
+        if candidate is None:
+            raise ValueError("PID feedforward target has no feasible steady action")
+        values = np.asarray(candidate, dtype=float).reshape(-1)
+        if values.shape != self.bias.shape or not np.all(np.isfinite(values)):
+            raise ValueError("PID feedforward returned an invalid action")
+        return np.clip(values, self.env.action_space.low, self.env.action_space.high)
+
     def metadata(self):
         return {
             "id": "pid",
@@ -180,8 +219,7 @@ class MatrixPIDPolicy:
             "ki": self.ki.tolist(),
             "kd": self.kd.tolist(),
             "bias": self.bias.tolist(),
-            "action_contract": "env.action_space",
-            "interface_hash": self.env.identity.interface_hash,
+            "feedforward": self.feedforward,
         }
 
 
@@ -215,3 +253,9 @@ def _validate_pid_config(model, loop_specs, hold_specs, demand_u_index):
         raise ValueError(
             f"PID demand_u_index {demand_u_index} is outside action vector length {model.action_dim()}"
         )
+
+
+__all__ = [
+    "FixedSetpointPIDPolicy",
+    "MatrixPIDPolicy",
+]

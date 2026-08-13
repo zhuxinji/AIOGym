@@ -1,7 +1,6 @@
-"""Canonical serialization, hashing, and atomic artifact writes."""
+"""Strict JSON conversion and atomic JSON writes."""
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
@@ -81,18 +80,6 @@ def canonical_json_bytes(value: Any) -> bytes:
     ).encode("utf-8")
 
 
-def stable_hash(value: Any) -> str:
-    return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
-
-
-def file_sha256(path: str | Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def write_json(path: str | Path, value: Any, *, overwrite: bool = False) -> Path:
     """Atomically write canonical JSON without silently replacing artifacts."""
 
@@ -101,16 +88,6 @@ def write_json(path: str | Path, value: Any, *, overwrite: bool = False) -> Path
     if target.exists() and not overwrite:
         raise FileExistsError(f"refusing to overwrite existing artifact: {target}")
     return _atomic_write(target, canonical_json_bytes(value), overwrite=overwrite)
-
-
-def write_text(path: str | Path, value: str, *, overwrite: bool = False) -> Path:
-    if not isinstance(value, str):
-        raise TypeError("text artifact value must be a string")
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if target.exists() and not overwrite:
-        raise FileExistsError(f"refusing to overwrite existing artifact: {target}")
-    return _atomic_write(target, value.encode("utf-8"), overwrite=overwrite)
 
 
 def _atomic_write(target: Path, payload: bytes, *, overwrite: bool) -> Path:
@@ -139,9 +116,6 @@ __all__ = [
     "canonical_json_bytes",
     "deep_freeze",
     "deep_thaw",
-    "file_sha256",
     "jsonable",
-    "stable_hash",
     "write_json",
-    "write_text",
 ]

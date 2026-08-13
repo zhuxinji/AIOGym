@@ -4,20 +4,30 @@ import json
 
 import pytest
 
-from aiogym.core import (
-    PlantConfig,
-    ResolvedPlant,
-    ScenarioPlugin,
-    TaskSpec,
+from aiogym.core.contracts import Scenario
+from aiogym.core.io import write_json
+from aiogym.core.registry import (
+    get_benchmark,
+    get_reward,
     get_scenario,
-    get_task,
+    list_benchmarks,
+    list_parameters,
+    list_rewards,
     list_scenarios,
-    list_tasks,
     register_scenario,
-    stable_hash,
     unregister_scenario,
-    write_json,
 )
+from aiogym.core.specs import Benchmark, EpisodeSpec, Reward
+
+
+class RegistryModel:
+    scenario = "registry-toy"
+    parameter_units = {}
+
+    def __init__(self, parameters=None):
+        if parameters:
+            raise ValueError("registry toy has no parameters")
+        self.resolved_parameters = {}
 
 
 def _reward(state, action, next_state, context):
@@ -25,88 +35,75 @@ def _reward(state, action, next_state, context):
     return -abs(float(next_state[0]))
 
 
-def _plugin():
-    task = TaskSpec(
-        id="registry-toy/regulation",
-        scenario="registry-toy",
-        objective="regulation",
-        reward=_reward,
-        metrics=("return",),
+def _metrics(env, episode):
+    del env
+    return {"return": episode.episode_return}
+
+
+def _episode(_model):
+    return EpisodeSpec(initial_state=(0.0,), reference=(0.0,), horizon=2)
+
+
+def _benchmarks():
+    return {
+        name: Benchmark(
+            id=name,
+            make_episode=_episode,
+            metric_function=_metrics,
+            ranking_metrics=(("return", "maximize"),),
+        )
+        for name in ("tracking", "disturbance-rejection", "boundary-safety")
+    }
+
+
+def _scenario():
+    reward = Reward(
+        id="regulation",
+        function=_reward,
+        episode_metric_function=_metrics,
         primary_metric="return",
         metric_direction="maximize",
     )
-    return ScenarioPlugin(
+    return Scenario(
         id="registry-toy",
-        make_model=lambda plant: object(),
-        default_plant=lambda: {
-            "schema_version": "aiogym.plant.v2",
-            "id": "registry-default",
-            "scenario": "registry-toy",
-            "plant": {},
-            "conditions": {
-                "default": {
-                    "id": "default",
-                    "initial_state": [0.0],
-                    "reference": [0.0],
-                    "control_dt": 1.0,
-                    "horizon": 2,
-                }
-            },
-            "default_condition": "default",
-        },
-        resolve_plant=lambda config: ResolvedPlant(config, config.plant),
-        tasks={"regulation": task},
+        make_model=RegistryModel,
+        control_dt=1.0,
+        make_default_episode=_episode,
+        sample_training_episode=lambda model, rng: (_episode(model), "tracking"),
+        benchmarks=_benchmarks(),
+        rewards={"regulation": reward},
+        default_reward="regulation",
     )
 
 
-def test_registry_is_the_single_scenario_and_task_index():
+def test_registry_is_the_single_scenario_reward_and_benchmark_index():
     unregister_scenario("registry-toy")
-    plugin = _plugin()
-    register_scenario(plugin)
+    scenario = _scenario()
+    register_scenario(scenario)
     try:
-        assert get_scenario("registry-toy") is plugin
-        assert get_task("registry-toy/regulation") is plugin.tasks["regulation"]
+        assert get_scenario("registry-toy") is scenario
+        assert get_reward("registry-toy", "regulation") is scenario.rewards["regulation"]
+        assert get_benchmark("registry-toy", "tracking") is scenario.benchmarks[
+            "tracking"
+        ]
         assert "registry-toy" in list_scenarios()
-        assert list_tasks(scenario="registry-toy") == ("registry-toy/regulation",)
+        assert list_rewards(scenario="registry-toy") == ("regulation",)
+        assert list_benchmarks(scenario="registry-toy") == (
+            "boundary-safety",
+            "disturbance-rejection",
+            "tracking",
+        )
+        assert list_parameters(scenario="registry-toy") == ()
         with pytest.raises(ValueError, match="already registered"):
-            register_scenario(plugin)
+            register_scenario(scenario)
     finally:
         unregister_scenario("registry-toy")
 
 
-def test_plant_hash_and_atomic_json_are_canonical(tmp_path):
-    with pytest.raises(ValueError, match="unsupported PlantConfig schema_version"):
-        PlantConfig.from_mapping(
-            {
-                "schema_version": "aiogym.plant.v1",
-                "id": "plant-a",
-                "scenario": "registry-toy",
-                "plant": {"b": 2, "a": 1},
-            }
-        )
-    first = PlantConfig.from_mapping(
-        {
-            "schema_version": "aiogym.plant.v2",
-            "id": "plant-a",
-            "scenario": "registry-toy",
-            "plant": {"b": 2, "a": 1},
-        }
-    )
-    second = PlantConfig.from_mapping(
-        {
-            "scenario": "registry-toy",
-            "id": "plant-a",
-            "plant": {"a": 1, "b": 2},
-        }
-    )
-    assert first.plant_hash == second.plant_hash
-    assert stable_hash(
-        {"scenario": first.scenario, "plant": dict(first.plant)}
-    ) == first.plant_hash
-    assert stable_hash(first.as_dict(include_hash=False)) == first.config_hash
-    target = write_json(tmp_path / "plant.json", first.as_dict())
-    assert json.loads(target.read_text(encoding="utf-8"))["plant_hash"] == first.plant_hash
+def test_atomic_json_is_canonical(tmp_path):
+    target = write_json(tmp_path / "identity.json", {"b": 2, "a": 1})
+    assert json.loads(target.read_text(encoding="utf-8")) == {"a": 1, "b": 2}
     with pytest.raises(FileExistsError):
-        write_json(target, first.as_dict())
+        write_json(target, {"a": 1, "b": 2})
     with pytest.raises(ValueError, match="NaN or Infinity"):
         write_json(tmp_path / "invalid.json", {"value": float("nan")})

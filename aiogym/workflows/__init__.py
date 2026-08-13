@@ -1,18 +1,16 @@
 from .collect import collect
+from .compare import compare_policies
 from .dataset import DatasetReader
-from .design import load_plant, study, sweep, validate_plant
 from .evaluate import evaluate
-from .train import TrainConfig, load_checkpoint, train
+from .train import load_policy, train
+from .training_curve import plot_training_curve
 
 __all__ = [
     "collect",
+    "compare_policies",
     "DatasetReader",
     "evaluate",
-    "load_plant",
-    "study",
-    "sweep",
+    "load_policy",
+    "plot_training_curve",
     "train",
-    "TrainConfig",
-    "load_checkpoint",
-    "validate_plant",
 ]

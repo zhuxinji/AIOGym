@@ -1,80 +1,100 @@
 # Quickstart
 
-## Discover and create
-
-```bash
-aiogym list scenarios
-aiogym list tasks --scenario three_tank
-aiogym list plants --scenario three_tank
-```
+## Inspect and run an environment
 
 ```python
 import aiogym
 
-env = aiogym.make_env("quadruple/regulation", condition="minimum-phase")
+print(aiogym.list_scenarios())
+print(aiogym.list_benchmarks("quadruple"))
+print(aiogym.list_parameters("quadruple"))
+
+env = aiogym.make_env(
+    "quadruple",
+    parameters={"pump_gain": [3.2, 3.25]},
+)
 observation, info = env.reset(seed=0)
-next_observation, reward, terminated, truncated, info = env.step(
+observation, reward, terminated, truncated, info = env.step(
     env.action_space.sample()
 )
 env.close()
 ```
 
-## Evaluate and collect
+## Collect varied training data
 
 ```python
 env = aiogym.make_env(
-    "three_tank/regulation",
-    plant="open-cascade-v1",
-    condition="continuous-benchmark",
+    "quadruple",
+    randomize=True,
+    noise=True,
+    delay=True,
+    fault=True,
 )
 pid = aiogym.make_controller("pid", env=env)
-result = aiogym.evaluate(pid, seeds=[0, 1, 2])
+aiogym.collect(env=env, policy=pid, episodes=2, seed=0, output="runs/data")
 env.close()
 
-dataset = aiogym.collect(
-    task="quadruple/regulation",
-    condition="minimum-phase",
-    policy="pid",
-    episodes=3,
-    seed=0,
-    output="runs/data/quadruple-pid-v4",
-)
+reader = aiogym.DatasetReader("runs/data")
+print(len(reader), reader.transition_count)
 ```
 
-Dataset v4 stores checksummed episode `.npz` files. Its manifest records Task,
-Plant, Condition, interface, policy contracts, transfer flags, schemas, seeds,
-and `schedule_semantics = pre-action-v1`.
+## Train, load, evaluate, and compare
 
-## Explicit checkpoint transfer
-
-Checkpoint transfer is opt-in for Plant or Condition changes:
+Install `aiogym[rl]`, then run:
 
 ```python
-result = aiogym.evaluate(
-    checkpoint_policy,
-    task="three_tank/regulation",
-    plant="recirculating-h1-v1",
-    condition=custom_condition,
-    allow_condition_transfer=True,
-)
-```
-
-Task and interface hashes must still match. A six-action checkpoint cannot run
-on a four-action Plant. Bound PID/MPC policies never transfer implicitly; build
-a new controller against the target environment.
-
-## Train
-
-```python
-run = aiogym.train(
-    task="quadruple/regulation",
+training_env = aiogym.make_env("quadruple", randomize=True, noise=True)
+trained = aiogym.train(
+    env=training_env,
     algorithm="sac",
-    steps=10_000,
-    condition="minimum-phase",
+    steps=64,
     seed=0,
-    eval_seeds=[100, 101, 102],
-    output="runs/train/quadruple-sac",
+    record_every=500,
+    output="runs/sac",
 )
+aiogym.plot_training_curve(
+    trained["training_curve"],
+    output="runs/replotted-training-curve.svg",
+)
+sac = aiogym.load_policy(
+    trained["checkpoint"], algorithm="sac", env=training_env
+)
+training_env.close()
+
+benchmark_env = aiogym.make_env("quadruple", benchmark="tracking")
+pid = aiogym.make_controller("pid", env=benchmark_env)
+mpc = aiogym.make_controller("mpc", env=benchmark_env)
+evaluation = aiogym.evaluate(
+    env=benchmark_env, policy=sac, seeds=[0, 1, 2]
+)
+comparison = aiogym.compare_policies(
+    env=benchmark_env,
+    policies={"pid": pid, "mpc": mpc, "sac": sac},
+    seeds=[0, 1, 2],
+)
+benchmark_env.close()
 ```
 
-Short budgets prove pipeline execution only, not control performance.
+Short RL runs verify the pipeline; they are not performance evidence. The
+default comparison directory is `runs/<scenario>/<benchmark>/`; rerunning the
+same benchmark replaces its machine-readable `comparison.json` and trajectory
+figure `comparison.svg`. Pass an explicit empty `output` directory when those
+artifacts must not be overwritten.
+
+## CLI
+
+```bash
+aiogym list benchmarks --scenario quadruple
+aiogym list parameters --scenario quadruple
+aiogym collect quadruple --randomize --noise on --delay on --fault on \
+  --controller pid --episodes 2 --output runs/data
+aiogym train quadruple sac --randomize --noise on --steps 64 \
+  --record-every 500 --output runs/sac
+aiogym evaluate quadruple --benchmark tracking --controller pid --seeds 0 1 2 \
+  --output runs/pid-evaluation.json
+aiogym compare quadruple --benchmark tracking --controllers pid mpc \
+  --seeds 0 1 2
+```
+
+Use `--parameters parameters.json` on any workflow command to apply one JSON
+object of model parameter overrides.
