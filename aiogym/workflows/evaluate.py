@@ -11,6 +11,7 @@ from typing import Any
 import numpy as np
 
 from aiogym.controllers import make_controller
+from aiogym.core.contracts import policy_metadata
 from aiogym.core.io import jsonable, write_json
 from aiogym.core.rollout import rollout
 
@@ -35,7 +36,7 @@ def evaluate(
         make_controller(policy, env=env) if isinstance(policy, str) else policy
     )
     base_env = env.unwrapped
-    policy_metadata = dict(resolved_policy.metadata())
+    resolved_policy_metadata = policy_metadata(resolved_policy)
     metric_function = (
         base_env.reward.episode_metric_function
         if base_env.benchmark is None
@@ -61,7 +62,7 @@ def evaluate(
             resolved_policy,
             seed=seed,
             max_steps=rollout_limit,
-            policy_metadata=policy_metadata,
+            policy_metadata=resolved_policy_metadata,
         )
         metrics = _episode_metrics(metric_function, env, episode)
         names = tuple(metrics)
@@ -81,6 +82,9 @@ def evaluate(
                 "truncated": bool(transitions and transitions[-1].truncated),
                 "episode_spec": jsonable(episode.reset_info["episode_spec"]),
                 "episode_family": episode.reset_info["episode_family"],
+                "episode_parameters": jsonable(
+                    episode.reset_info["episode_parameters"]
+                ),
                 "runtime_variation": jsonable(episode.reset_info["runtime_variation"]),
                 "metrics": metrics,
                 "trajectory": _trajectory(episode),
@@ -107,7 +111,7 @@ def evaluate(
     result = {
         "schema_version": EVALUATION_SCHEMA_VERSION,
         "environment": environment_metadata(env),
-        "policy": policy_metadata,
+        "policy": resolved_policy_metadata,
         "seeds": list(resolved_seeds),
         "max_steps": rollout_limit,
         "trajectory_schema": _trajectory_schema(base_env, episodes),

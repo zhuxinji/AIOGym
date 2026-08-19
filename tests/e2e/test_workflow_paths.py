@@ -43,11 +43,13 @@ def test_data_train_load_evaluate_and_compare_pipeline(
             steps=2,
             seed=4,
             algorithm_kwargs=SMALL_POLICY,
+            demonstrations=collected["path"],
+            behavior_cloning_epochs=1,
+            behavior_cloning_batch_size=2,
             output=tmp_path / scenario / "train",
         )
         learned = aiogym.load_policy(
             trained["checkpoint"],
-            algorithm="sac",
             env=env,
         )
         single = aiogym.evaluate(
@@ -69,6 +71,9 @@ def test_data_train_load_evaluate_and_compare_pipeline(
     dataset = aiogym.DatasetReader(collected["path"])
     assert len(dataset) == 1
     assert dataset.transition_count == 2
+    assert trained["behavior_cloning_artifact"].endswith(
+        "behavior_cloning.json"
+    )
     assert single["seeds"] == [7, 8]
     assert comparison["seeds"] == [7, 8]
     assert comparison["evaluations"]["sac"] == single
@@ -78,26 +83,3 @@ def test_data_train_load_evaluate_and_compare_pipeline(
             "mean"
         ]
     )
-
-
-def test_three_tank_rewards_have_separate_descriptive_objectives():
-    regulation_env = aiogym.make_env("three_tank", reward="regulation")
-    economic_env = aiogym.make_env("three_tank", reward="economic")
-    try:
-        regulation = aiogym.evaluate(
-            env=regulation_env,
-            policy="pid",
-            seeds=(0,),
-            max_steps=2,
-        )
-        economic = aiogym.evaluate(
-            env=economic_env,
-            policy="hold",
-            seeds=(0,),
-            max_steps=2,
-        )
-    finally:
-        regulation_env.close()
-        economic_env.close()
-    assert "tracking_iae" in regulation["aggregate"]
-    assert "economic_objective" in economic["aggregate"]

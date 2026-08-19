@@ -9,7 +9,6 @@ from typing import Any
 
 import numpy as np
 
-from aiogym.core.backends import _NUMERIC_OPS
 from aiogym.core.model import RHO_CP
 
 from .physics import _ThreeTankPhysicsKernel
@@ -19,15 +18,16 @@ BOM_CONFIGURATION = {
     "process_tanks": {
         "count": 3,
         "material": "acrylic",
-        "dimensions_m": [0.5, 0.3, 0.4],
-        "effective_capacity_m3": 0.06,
+        "dimensions_m": [0.3, 0.3, 0.5],
+        "effective_capacity_m3": 0.045,
         "wall_thickness_m": 0.01,
         "bottom_thickness_m": 0.015,
     },
     "reservoir": {
-        "role": "boundary_source_and_return",
+        "role": "dynamic_source_and_return",
         "dimensions_m": [0.8, 0.5, 0.55],
         "effective_capacity_m3": 0.18,
+        "provisional_ua_loss_w_per_k": 120.0,
     },
     "pump": {
         "id": "P101",
@@ -39,19 +39,11 @@ BOM_CONFIGURATION = {
     "valves": ["V12", "V23", "V34"],
     "installed_heaters": [{"id": "H1", "tank": 1, "power_w": 2000.0}],
     "reserved_heater_ports": [2, 3],
-    "source": "三级水箱加热系统.pdf; detailed BOM and final procurement list take precedence",
+    "source": "2026-08-16 45 L redesign; final procurement list takes precedence",
 }
 
-TANK3_INTERNAL_CONTROL = {
-    "feedback_source": "controller_observation",
-    "level_tolerance_m": 0.01,
-    "pump_h1_kp": 0.08,
-    "v12_h2_kp": 0.08,
-    "maximum_correction": 0.25,
-    "v23_nominal_flow_feedforward": True,
-}
-
-TANK3_MAXIMUM_ACTION_STEP = (0.05, 0.08, 0.08, 0.08, 0.05)
+NOMINAL_FLOW_M3S = 3.0 / 60000.0
+TRACKING_ERROR_SCALES = (0.1, 3.0, 0.1, 3.0, 0.1, 3.0)
 
 
 def _schema(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -68,10 +60,10 @@ def _schema(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
 
 
 class _BOMThreeTankKernel(_ThreeTankPhysicsKernel):
-    """Three process tanks with a separate, non-dynamic 180 L reservoir."""
+    """Three process tanks with a well-mixed dynamic 180 L reservoir."""
 
     scenario = "three_tank"
-    state_names = ("h1", "T1", "h2", "T2", "h3", "T3")
+    state_names = ("h1", "T1", "h2", "T2", "h3", "T3", "T_reservoir")
     state_units = {
         "h1": "m",
         "h2": "m",
@@ -79,6 +71,7 @@ class _BOMThreeTankKernel(_ThreeTankPhysicsKernel):
         "T1": "degC",
         "T2": "degC",
         "T3": "degC",
+        "T_reservoir": "degC",
     }
     action_names = (
         "pump_P101",
@@ -98,18 +91,18 @@ class _BOMThreeTankKernel(_ThreeTankPhysicsKernel):
     action_bounds = {name: (0.0, 1.0) for name in action_names}
     output_names = (
         "tank_1_level",
-        "tank_2_level",
-        "tank_3_level",
         "tank_1_temperature",
+        "tank_2_level",
         "tank_2_temperature",
+        "tank_3_level",
         "tank_3_temperature",
     )
     output_units = {
         "tank_1_level": "m",
-        "tank_2_level": "m",
-        "tank_3_level": "m",
         "tank_1_temperature": "degC",
+        "tank_2_level": "m",
         "tank_2_temperature": "degC",
+        "tank_3_level": "m",
         "tank_3_temperature": "degC",
     }
     input_disturbances = (
@@ -122,12 +115,12 @@ class _BOMThreeTankKernel(_ThreeTankPhysicsKernel):
             "description": "ambient air temperature",
         },
         {
-            "name": "t_reservoir",
-            "event": "reservoir_temperature_step",
+            "name": "t_makeup",
+            "event": "makeup_temperature_step",
             "unit": "degC",
             "bounds": (0.0, 45.0),
             "default": 20.0,
-            "description": "well-mixed boundary temperature of the 180 L reservoir",
+            "description": "temperature of automatic reservoir makeup water",
         },
         {
             "name": "reservoir_available",
@@ -178,18 +171,20 @@ class _BOMThreeTankKernel(_ThreeTankPhysicsKernel):
 
     def __init__(self):
         self.p = {
-            "area": [0.15, 0.15, 0.15],
-            "height_max": [0.40, 0.40, 0.40],
+            "area": [0.09, 0.09, 0.09],
+            "height_max": [0.50, 0.50, 0.50],
             "level_sensor_range": [0.50, 0.50, 0.50],
             "cv_valves": [0.0005, 0.0005, 0.0005],
             "gravity_drop": [0.30, 0.30, 0.30],
-            "overflow_level": [0.36, 0.36, 0.36],
+            "overflow_level": [0.45, 0.45, 0.45],
             "cv_overflow": [0.001, 0.001, 0.001],
             "overflow_head_floor": 1e-9,
-            "high_level_trip": [0.34, 0.34, 0.34],
-            "low_level_trip": [0.08, 0.08, 0.08],
-            "nominal_level": 0.18,
+            "high_level_trip": [0.425, 0.425, 0.425],
+            "low_level_trip": [0.10, 0.10, 0.10],
+            "nominal_level": 0.225,
             "ua_loss": [40.0, 40.0, 40.0],
+            "reservoir_volume": 0.18,
+            "reservoir_ua_loss": 120.0,
             "heater_power": 2000.0,
             "pump_flow_max": 25.0 / 60000.0,
             "pump_power_max": 370.0,
@@ -207,14 +202,23 @@ class _BOMThreeTankKernel(_ThreeTankPhysicsKernel):
     def height_max(self):
         return [float(value) for value in self.p["height_max"]]
 
+    @property
+    def state_bounds(self):
+        bounds = dict(super().state_bounds)
+        bounds["T_reservoir"] = (
+            0.0,
+            float(self.p["temperature_hard_limit"]),
+        )
+        return bounds
+
     def initial_state(self):
         level = float(self.p["nominal_level"])
-        return [level, 20.0, level, 20.0, level, 20.0]
+        return [level, 20.0, level, 20.0, level, 20.0, 20.0]
 
     def nominal_steady_state(
         self,
         *,
-        flow=5.0 / 60000.0,
+        flow=NOMINAL_FLOW_M3S,
         tank_1_temperature=24.0,
         levels=None,
         env=None,
@@ -238,8 +242,12 @@ class _BOMThreeTankKernel(_ThreeTankPhysicsKernel):
         t3 = (heat_capacity_flow * t2 + self.p["ua_loss"][2] * loss_factor * ambient) / (
             heat_capacity_flow + self.p["ua_loss"][2] * loss_factor
         )
+        reservoir_loss = self.p["reservoir_ua_loss"] * loss_factor
+        reservoir_temperature = (
+            heat_capacity_flow * t3 + reservoir_loss * ambient
+        ) / (heat_capacity_flow + reservoir_loss)
         liquid_heat = (
-            heat_capacity_flow * (t1 - context["t_reservoir"])
+            heat_capacity_flow * (t1 - reservoir_temperature)
             + self.p["ua_loss"][0] * loss_factor * (t1 - ambient)
         )
         electric_heat = liquid_heat / context["heater_efficiency"]
@@ -265,12 +273,12 @@ class _BOMThreeTankKernel(_ThreeTankPhysicsKernel):
             for name, value in zip(self.action_names, action)
             if not math.isfinite(value) or value < 0.0 or value > 1.0
         ]
-        state = [h[0], t1, h[1], t2, h[2], t3]
+        state = [h[0], t1, h[1], t2, h[2], t3, reservoir_temperature]
         return {
             "feasible": not reasons,
             "infeasible_reasons": tuple(reasons),
             "state": state,
-            "y_sp": [*h, t1, t2, t3],
+            "y_sp": state[:6],
             "action": action,
             "flow_m3s": q,
             "H1_to_liquid_power_w": liquid_heat,
@@ -278,12 +286,20 @@ class _BOMThreeTankKernel(_ThreeTankPhysicsKernel):
         }
 
     def tracking_steady_state_action(self, y_sp, disturbances=None):
-        """Invert a physically consistent tracking target into actuator commands."""
+        """Invert one physically consistent six-output equilibrium."""
+        equilibrium = self._tracking_steady_state(y_sp, disturbances)
+        return list(equilibrium["action"]) if equilibrium is not None else None
+
+    def tracking_steady_state_state(self, y_sp, disturbances=None):
+        equilibrium = self._tracking_steady_state(y_sp, disturbances)
+        return list(equilibrium["state"]) if equilibrium is not None else None
+
+    def _tracking_steady_state(self, y_sp, disturbances):
         values = np.asarray(y_sp, dtype=float).reshape(-1)
         if values.shape != (6,) or not np.all(np.isfinite(values)):
             return None
-        levels = values[:3].tolist()
-        temperatures = values[3:].tolist()
+        levels = values[0::2].tolist()
+        temperatures = values[1::2].tolist()
         if any(level <= 0.0 for level in levels):
             return None
         context = self._resolved_env(disturbances)
@@ -318,53 +334,29 @@ class _BOMThreeTankKernel(_ThreeTankPhysicsKernel):
         flow = (
             float(np.mean(flow_candidates))
             if flow_candidates
-            else 5.0 / 60000.0
+            else NOMINAL_FLOW_M3S
         )
-        pump_capacity = self.p["pump_flow_max"] * context["pump_flow_factor"]
-        normalized_flow = flow / pump_capacity
-        pump = math.sqrt(
-            (
-                self.p["pump_static_head"]
-                + (
-                    self.p["pump_shutoff_head"]
-                    - self.p["pump_static_head"]
-                )
-                * normalized_flow**2
-            )
-            / self.p["pump_shutoff_head"]
+        equilibrium = self.nominal_steady_state(
+            flow=flow,
+            tank_1_temperature=temperatures[0],
+            levels=levels,
+            env=disturbances,
         )
-        valves = [
-            flow
-            / (
-                self.p["cv_valves"][index]
-                * context[f"v{index + 1}{index + 2}_flow_factor"]
-                * math.sqrt(levels[index] + self.p["gravity_drop"][index])
-            )
-            for index in range(3)
-        ]
-        liquid_heat = (
-            RHO_CP * flow * (temperatures[0] - context["t_reservoir"])
-            + self.p["ua_loss"][0]
-            * loss_factor
-            * (temperatures[0] - ambient)
-        )
-        heater = liquid_heat / (
-            self.p["heater_power"] * context["heater_efficiency"]
-        )
-        action = [pump, *valves, heater]
-        if any(
-            not math.isfinite(value) or value < 0.0 or value > 1.0
-            for value in action
+        if not equilibrium["feasible"] or not np.allclose(
+            equilibrium["y_sp"],
+            values,
+            rtol=1e-3,
+            atol=1e-6,
         ):
             return None
-        return action
+        return equilibrium
 
     def nominal_steady_state_for_tank3(
         self,
         *,
         tank_3_level,
         tank_3_temperature,
-        flow=5.0 / 60000.0,
+        flow=NOMINAL_FLOW_M3S,
         upstream_levels=None,
         env=None,
     ):
@@ -407,17 +399,16 @@ class _BOMThreeTankKernel(_ThreeTankPhysicsKernel):
         return list(self.nominal_steady_state()["y_sp"])
 
     @staticmethod
-    def _gate(condition, ops):
-        return ops.if_else(condition, 1.0, 0.0)
+    def _gate(condition):
+        return 1.0 if condition else 0.0
 
-    def _flow_terms(self, levels, u, env, ops):
+    def _flow_terms(self, levels, u, env):
         high_level_ok = self._gate(
             (levels[0] < self.p["high_level_trip"][0])
             * (levels[1] < self.p["high_level_trip"][1])
             * (levels[2] < self.p["high_level_trip"][2]),
-            ops,
         )
-        reservoir_ok = self._gate(env["reservoir_available"] >= 0.5, ops)
+        reservoir_ok = self._gate(env["reservoir_available"] >= 0.5)
         pump_enabled = high_level_ok * reservoir_ok
         effective_max = self.p["pump_flow_max"] * env["pump_flow_factor"]
         head_margin = self.p["pump_shutoff_head"] - self.p["pump_static_head"]
@@ -425,43 +416,64 @@ class _BOMThreeTankKernel(_ThreeTankPhysicsKernel):
             self.p["pump_shutoff_head"] * u[0] * u[0]
             - self.p["pump_static_head"]
         ) / head_margin
-        pump_flow = effective_max * ops.sqrt(ops.max(normalized_head, 0.0)) * pump_enabled
+        pump_flow = effective_max * math.sqrt(max(normalized_head, 0.0)) * pump_enabled
         valve_flows = [
             self.p["cv_valves"][index]
             * env[f"v{index + 1}{index + 2}_flow_factor"]
             * u[1 + index]
-            * ops.sqrt(ops.max(levels[index] + self.p["gravity_drop"][index], 0.0))
+            * math.sqrt(max(levels[index] + self.p["gravity_drop"][index], 0.0))
             for index in range(3)
         ]
         overflow_flows = []
         for index in range(3):
             head = levels[index] - self.p["overflow_level"][index]
-            enabled = self._gate(head > 0.0, ops)
+            enabled = self._gate(head > 0.0)
             overflow_flows.append(
                 self.p["cv_overflow"][index]
                 * enabled
-                * ops.sqrt(ops.max(head, self.p["overflow_head_floor"]))
+                * math.sqrt(max(head, self.p["overflow_head_floor"]))
             )
         return pump_flow, valve_flows, overflow_flows, pump_enabled
 
-    def _heater_terms(self, levels, temperatures, u, env, ops):
-        level_ok = self._gate(levels[0] >= self.p["low_level_trip"][0], ops)
-        temperature_ok = self._gate(temperatures[0] < self.p["temperature_trip"], ops)
+    def _heater_terms(self, levels, temperatures, u, env):
+        level_ok = self._gate(levels[0] >= self.p["low_level_trip"][0])
+        temperature_ok = self._gate(temperatures[0] < self.p["temperature_trip"])
         enabled = level_ok * temperature_ok
         electric = u[4] * self.p["heater_power"] * enabled
         return electric * env["heater_efficiency"], electric, enabled
 
-    def _dynamics(self, x, u, env, ops):
-        context = self._resolved_env(env, ops)
-        u = self._effective_action(u, ops)
+    def _dynamics(self, x, u, env):
+        context = self._resolved_env(env)
+        u = self._effective_action(u)
         levels, temperatures = self._levels_temperatures(x)
-        pump, valves, overflows, _ = self._flow_terms(levels, u, context, ops)
+        pump, valves, overflows, _ = self._flow_terms(levels, u, context)
         q12, q23, q34 = valves
-        heat_h1, _, _ = self._heater_terms(levels, temperatures, u, context, ops)
+        heat_h1, _, _ = self._heater_terms(levels, temperatures, u, context)
+        reservoir_temperature = x[6]
+        return_flow = q34 + sum(overflows)
+        makeup_flow = max(pump - return_flow, 0.0)
+        reservoir_mixing = (
+            q34 * (temperatures[2] - reservoir_temperature)
+            + sum(
+                overflow * (temperature - reservoir_temperature)
+                for overflow, temperature in zip(overflows, temperatures)
+            )
+            + makeup_flow * (context["t_makeup"] - reservoir_temperature)
+        )
+        reservoir_heat_loss = (
+            self.p["reservoir_ua_loss"]
+            * context["heat_loss_factor"]
+            * (reservoir_temperature - context["t_amb"])
+        )
+        reservoir_derivative = (
+            reservoir_mixing / self.p["reservoir_volume"]
+            - reservoir_heat_loss
+            / (RHO_CP * self.p["reservoir_volume"])
+        )
         flows_in = [pump, q12, q23]
         flows_out = [q12 + overflows[0], q23 + overflows[1], q34 + overflows[2]]
         mixing_terms = [
-            pump * (context["t_reservoir"] - temperatures[0]),
+            pump * (reservoir_temperature - temperatures[0]),
             q12 * (temperatures[0] - temperatures[1]),
             q23 * (temperatures[1] - temperatures[2]),
         ]
@@ -473,13 +485,13 @@ class _BOMThreeTankKernel(_ThreeTankPhysicsKernel):
             mixing_terms,
             [heat_h1, 0.0, 0.0],
             context,
-            ops,
+            additional_derivatives=(reservoir_derivative,),
         )
 
     def hard_termination_reasons(self, x, levels, temps, env):
         del levels, temps, env
         h = [float(x[0]), float(x[2]), float(x[4])]
-        temperatures = [float(x[1]), float(x[3]), float(x[5])]
+        temperatures = [float(x[1]), float(x[3]), float(x[5]), float(x[6])]
         reasons = []
         if any(value < 0.0 for value in h):
             reasons.append("negative_level")
@@ -493,67 +505,52 @@ class _BOMThreeTankKernel(_ThreeTankPhysicsKernel):
         del levels, temps
         context = self._resolved_env(env)
         u = self._effective_action(
-            self.action_vector(self.default_action() if action is None else action),
-            _NUMERIC_OPS,
+            self.action_vector(self.default_action() if action is None else action)
         )
         physical_levels = [float(x[0]), float(x[2]), float(x[4])]
         temperatures = [float(x[1]), float(x[3]), float(x[5])]
         pump, valves, overflows, pump_enabled = self._flow_terms(
-            physical_levels, u, context, _NUMERIC_OPS
+            physical_levels, u, context
         )
         heat, electric, heater_enabled = self._heater_terms(
-            physical_levels, temperatures, u, context, _NUMERIC_OPS
+            physical_levels, temperatures, u, context
         )
         return {
             "P101_flow_m3s": float(pump),
             "V12_flow_m3s": float(valves[0]),
             "V23_flow_m3s": float(valves[1]),
             "V34_flow_m3s": float(valves[2]),
-            "product_flow_m3s": float(valves[2]),
             "overflow_flow_m3s": [float(value) for value in overflows],
             "P101_enabled": bool(pump_enabled),
             "H1_enabled": bool(heater_enabled),
             "H1_electric_power_w": float(electric),
             "H1_to_liquid_power_w": float(heat),
-            "reservoir_temperature_degC": float(context["t_reservoir"]),
+            "reservoir_temperature_degC": float(x[6]),
+            "reservoir_makeup_temperature_degC": float(context["t_makeup"]),
+            "reservoir_makeup_flow_m3s": float(
+                max(float(pump) - float(valves[2]) - sum(map(float, overflows)), 0.0)
+            ),
         }
 
     def action_energy_kw(self, act, x=None, env=None):
-        u = self._effective_action(self.action_vector(act), _NUMERIC_OPS)
+        u = self._effective_action(self.action_vector(act))
         context = self._resolved_env(env)
         pump_enabled = 1.0
         heater = u[4] * self.p["heater_power"]
         if x is not None:
             levels = [float(x[0]), float(x[2]), float(x[4])]
             temperatures = [float(x[1]), float(x[3]), float(x[5])]
-            _, _, _, pump_enabled = self._flow_terms(levels, u, context, _NUMERIC_OPS)
-            _, heater, _ = self._heater_terms(levels, temperatures, u, context, _NUMERIC_OPS)
+            _, _, _, pump_enabled = self._flow_terms(levels, u, context)
+            _, heater, _ = self._heater_terms(levels, temperatures, u, context)
         pump = u[0] ** 3 * self.p["pump_power_max"] * pump_enabled
         return float((pump + heater) / 1000.0)
 
-    def energy_kw(self, u, backend="numeric", ca=None):
-        if backend == "numeric":
-            values, ops = self.action_vector(u), _NUMERIC_OPS
-        elif backend == "casadi":
-            if ca is None:
-                raise ValueError("backend='casadi' requires the casadi module as ca=...")
-            from aiogym.core.backends import _casadi_ops
-
-            values, ops = u, _casadi_ops(ca)
-        else:
-            raise ValueError(f"unknown dynamics backend: {backend!r}")
-        effective = self._effective_action(values, ops)
+    def energy_kw(self, u):
+        effective = self._effective_action(self.action_vector(u))
         return (
             effective[0] ** 3 * self.p["pump_power_max"]
             + effective[4] * self.p["heater_power"]
         ) / 1000.0
-
-    def production(self, x, act, env=None):
-        levels = [float(x[0]), float(x[2]), float(x[4])]
-        context = self._resolved_env(env)
-        u = self._effective_action(self.action_vector(act), _NUMERIC_OPS)
-        _, valves, _, _ = self._flow_terms(levels, u, context, _NUMERIC_OPS)
-        return float(valves[2])
 
     def physical_io_schema(self):
         return {
@@ -567,6 +564,11 @@ class _BOMThreeTankKernel(_ThreeTankPhysicsKernel):
                     }
                     for tank in (1, 2, 3)
                 ],
+                {
+                    "name": "TT401",
+                    "quantity": "reservoir_temperature",
+                    "signal": "RS485",
+                },
                 *[
                     {
                         "name": f"TT{tank}01",
@@ -612,6 +614,8 @@ class ThreeTankModel(_BOMThreeTankKernel):
             "low_level_trip": "m",
             "nominal_level": "m",
             "ua_loss": "W/K",
+            "reservoir_volume": "m^3",
+            "reservoir_ua_loss": "W/K",
             "heater_power": "W",
             "pump_flow_max": "m^3/s",
             "pump_power_max": "W",
@@ -659,34 +663,73 @@ class ThreeTankModel(_BOMThreeTankKernel):
         return dict(self.disturbance_defaults())
 
     def action_slew_limits(self):
-        return list(TANK3_MAXIMUM_ACTION_STEP)
+        return None
 
     def observation_schema(self):
-        output_names = [f"normalized_{row['name']}" for row in self.output_schema()]
+        measurement_names = [
+            "normalized_tank_1_level",
+            "normalized_tank_1_temperature",
+            "normalized_tank_2_level",
+            "normalized_tank_2_temperature",
+            "normalized_tank_3_level",
+            "normalized_tank_3_temperature",
+            "normalized_reservoir_temperature",
+        ]
         reference_names = [
             f"normalized_{row['name']}_reference" for row in self.output_schema()
         ]
-        action_names = [f"previous_{row['name']}" for row in self.action_schema()]
         return [
-            {"name": name, "unit": "normalized", "low": 0.0, "high": 1.0}
-            for name in (*output_names, *reference_names, *action_names)
+            *(
+                {
+                    "name": name,
+                    "kind": "measurement",
+                    "unit": "normalized",
+                    "low": 0.0,
+                    "high": 1.0,
+                }
+                for name in measurement_names
+            ),
+            *(
+                {
+                    "name": name,
+                    "kind": "reference",
+                    "unit": "normalized",
+                    "low": 0.0,
+                    "high": 1.0,
+                }
+                for name in reference_names
+            ),
         ]
 
     def observation(self, state, reference, previous_action, disturbances):
-        del disturbances
-        scales = np.asarray(self.controlled_output_scales(), dtype=float)
-        output = np.asarray(self.outputs(state), dtype=float)
-        normalized_output = np.clip(output / scales, 0.0, 1.0)
-        normalized_reference = np.clip(
-            np.asarray(reference, dtype=float) / scales,
+        del previous_action, disturbances
+        measurement = np.asarray(state, dtype=float)
+        measurement_scales = np.asarray(
+            [
+                self.p["height_max"][0],
+                self.p["temperature_hard_limit"],
+                self.p["height_max"][1],
+                self.p["temperature_hard_limit"],
+                self.p["height_max"][2],
+                self.p["temperature_hard_limit"],
+                self.p["temperature_hard_limit"],
+            ],
+            dtype=float,
+        )
+        normalized_measurement = np.clip(
+            measurement / measurement_scales,
             0.0,
             1.0,
         )
-        action = np.clip(np.asarray(previous_action, dtype=float), 0.0, 1.0)
+        reference_scales = np.asarray(self.controlled_output_scales(), dtype=float)
+        normalized_reference = np.clip(
+            np.asarray(reference, dtype=float) / reference_scales,
+            0.0,
+            1.0,
+        )
         return [
-            *normalized_output.tolist(),
+            *normalized_measurement.tolist(),
             *normalized_reference.tolist(),
-            *action.tolist(),
         ]
 
     def measurement(self, state, disturbances=None):
@@ -707,16 +750,19 @@ class ThreeTankModel(_BOMThreeTankKernel):
             raise ValueError(
                 "three-tank policy observation must match observation_schema"
             )
-        output_dim = len(self.output_schema())
-        if len(self.state_schema()) != output_dim:
-            raise ValueError(
-                "three-tank policy observation must expose the complete state"
-            )
-        scales = np.asarray(self.controlled_output_scales(), dtype=float)
-        output = values[:output_dim] * scales
-        state = np.empty(output_dim, dtype=float)
-        state[0::2] = output[:3]
-        state[1::2] = output[3:]
+        measurement_scales = np.asarray(
+            [
+                self.p["height_max"][0],
+                self.p["temperature_hard_limit"],
+                self.p["height_max"][1],
+                self.p["temperature_hard_limit"],
+                self.p["height_max"][2],
+                self.p["temperature_hard_limit"],
+                self.p["temperature_hard_limit"],
+            ],
+            dtype=float,
+        )
+        state = values[:7] * measurement_scales
         return self.measurement(state, disturbances)
 
     def clamp_state(self, state):
@@ -726,8 +772,8 @@ class ThreeTankModel(_BOMThreeTankKernel):
         values = list(state)
         reasons = self.hard_termination_reasons(
             values,
-            values[0::2],
-            values[1::2],
+            [values[0], values[2], values[4]],
+            [values[1], values[3], values[5]],
             self._resolved_env(disturbances),
         )
         return {str(reason): 1.0 for reason in reasons}
@@ -735,8 +781,8 @@ class ThreeTankModel(_BOMThreeTankKernel):
     def safety_margins(self, state, disturbances=None):
         del disturbances
         values = [float(value) for value in state]
-        levels = values[0::2]
-        temperatures = values[1::2]
+        levels = [values[0], values[2], values[4]]
+        temperatures = [values[1], values[3], values[5]]
         temperature_limit = float(self.p["temperature_hard_limit"])
         margins = {}
         for index, (level, maximum) in enumerate(
@@ -749,6 +795,9 @@ class ThreeTankModel(_BOMThreeTankKernel):
             margins[f"tank_{index}_temperature_upper"] = (
                 temperature_limit - temperature
             ) / temperature_limit
+        margins["reservoir_temperature_upper"] = (
+            temperature_limit - values[6]
+        ) / temperature_limit
         return margins
 
     def step_info(self, state, action, disturbances=None):
@@ -757,8 +806,8 @@ class ThreeTankModel(_BOMThreeTankKernel):
         applied = self.default_action() if action is None else list(action)
         info = self.process_info(
             values,
-            values[0::2],
-            values[1::2],
+            [values[0], values[2], values[4]],
+            [values[1], values[3], values[5]],
             context,
             applied,
         )
@@ -839,7 +888,7 @@ def _finite_number(name, value):
 
 __all__ = [
     "BOM_CONFIGURATION",
-    "TANK3_INTERNAL_CONTROL",
-    "TANK3_MAXIMUM_ACTION_STEP",
+    "NOMINAL_FLOW_M3S",
+    "TRACKING_ERROR_SCALES",
     "ThreeTankModel",
 ]

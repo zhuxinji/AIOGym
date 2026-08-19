@@ -7,36 +7,108 @@ from aiogym.core.specs import Benchmark, EpisodeSpec
 from aiogym.scenarios._metrics import regulation_episode_metrics
 
 
-_MEASUREMENT_NOISE = {"std": 0.001, "bias_std": 0.0}
+_TRACKING_LEVEL_RANGE_FRACTION = (0.35, 0.80)
+_TRACKING_ACTION_RANGE = (0.02, 0.95)
+_MINIMUM_TRACKING_MOVE_FRACTION = 0.15
+_BOUNDARY_INITIAL_PROBABILITY = 0.20
+_BOUNDARY_LEVEL_RANGE_FRACTION = (0.80, 0.92)
+_MAXIMUM_SAMPLING_ATTEMPTS = 100
 
 
 def make_default_episode(model) -> EpisodeSpec:
     return EpisodeSpec(
         initial_state=tuple(model.initial_state()),
-        reference=tuple(model.default_setpoint_vector()),
+        initial_action=tuple(model.default_action()),
+        reference=(18.0, 8.0),
         horizon=600,
         disturbances=model.default_disturbances(),
-        reference_schedule={300: (15.0, 10.5)},
+        reference_schedule={300: (8.0, 18.0)},
     )
 
 
-def _tracking_episode(model) -> EpisodeSpec:
-    reference = np.asarray(model.default_setpoint_vector(), dtype=float)
+def _tracking_episode(model, rng) -> EpisodeSpec:
+    start = _sample_tracking_equilibrium(model, rng)
+    first = _sample_tracking_equilibrium(
+        model,
+        rng,
+        previous_reference=start["reference"],
+    )
+    second = _sample_tracking_equilibrium(
+        model,
+        rng,
+        previous_reference=first["reference"],
+    )
+    return EpisodeSpec(
+        initial_state=start["state"],
+        initial_action=start["action"],
+        reference=start["reference"],
+        horizon=600,
+        disturbances=model.default_disturbances(),
+        reference_schedule={
+            120: first["reference"],
+            360: second["reference"],
+        },
+    )
+
+
+def _sample_tracking_equilibrium(model, rng, *, previous_reference=None):
     maximum = float(model.parameter("max_level"))
-    first = maximum * np.asarray((0.8, 0.5), dtype=float)
-    second = maximum * np.asarray((0.5, 0.8), dtype=float)
-    return EpisodeSpec(
-        initial_state=tuple(model.initial_state()),
-        reference=tuple(reference),
-        horizon=600,
-        disturbances=model.default_disturbances(),
-        reference_schedule={120: tuple(first), 360: tuple(second)},
+    lower, upper = (
+        fraction * maximum for fraction in _TRACKING_LEVEL_RANGE_FRACTION
+    )
+    minimum_move = _MINIMUM_TRACKING_MOVE_FRACTION * maximum
+    for _attempt in range(_MAXIMUM_SAMPLING_ATTEMPTS):
+        reference = rng.uniform(lower, upper, size=2)
+        if previous_reference is not None and np.any(
+            np.abs(reference - previous_reference) < minimum_move
+        ):
+            continue
+        action = model.tracking_steady_state_action(reference)
+        state = model.tracking_steady_state_state(reference)
+        if action is None or state is None:
+            continue
+        action_array = np.asarray(action, dtype=float)
+        state_array = np.asarray(state, dtype=float)
+        action_lower, action_upper = _TRACKING_ACTION_RANGE
+        if (
+            np.any(action_array < action_lower)
+            or np.any(action_array > action_upper)
+            or np.any(state_array < 0.0)
+            or np.any(state_array > maximum)
+            or not np.allclose(
+                model.outputs(state_array),
+                reference,
+                rtol=1e-9,
+                atol=1e-9,
+            )
+            or not np.allclose(
+                model.dynamics(
+                    state_array,
+                    action_array,
+                    model.default_disturbances(),
+                ),
+                0.0,
+                rtol=0.0,
+                atol=1e-10,
+            )
+        ):
+            continue
+        return {
+            "state": tuple(float(value) for value in state_array),
+            "action": tuple(float(value) for value in action_array),
+            "reference": tuple(float(value) for value in reference),
+        }
+    raise ValueError(
+        "could not sample a feasible Quadruple-Tank tracking equilibrium "
+        f"within {_MAXIMUM_SAMPLING_ATTEMPTS} attempts"
     )
 
 
-def _disturbance_episode(model) -> EpisodeSpec:
+def _disturbance_episode(model, rng) -> EpisodeSpec:
+    del rng
     return EpisodeSpec(
         initial_state=tuple(model.initial_state()),
+        initial_action=tuple(model.default_action()),
         reference=tuple(model.default_setpoint_vector()),
         horizon=600,
         disturbances=model.default_disturbances(),
@@ -47,7 +119,8 @@ def _disturbance_episode(model) -> EpisodeSpec:
     )
 
 
-def _boundary_episode(model) -> EpisodeSpec:
+def _boundary_episode(model, rng) -> EpisodeSpec:
+    del rng
     maximum = float(model.parameter("max_level"))
     initial = (0.9 * maximum,) * 4
     reference = np.clip(
@@ -55,96 +128,100 @@ def _boundary_episode(model) -> EpisodeSpec:
     )
     return EpisodeSpec(
         initial_state=initial,
+        initial_action=tuple(model.default_action()),
         reference=tuple(reference),
         horizon=400,
         disturbances=model.default_disturbances(),
     )
 
 
-def sample_training_episode(model, rng) -> tuple[EpisodeSpec, str]:
-    family = (
-        "tracking",
-        "disturbance-rejection",
-        "boundary-safety",
-    )[int(rng.integers(0, 3))]
+def sample_training_episode(model, rng, reward_id) -> tuple[EpisodeSpec, str]:
+    del reward_id
     maximum = float(model.parameter("max_level"))
-    reference = np.asarray(model.default_setpoint_vector(), dtype=float)
-    if family == "tracking":
-        step = int(rng.integers(90, 241))
-        for _attempt in range(100):
-            target = rng.uniform(0.35 * maximum, 0.80 * maximum, size=2)
-            if (
-                np.all(np.abs(target - reference) >= 0.15 * maximum)
-                and model.tracking_steady_state_action(target) is not None
-            ):
-                break
-        else:
-            raise ValueError(
-                "could not sample a feasible Quadruple-Tank tracking episode"
+    boundary_initial = rng.random() < _BOUNDARY_INITIAL_PROBABILITY
+    target = _sample_tracking_equilibrium(model, rng)
+    if boundary_initial:
+        initial_state = tuple(
+            float(value)
+            for value in rng.uniform(
+                _BOUNDARY_LEVEL_RANGE_FRACTION[0] * maximum,
+                _BOUNDARY_LEVEL_RANGE_FRACTION[1] * maximum,
+                size=4,
             )
-        episode = EpisodeSpec(
-            initial_state=tuple(model.initial_state()),
-            reference=tuple(reference),
-            horizon=600,
-            disturbances=model.default_disturbances(),
-            reference_schedule={step: tuple(target)},
         )
-    elif family == "disturbance-rejection":
-        start = int(rng.integers(120, 241))
-        duration = int(rng.integers(120, 241))
-        disturbance = float(rng.uniform(0.78, 0.94))
         episode = EpisodeSpec(
-            initial_state=tuple(model.initial_state()),
-            reference=tuple(reference),
+            initial_state=initial_state,
+            initial_action=target["action"],
+            reference=target["reference"],
             horizon=600,
             disturbances=model.default_disturbances(),
-            disturbance_schedule={
-                start: {"pump_flow_factor": disturbance},
-                start + duration: {"pump_flow_factor": 1.0},
-            },
         )
     else:
-        initial = tuple(rng.uniform(0.82, 0.92, size=4) * maximum)
-        episode = EpisodeSpec(
-            initial_state=initial,
-            reference=tuple(np.clip(reference, 0.0, maximum)),
-            horizon=400,
-            disturbances=model.default_disturbances(),
+        start = _sample_tracking_equilibrium(
+            model,
+            rng,
+            previous_reference=target["reference"],
         )
-    return episode, family
+        step = int(rng.integers(90, 241))
+        episode = EpisodeSpec(
+            initial_state=start["state"],
+            initial_action=start["action"],
+            reference=start["reference"],
+            horizon=600,
+            disturbances=model.default_disturbances(),
+            reference_schedule={step: target["reference"]},
+        )
+    return episode, "tracking"
+
+
+def sample_training_disturbance(model, rng):
+    del model
+    start = int(rng.integers(120, 241))
+    duration = int(rng.integers(120, 241))
+    factor = float(rng.uniform(0.78, 0.94))
+    return {
+        start: {"pump_flow_factor": factor},
+        start + duration: {"pump_flow_factor": 1.0},
+    }
 
 
 BENCHMARKS = {
     "tracking": Benchmark(
         id="tracking",
-        make_episode=_tracking_episode,
+        reward_id="regulation",
+        episode_factory=_tracking_episode,
         metric_function=regulation_episode_metrics,
-        ranking_metrics=(("tracking_iae", "minimize"),),
-        measurement_noise=_MEASUREMENT_NOISE,
+        ranking_metrics=(
+            ("unsafe_rate", "minimize"),
+            ("return", "maximize"),
+        ),
     ),
     "disturbance-rejection": Benchmark(
         id="disturbance-rejection",
-        make_episode=_disturbance_episode,
+        reward_id="regulation",
+        episode_factory=_disturbance_episode,
         metric_function=regulation_episode_metrics,
         ranking_metrics=(
             ("unsafe_rate", "minimize"),
-            ("disturbance_iae", "minimize"),
-            ("recovery_time", "minimize"),
+            ("return", "maximize"),
         ),
-        measurement_noise=_MEASUREMENT_NOISE,
     ),
     "boundary-safety": Benchmark(
         id="boundary-safety",
-        make_episode=_boundary_episode,
+        reward_id="regulation",
+        episode_factory=_boundary_episode,
         metric_function=regulation_episode_metrics,
         ranking_metrics=(
             ("unsafe_rate", "minimize"),
-            ("time_to_violation", "maximize"),
-            ("tracking_iae", "minimize"),
+            ("return", "maximize"),
         ),
-        measurement_noise=_MEASUREMENT_NOISE,
     ),
 }
 
 
-__all__ = ["BENCHMARKS", "make_default_episode", "sample_training_episode"]
+__all__ = [
+    "BENCHMARKS",
+    "make_default_episode",
+    "sample_training_disturbance",
+    "sample_training_episode",
+]

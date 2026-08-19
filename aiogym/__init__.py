@@ -1,4 +1,4 @@
-"""Small public API for AIO-Gym 0.7."""
+"""Small public API for AIO-Gym 0.8."""
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -6,8 +6,11 @@ from pathlib import Path
 from typing import Any
 
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
+from .workflows.algorithms import AlgorithmBackend, TrainingStep
+from .workflows._sb3_runtime import SB3AlgorithmBackend
+from .core.contracts import Policy
 from .workflows.dataset import DatasetReader
 
 
@@ -43,6 +46,33 @@ def list_parameters(scenario: str):
     return implementation(scenario=scenario)
 
 
+def list_algorithms():
+    from .workflows.algorithms import list_algorithms as implementation
+
+    return implementation()
+
+
+def register_algorithm(backend: AlgorithmBackend) -> None:
+    from .workflows.algorithms import register_algorithm as implementation
+
+    implementation(backend)
+
+
+def register_sb3_algorithm(
+    algorithm: str,
+    model_class: type,
+    *,
+    behavior_cloning=None,
+) -> None:
+    from .workflows.algorithms import register_sb3_algorithm as implementation
+
+    implementation(
+        algorithm,
+        model_class,
+        behavior_cloning=behavior_cloning,
+    )
+
+
 def make_env(
     scenario: str,
     *,
@@ -50,6 +80,7 @@ def make_env(
     parameters=None,
     benchmark=None,
     randomize=False,
+    disturbance=False,
     noise=False,
     delay=False,
     fault=False,
@@ -64,6 +95,7 @@ def make_env(
         parameters=parameters,
         benchmark=benchmark,
         randomize=randomize,
+        disturbance=disturbance,
         noise=noise,
         delay=delay,
         fault=fault,
@@ -125,6 +157,13 @@ def train(
     seed: int = 0,
     algorithm_kwargs: Mapping[str, Any] | None = None,
     record_every: int = 500,
+    evaluation_env=None,
+    evaluate_every: int | None = None,
+    evaluation_seed: int = 0,
+    demonstrations: str | Path | None = None,
+    behavior_cloning_epochs: int | None = None,
+    behavior_cloning_batch_size: int = 256,
+    behavior_cloning_learning_rate: float = 3e-4,
 ):
     from .workflows import train as implementation
 
@@ -136,6 +175,13 @@ def train(
         seed=seed,
         algorithm_kwargs=algorithm_kwargs,
         record_every=record_every,
+        evaluation_env=evaluation_env,
+        evaluate_every=evaluate_every,
+        evaluation_seed=evaluation_seed,
+        demonstrations=demonstrations,
+        behavior_cloning_epochs=behavior_cloning_epochs,
+        behavior_cloning_batch_size=behavior_cloning_batch_size,
+        behavior_cloning_learning_rate=behavior_cloning_learning_rate,
     )
 
 
@@ -149,10 +195,10 @@ def plot_training_curve(
     return implementation(curve, output=output)
 
 
-def load_policy(checkpoint: str | Path, *, algorithm: str, env=None):
+def load_policy(checkpoint: str | Path, *, env):
     from .workflows import load_policy as implementation
 
-    return implementation(checkpoint, algorithm=algorithm, env=env)
+    return implementation(checkpoint, env=env)
 
 
 def evaluate(
@@ -176,10 +222,15 @@ def evaluate(
 
 __all__ = [
     "__version__",
+    "AlgorithmBackend",
     "DatasetReader",
+    "Policy",
+    "SB3AlgorithmBackend",
+    "TrainingStep",
     "collect",
     "compare_policies",
     "evaluate",
+    "list_algorithms",
     "list_scenarios",
     "list_benchmarks",
     "list_parameters",
@@ -188,5 +239,7 @@ __all__ = [
     "make_controller",
     "make_env",
     "plot_training_curve",
+    "register_algorithm",
+    "register_sb3_algorithm",
     "train",
 ]

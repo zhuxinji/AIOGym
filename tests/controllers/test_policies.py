@@ -66,9 +66,13 @@ def test_tank3_tracking_pid_and_mpc_use_the_physical_interface(controller_id):
         env.close()
 
 
-def test_three_tank_controller_config_does_not_route_on_benchmark():
+def test_three_tank_controller_config_routes_on_declared_reward():
     metadata = []
-    for benchmark in ("tracking", "disturbance-rejection", "boundary-safety"):
+    for benchmark in (
+        "tracking",
+        "disturbance-rejection",
+        "boundary-safety",
+    ):
         env = make_env("three_tank", benchmark=benchmark)
         try:
             metadata.append(
@@ -79,16 +83,26 @@ def test_three_tank_controller_config_does_not_route_on_benchmark():
             )
         finally:
             env.close()
-    assert metadata[0] == metadata[1] == metadata[2]
-    pid, mpc = metadata[0]
-    assert max(abs(value) for row in pid["kp"] for value in row) == 32.0
-    assert max(abs(value) for row in pid["ki"][:4] for value in row) == pytest.approx(
-        0.002
+    assert metadata[1] == metadata[2]
+    level_pid, level_mpc = metadata[0]
+    thermal_pid, thermal_mpc = metadata[1]
+    assert max(abs(value) for row in level_pid["kp"] for value in row) == 32.0
+    assert level_pid["kp"][-1] == [0.0] * 6
+    assert level_pid["ki"][-1] == [0.0] * 6
+    assert level_mpc["q_y"] == [1.0, 0.0, 1.0, 0.0, 1.0, 0.0]
+    assert max(abs(value) for row in thermal_pid["kp"] for value in row) == 32.0
+    assert max(
+        abs(value) for row in thermal_pid["ki"][:4] for value in row
+    ) == pytest.approx(
+        0.04
     )
-    assert pid["feedforward"] == "tracking_steady_state_action"
-    assert mpc["feedforward_reseed"] == "setpoint_or_feedforward_change"
-    assert mpc["horizon"] == 120
-    assert mpc["steady_input_weight"][-1] == pytest.approx(0.015)
+    assert thermal_mpc["q_y"] == [1.0] * 6
+    assert "feedforward" not in level_pid
+    assert level_mpc["feedforward_reseed"] == "setpoint_or_feedforward_change"
+    assert level_mpc["horizon"] == 60
+    assert level_mpc["move_supp"][:3] == [50.0] * 3
+    assert level_mpc["steady_input_weight"][:4] == [40.0] * 4
+    assert level_mpc["steady_input_weight"][-1] == pytest.approx(3.0)
 
 
 def test_name_bound_pid_rejects_unknown_actuator_before_rollout():
@@ -99,11 +113,13 @@ def test_name_bound_pid_rejects_unknown_actuator_before_rollout():
                 "pid",
                 env=env,
                 config={
-                    "loops": [
+                    "matrix_terms": [
                         {
                             "actuator": "not-installed",
                             "output": "tank_1_level",
-                            "pid": [1.0, 0.0, 0.0],
+                            "kp": 1.0,
+                            "ki": 0.0,
+                            "kd": 0.0,
                         }
                     ]
                 },
@@ -141,24 +157,6 @@ def test_mpc_can_reseed_when_disturbance_changes_steady_feedforward():
         env.close()
 
 
-def test_pid_can_update_bias_from_steady_feedforward():
-    env = make_env("three_tank", reward="regulation")
-    try:
-        policy = make_controller(
-            "pid",
-            env=env,
-            config={"feedforward": "tracking_steady_state_action"},
-        )
-        observation, info = env.reset(seed=0)
-        first = policy.act(observation, {"env": env, "info": info})
-        env.set_disturbances({"pump_flow_factor": 0.85})
-        second = policy.act(observation, {"env": env, "info": info})
-        assert second[0] > first[0]
-        assert policy.metadata()["feedforward"] == "tracking_steady_state_action"
-    finally:
-        env.close()
-
-
 def test_mpc_accepts_per_actuator_regularization_weights():
     env = make_env("three_tank", reward="regulation")
     try:
@@ -192,7 +190,7 @@ def test_hold_and_random_are_seeded_environment_action_policies():
         env.close()
 
 
-def test_pid_acts_on_seeded_noisy_benchmark_observation():
+def test_pid_is_deterministic_for_a_repeated_benchmark_case_seed():
     env = make_env("quadruple", benchmark="tracking")
     try:
         first = rollout(
@@ -204,10 +202,10 @@ def test_pid_acts_on_seeded_noisy_benchmark_observation():
         second = rollout(
             env,
             make_controller("pid", env=env),
-            seed=4,
+            seed=3,
             max_steps=1,
         )
-        assert not np.array_equal(
+        assert np.array_equal(
             first.transitions[0].action,
             second.transitions[0].action,
         )

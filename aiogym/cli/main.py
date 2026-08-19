@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Scenario-oriented AIO-Gym 0.7 command-line interface."""
+"""Scenario-oriented AIO-Gym 0.8 command-line interface."""
 from __future__ import annotations
 
 import argparse
@@ -18,22 +18,23 @@ def build_parser():
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
     listing = commands.add_parser("list", help="list registered resources")
     resources = listing.add_subparsers(dest="resource", metavar="RESOURCE")
-    for name in (
-        "scenarios",
-        "rewards",
-        "benchmarks",
-        "parameters",
-        "controllers",
-        "algorithms",
-    ):
-        item = resources.add_parser(name)
+    resource_help = {
+        "scenarios": "list registered Scenario ids",
+        "rewards": "list Reward ids for one Scenario",
+        "benchmarks": "list fixed Benchmarks for one Scenario",
+        "parameters": "list model parameter defaults and units",
+        "controllers": "list built-in controller ids",
+        "algorithms": "list registered training algorithm ids",
+    }
+    for name, description in resource_help.items():
+        item = resources.add_parser(name, help=description)
         if name in {"rewards", "benchmarks", "parameters"}:
-            item.add_argument("--scenario")
+            item.add_argument("--scenario", help="registered Scenario id")
     help_text = {
         "collect": "collect an episode-oriented Dataset",
-        "train": "train one SB3 policy",
+        "train": "train one registered algorithm policy",
         "evaluate": "evaluate one policy on explicit seeds",
-        "compare": "compare built-in controllers on identical seeds",
+        "compare": "compare controllers and checkpoints on identical seeds",
     }
     for name, description in help_text.items():
         commands.add_parser(name, help=description, add_help=False)
@@ -60,19 +61,12 @@ def _list(args):
         rows = []
         for benchmark_id in benchmark_ids:
             benchmark = scenario.benchmarks[benchmark_id]
-            noise = benchmark.measurement_noise
-            noise_label = (
-                "none"
-                if noise is None
-                else f"std={noise['std']:g},bias_std={noise['bias_std']:g}"
-            )
             rows.append(
                 (
                     benchmark_id,
-                    str(benchmark.make_episode(model).horizon),
-                    scenario.default_reward,
+                    str(benchmark.make_episode(model, 0).horizon),
+                    benchmark.reward_id,
                     "scenario-defaults",
-                    noise_label,
                     ",".join(
                         name for name, _direction in benchmark.ranking_metrics
                     ),
@@ -83,7 +77,6 @@ def _list(args):
             "HORIZON",
             "REWARD",
             "PARAMETERS",
-            "MEASUREMENT_NOISE",
             "RANKING_METRICS",
         )
         widths = [
@@ -115,9 +108,7 @@ def _list(args):
     elif args.resource == "controllers":
         values = ("hold", "mpc", "pid", "random")
     elif args.resource == "algorithms":
-        from aiogym.workflows.train import ALGORITHMS
-
-        values = ALGORITHMS
+        values = aiogym.list_algorithms()
     else:
         raise ValueError(
             "choose one of: scenarios, rewards, benchmarks, "

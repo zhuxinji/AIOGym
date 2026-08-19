@@ -1,3 +1,6 @@
+# Local agent instructions
+/AGENTS.md
+
 # Python
 .venv/
 .venv-rl/
@@ -18,18 +21,15 @@ venv/
 .env
 runs/
 /datasets/
-checkpoints/
+/rl/checkpoints/
 *.log
 
 # Node / OS
 node_modules/
 # macOS metadata
 .DS_Store
-**/.DS_Store
 ._*
-**/._*
 __MACOSX/
-**/__MACOSX/
 
 # Trained policies (build artifacts)
 *.onnx

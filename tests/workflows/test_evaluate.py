@@ -25,7 +25,7 @@ def test_evaluate_preserves_seed_order_and_aggregates_metrics():
 
     assert result["schema_version"] == "aiogym.evaluation.v3"
     assert result["ranking_metrics"] == [
-        {"name": "tracking_iae", "direction": "minimize"}
+        {"name": "return", "direction": "maximize"}
     ]
     assert [row["seed"] for row in result["episodes"]] == [4, 3]
     assert [row["length"] for row in result["episodes"]] == [4, 4]
@@ -66,54 +66,6 @@ def test_evaluate_preserves_seed_order_and_aggregates_metrics():
     assert result["trajectory_schema"]["output"][0]["name"] == "lower_tank_1_level"
     assert result["trajectory_schema"]["output"][0]["low"] == 0.0
     assert result["trajectory_schema"]["output"][0]["high"] == 20.0
-
-
-def test_reward_metric_sets_remain_distinct():
-    regulation_env = make_env("three_tank", reward="regulation")
-    economic_env = make_env("three_tank", reward="economic")
-    try:
-        regulation = evaluate(
-            env=regulation_env,
-            policy="pid",
-            seeds=(0,),
-            max_steps=3,
-        )
-        economic = evaluate(
-            env=economic_env,
-            policy="pid",
-            seeds=(0,),
-            max_steps=3,
-        )
-    finally:
-        regulation_env.close()
-        economic_env.close()
-    assert "tracking_iae" in regulation["aggregate"]
-    assert "economic_objective" in economic["aggregate"]
-    assert "tracking_iae" not in economic["aggregate"]
-
-
-def test_tank3_reward_reports_diagnostic_metrics():
-    env = make_env(
-        "three_tank",
-        reward="tank3-regulation",
-    )
-    try:
-        result = evaluate(env=env, policy="hold", seeds=(0,), max_steps=3)
-    finally:
-        env.close()
-    assert result["ranking_metrics"] == [
-        {"name": "tank3_tracking_iae", "direction": "minimize"}
-    ]
-    for metric in (
-        "tank3_level_iae",
-        "tank3_temperature_iae",
-        "upstream_level_iae",
-        "upstream_level_max_error",
-        "final_tank3_level_error_m",
-        "action_slew_violation_count",
-        "heater_total_variation",
-    ):
-        assert metric in result["aggregate"]
 
 
 def test_evaluate_writes_one_json_and_rejects_overwrite(tmp_path):
@@ -159,7 +111,45 @@ def test_evaluate_validates_seeds(seeds, error):
         env.close()
 
 
-def test_compare_matches_individual_evaluation_and_minimize_ordering(tmp_path):
+def test_evaluate_validates_the_public_policy_boundary():
+    class IncompletePolicy:
+        def metadata(self):
+            return {"id": "incomplete"}
+
+    class InvalidMetadataPolicy:
+        env = None
+
+        def reset(self, seed=None):
+            del seed
+
+        def act(self, observation, context):
+            del context
+            return np.zeros_like(observation[:2])
+
+        def metadata(self):
+            return []
+
+    env = make_env("quadruple")
+    try:
+        with pytest.raises(TypeError, match="policy must provide"):
+            evaluate(
+                env=env,
+                policy=IncompletePolicy(),
+                seeds=[0],
+                max_steps=1,
+            )
+        with pytest.raises(TypeError, match="metadata.*mapping"):
+            evaluate(
+                env=env,
+                policy=InvalidMetadataPolicy(),
+                seeds=[0],
+                max_steps=1,
+            )
+    finally:
+        env.close()
+
+
+def test_compare_matches_individual_evaluation_and_return_ordering(tmp_path):
     env = make_env("quadruple")
     try:
         pid = make_controller("pid", env=env)
@@ -176,17 +166,97 @@ def test_compare_matches_individual_evaluation_and_minimize_ordering(tmp_path):
     assert comparison["seeds"] == [3, 4]
     assert comparison["evaluations"]["pid"] == single
     medians = {
-        label: result["aggregate"]["tracking_iae"]["median"]
+        label: result["aggregate"]["return"]["median"]
         for label, result in comparison["evaluations"].items()
     }
     assert comparison["ordering"] == sorted(
-        medians, key=lambda label: (medians[label], label)
+        medians, key=lambda label: (-medians[label], label)
     )
 
 
-def test_compare_uses_maximize_direction_and_writes_json_and_svg(tmp_path):
+@pytest.mark.parametrize("scenario", ("quadruple", "three_tank"))
+def test_compare_reuses_identical_cases_for_every_policy(tmp_path, scenario):
+    env = make_env(scenario, benchmark="tracking")
+    try:
+        comparison = compare_policies(
+            env=env,
+            policies={"pid": "pid", "mpc": "mpc"},
+            seeds=(0, 1, 2),
+            max_steps=1,
+            output=tmp_path / scenario,
+        )
+    finally:
+        env.close()
+
+    pid_episodes = comparison["evaluations"]["pid"]["episodes"]
+    mpc_episodes = comparison["evaluations"]["mpc"]["episodes"]
+    pid_specs = [episode["episode_spec"] for episode in pid_episodes]
+    assert pid_specs == [episode["episode_spec"] for episode in mpc_episodes]
+    assert len({repr(spec) for spec in pid_specs}) == 3
+    assert [
+        episode["episode_parameters"]["case_seed"]
+        for episode in pid_episodes
+    ] == [0, 1, 2]
+
+
+def test_compare_allows_constraint_names_observed_by_only_one_policy(tmp_path):
+    env = make_env("quadruple", benchmark="tracking")
+    try:
+        unsafe_pid = make_controller(
+            "pid",
+            env=env,
+            config={
+                "matrix_terms": [
+                    {
+                        "actuator": "pump_1_voltage",
+                        "output": "lower_tank_1_level",
+                        "kp": 0.0,
+                        "ki": 0.0,
+                        "kd": 0.0,
+                    },
+                    {
+                        "actuator": "pump_2_voltage",
+                        "output": "lower_tank_2_level",
+                        "kp": 0.0,
+                        "ki": 0.0,
+                        "kd": 0.0,
+                    },
+                ],
+                "bias": [1.0, 1.0],
+            },
+        )
+        comparison = compare_policies(
+            env=env,
+            policies={"unsafe": unsafe_pid, "safe": "mpc"},
+            seeds=(0,),
+            output=tmp_path / "comparison",
+        )
+    finally:
+        env.close()
+
+    assert comparison["evaluations"]["unsafe"]["episodes"][0]["terminated"]
+    assert not comparison["evaluations"]["safe"]["episodes"][0]["terminated"]
+    assert comparison["ordering"][0] == "safe"
+    assert comparison["trajectory_schema"]["constraint_cost_names"] == [
+        "tank_overflow_limit"
+    ]
+
+
+def test_quadruple_pid_safely_completes_tracking_benchmark():
+    env = make_env("quadruple", benchmark="tracking")
+    try:
+        result = evaluate(env=env, policy="pid", seeds=(0, 1, 2))
+    finally:
+        env.close()
+
+    assert all(not episode["terminated"] for episode in result["episodes"])
+    assert result["aggregate"]["episode_length"]["mean"] == 600.0
+    assert result["aggregate"]["tracking_iae"]["mean"] < 20.0
+
+
+def test_compare_uses_reward_direction_and_writes_json_and_svg(tmp_path):
     output = tmp_path / "comparison"
-    env = make_env("three_tank", reward="economic")
+    env = make_env("three_tank")
     try:
         result = compare_policies(
             env=env,
@@ -198,12 +268,13 @@ def test_compare_uses_maximize_direction_and_writes_json_and_svg(tmp_path):
     finally:
         env.close()
     medians = {
-        label: evaluation["aggregate"]["economic_objective"]["median"]
+        label: evaluation["aggregate"]["return"]["median"]
         for label, evaluation in result["evaluations"].items()
     }
     assert result["ranking_metrics"] == [
-        {"name": "economic_objective", "direction": "maximize"}
+        {"name": "return", "direction": "maximize"}
     ]
+    assert result["trajectory_seed"] == 0
     assert result["ordering"] == sorted(
         medians, key=lambda label: (-medians[label], label)
     )
@@ -211,12 +282,24 @@ def test_compare_uses_maximize_direction_and_writes_json_and_svg(tmp_path):
     svg_path = output / "comparison.svg"
     ET.parse(svg_path)
     svg = svg_path.read_text(encoding="utf-8")
+    assert 'width="1440"' in svg
+    assert (
+        '<text class="panel-title" x="796.0" y="120">'
+        "Applied action: pump_P101 [fraction]"
+    ) in svg
+    assert "Closest level-boundary distance [m]" in svg
+    assert re.search(r">pid: tank [123] (?:lower|upper), ", svg)
+    assert re.search(r">hold: tank [123] (?:lower|upper), ", svg)
     return_svg = svg.split(">Cumulative return by policy</text>", 1)[1]
     assert ">pid</text>" in return_svg
     assert ">hold</text>" in return_svg
     assert ">episode return (higher is better)</text>" in return_svg
-    assert "circles: evaluation seeds; diamond: median" in return_svg
+    assert "circles: all return seeds; diamond: median" in return_svg
+    assert "<title>seed 0:" in return_svg
+    assert "<title>seed 1:" in return_svg
     series_svg = svg.split(">Cumulative return by policy</text>", 1)[0]
+    assert "trajectory seed: 0; return seeds: 0, 1" in series_svg
+    assert 'fill-opacity="0.16"' not in series_svg
     x_axis_starts = re.findall(
         r'<text class="tick" text-anchor="middle" x="76\.00" y="[^"]+">([^<]+)</text>',
         series_svg,
@@ -229,11 +312,27 @@ def test_compare_uses_maximize_direction_and_writes_json_and_svg(tmp_path):
         r'<text class="tick" text-anchor="end" x="68\.0" y="[^"]+">([^<]+)</text>',
         first_level,
     )
-    assert level_ticks == ["0", "0.133", "0.267", "0.4"]
+    assert level_ticks == ["0", "0.167", "0.333", "0.5"]
+    temperature_ticks = []
+    for tank in (1, 2, 3):
+        panel = svg.split(
+            f">Output: tank_{tank}_temperature [degC]</text>",
+            1,
+        )[1]
+        panel = panel.split('<text class="panel-title"', 1)[0]
+        temperature_ticks.append(
+            re.findall(
+                r'<text class="tick" text-anchor="end" x="68\.0" '
+                r'y="[^"]+">([^<]+)</text>',
+                panel,
+            )
+        )
+    assert len(temperature_ticks[0]) == 4
+    assert temperature_ticks[1:] == temperature_ticks[:1] * 2
     first_action = svg.split(">Applied action: pump_P101 [fraction]</text>", 1)[1]
     first_action = first_action.split('<text class="panel-title"', 1)[0]
     action_ticks = re.findall(
-        r'<text class="tick" text-anchor="end" x="68\.0" y="[^"]+">([^<]+)</text>',
+        r'<text class="tick" text-anchor="end" x="788\.0" y="[^"]+">([^<]+)</text>',
         first_action,
     )
     assert action_ticks == ["0", "0.333", "0.667", "1"]
@@ -242,7 +341,7 @@ def test_compare_uses_maximize_direction_and_writes_json_and_svg(tmp_path):
         "comparison.svg",
     ]
 
-    env = make_env("three_tank", reward="economic")
+    env = make_env("three_tank")
     try:
         with pytest.raises(FileExistsError, match="non-empty directory"):
             compare_policies(
@@ -254,6 +353,40 @@ def test_compare_uses_maximize_direction_and_writes_json_and_svg(tmp_path):
             )
     finally:
         env.close()
+
+
+def test_compare_places_changing_disturbances_above_balanced_main_columns(tmp_path):
+    output = tmp_path / "disturbance-comparison"
+    env = make_env("three_tank", benchmark="disturbance-rejection")
+    try:
+        compare_policies(
+            env=env,
+            policies={"pid": "pid", "hold": "hold"},
+            seeds=(0,),
+            max_steps=701,
+            output=output,
+        )
+    finally:
+        env.close()
+
+    svg = (output / "comparison.svg").read_text(encoding="utf-8")
+    ET.parse(output / "comparison.svg")
+    assert (
+        '<text class="panel-title" x="76.0" y="120">'
+        "Disturbance: pump_flow_factor"
+    ) in svg
+    assert (
+        '<text class="panel-title" x="762.0" y="120">'
+        "Disturbance: v23_flow_factor"
+    ) in svg
+    assert (
+        '<text class="panel-title" x="76.0" y="345">'
+        "Output: tank_1_level [m]"
+    ) in svg
+    assert (
+        '<text class="panel-title" x="76.0" y="795">'
+        "Applied action: pump_P101 [fraction]"
+    ) in svg
 
 
 def test_compare_uses_benchmark_declared_lexicographic_ranking(
@@ -273,12 +406,15 @@ def test_compare_uses_benchmark_declared_lexicographic_ranking(
         env.close()
     assert result["ranking_metrics"] == [
         {"name": "unsafe_rate", "direction": "minimize"},
-        {"name": "disturbance_iae", "direction": "minimize"},
-        {"name": "recovery_time", "direction": "minimize"},
+        {"name": "return", "direction": "maximize"},
     ]
+    assert "return" in result["evaluations"]["pid"]["aggregate"]
     output = tmp_path / "runs" / "quadruple" / "disturbance-rejection"
     assert json.loads((output / "comparison.json").read_text(encoding="utf-8")) == result
     ET.parse(output / "comparison.svg")
+    svg = (output / "comparison.svg").read_text(encoding="utf-8")
+    assert "Closest level-boundary distance [cm]" in svg
+    assert re.search(r">pid: tank [1234] (?:lower|upper), ", svg)
 
     env = make_env("quadruple", benchmark="disturbance-rejection")
     try:
@@ -297,22 +433,24 @@ def test_compare_uses_benchmark_declared_lexicographic_ranking(
     ]
 
 
-def test_compare_default_output_rejects_unmanaged_entries(tmp_path, monkeypatch):
+def test_compare_default_output_preserves_unmanaged_entries(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     output = tmp_path / "runs" / "three-tank" / "tracking"
     output.mkdir(parents=True)
     (output / "notes.txt").write_text("keep", encoding="utf-8")
     env = make_env("three_tank", benchmark="tracking")
     try:
-        with pytest.raises(FileExistsError, match="unmanaged entries"):
-            compare_policies(
-                env=env,
-                policies={"pid": "pid", "hold": "hold"},
-                seeds=(0,),
-                max_steps=1,
-            )
+        compare_policies(
+            env=env,
+            policies={"pid": "pid", "hold": "hold"},
+            seeds=(0,),
+            max_steps=1,
+        )
     finally:
         env.close()
+    assert (output / "notes.txt").read_text(encoding="utf-8") == "keep"
+    assert (output / "comparison.json").is_file()
+    assert (output / "comparison.svg").is_file()
 
 
 def test_compare_requires_explicit_output_without_benchmark():

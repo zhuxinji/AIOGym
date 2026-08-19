@@ -11,6 +11,7 @@ from aiogym.experimental.three_tank_hardware.calibration import (
 def test_calibration_template_is_explicitly_unmeasured_and_hashed():
     record = calibration_template(rig_id="lab-three-tank")
     assert record["status"] == "unmeasured"
+    assert record["parameters"]["ua_reservoir"]["unit"] == "W/K"
     assert len(record["calibration_hash"]) == 64
     assert validate_calibration(record) == record
     with pytest.raises(ValueError, match="not measured"):

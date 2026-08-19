@@ -67,12 +67,31 @@ def compare_policies(
         result["ranking_metrics"] != ranking_metrics for result in evaluations.values()
     ):
         raise ValueError("all policy evaluations must use identical ranking metrics")
-    trajectory_schema = first["trajectory_schema"]
+    first_schema = first["trajectory_schema"]
+    static_schema_fields = (
+        "state",
+        "output",
+        "action",
+        "disturbance_names",
+    )
     if any(
-        result["trajectory_schema"] != trajectory_schema
+        any(
+            result["trajectory_schema"][field] != first_schema[field]
+            for field in static_schema_fields
+        )
         for result in evaluations.values()
     ):
-        raise ValueError("all policy evaluations must use identical trajectory schemas")
+        raise ValueError("all policy evaluations must use compatible trajectory schemas")
+    trajectory_schema = {
+        **first_schema,
+        "constraint_cost_names": sorted(
+            {
+                name
+                for result in evaluations.values()
+                for name in result["trajectory_schema"]["constraint_cost_names"]
+            }
+        ),
+    }
 
     def ranking_key(label):
         result = evaluations[label]
@@ -88,13 +107,14 @@ def compare_policies(
         "environment": dict(first["environment"]),
         "trajectory_schema": trajectory_schema,
         "seeds": list(ordered_seeds),
+        "trajectory_seed": ordered_seeds[0],
         "max_steps": first["max_steps"],
         "ranking_metrics": ranking_metrics,
         "ordering": ordering,
         "evaluations": evaluations,
     }
     svg_path = output_directory / "comparison.svg"
-    svg_path.write_text(_comparison_svg(result), encoding="utf-8")
+    svg_path.write_text(render_trajectory_svg(result), encoding="utf-8")
     write_json(
         output_directory / "comparison.json",
         result,
@@ -114,15 +134,11 @@ def _prepare_output_directory(env, output) -> tuple[Path, bool]:
             f"refusing to create comparison in non-empty directory: {directory}"
         )
     managed_names = {"comparison.json", "comparison.svg"}
-    unexpected = sorted(
-        path.name for path in entries if path.name not in managed_names
-    )
-    if unexpected:
-        raise FileExistsError(
-            f"default comparison directory contains unmanaged entries: {unexpected}"
-        )
     invalid = sorted(
-        path.name for path in entries if path.is_symlink() or not path.is_file()
+        path.name
+        for path in entries
+        if path.name in managed_names
+        and (path.is_symlink() or not path.is_file())
     )
     if invalid:
         raise FileExistsError(
@@ -143,17 +159,46 @@ def _default_output_directory(env) -> Path:
     return Path("runs") / scenario_id / benchmark_id
 
 
-def _comparison_svg(result) -> str:
+def render_trajectory_svg(result, *, title: str | None = None) -> str:
     labels = tuple(result["evaluations"])
     schema = result["trajectory_schema"]
-    panels = []
-    for index, row in enumerate(schema["output"]):
-        y_limits = (
-            _schema_bounds(row)
-            if "level" in str(row["name"]).lower()
-            else None
+    resolved_title = (
+        f"{result['environment']['scenario']} policy comparison"
+        if title is None
+        else str(title)
+    )
+    temperature_indices = tuple(
+        index
+        for index, row in enumerate(schema["output"])
+        if row.get("unit") == "degC"
+    )
+    temperature_limits = None
+    if temperature_indices:
+        temperature_values = []
+        for label in labels:
+            trajectory = _plotted_trajectory(result, label)
+            output = _finite_array("trajectory output", trajectory["output"])
+            for index in temperature_indices:
+                temperature_values.extend(output[:, index].tolist())
+        reference = _finite_array(
+            "trajectory reference",
+            _plotted_trajectory(result, labels[0])["reference"],
         )
-        panels.append(
+        for index in temperature_indices:
+            temperature_values.extend(reference[:, index].tolist())
+        temperature_limits = _plot_range(
+            temperature_values,
+            include_zero=False,
+        )
+    output_panels = []
+    for index, row in enumerate(schema["output"]):
+        if "level" in str(row["name"]).lower():
+            y_limits = _schema_bounds(row)
+        elif index in temperature_indices:
+            y_limits = temperature_limits
+        else:
+            y_limits = None
+        output_panels.append(
             _series_panel(
                 result,
                 labels,
@@ -164,8 +209,9 @@ def _comparison_svg(result) -> str:
                 y_limits=y_limits,
             )
         )
+    action_panels = []
     for index, row in enumerate(schema["action"]):
-        panels.append(
+        action_panels.append(
             _series_panel(
                 result,
                 labels,
@@ -175,11 +221,16 @@ def _comparison_svg(result) -> str:
                 y_limits=_schema_bounds(row),
             )
         )
-    first_summary = result["evaluations"][labels[0]]["trajectory_summary"]
-    for name, band in first_summary["disturbance"].items():
-        values = np.asarray(band["median"], dtype=float)
+    action_panels.append(_level_boundary_panel(result, labels, schema))
+    disturbance_panels = []
+    first_trajectory = _plotted_trajectory(result, labels[0])
+    for name in schema["disturbance_names"]:
+        values = _mapping_values(
+            first_trajectory["disturbance"],
+            name,
+        )
         if values.size and float(np.max(values) - np.min(values)) > 1e-12:
-            panels.append(
+            disturbance_panels.append(
                 _single_series_panel(
                     result,
                     labels[0],
@@ -188,21 +239,24 @@ def _comparison_svg(result) -> str:
                     mapping_name=name,
                 )
             )
-    panels.append(
-        _series_panel(
-            result,
-            labels,
-            title="Minimum safety margin",
-            field="minimum_safety_margin",
-            horizontal=0.0,
-        )
-    )
 
-    width = 1080
+    width = 1440
     header_height = 100
     panel_height = 225
     return_panel_height = max(285, 100 + 34 * len(labels))
-    height = header_height + panel_height * len(panels) + return_panel_height
+    panel_rows = max(len(output_panels), len(action_panels))
+    if disturbance_panels:
+        output_panels.sort(
+            key=lambda panel: "level" not in panel["title"].lower()
+        )
+        compact_groups = (disturbance_panels, output_panels, action_panels)
+        compact_rows = sum(
+            math.ceil(len(panels) / min(3, len(panels)))
+            for panels in compact_groups
+        )
+        height = header_height + panel_height * compact_rows + return_panel_height
+    else:
+        height = header_height + panel_height * panel_rows + return_panel_height
     parts = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         (
@@ -218,16 +272,17 @@ def _comparison_svg(result) -> str:
         '<rect width="100%" height="100%" fill="#ffffff"/>',
         (
             f'<text class="title" x="64" y="38">'
-            f"{html.escape(str(result['environment']['scenario']))} policy comparison"
+            f"{html.escape(resolved_title)}"
             "</text>"
         ),
         (
-            f'<text class="tick" x="64" y="62">seeds: '
+            f'<text class="tick" x="64" y="62">trajectory seed: '
+            f"{html.escape(str(result['trajectory_seed']))}; return seeds: "
             f"{html.escape(', '.join(str(seed) for seed in result['seeds']))}"
             "</text>"
         ),
     ]
-    legend_x = 430
+    legend_x = 720
     for index, label in enumerate(labels):
         x = legend_x + (index % 4) * 145
         y = 34 + (index // 4) * 22
@@ -247,11 +302,51 @@ def _comparison_svg(result) -> str:
             f'<text class="legend" x="{reference_x + 30}" y="{reference_y + 4}">reference</text>',
         ]
     )
-    top = header_height
-    for index, panel in enumerate(panels):
-        parts.extend(_draw_series_panel(panel, top, index))
-        top += panel_height
-    parts.extend(_draw_return_distribution(result, labels, top))
+    if disturbance_panels:
+        group_top = header_height
+        panel_index = 0
+        grid_left = 76.0
+        grid_right = float(width - 40)
+        grid_gap = 48.0
+        for panels in compact_groups:
+            columns = min(3, len(panels))
+            panel_width = (
+                grid_right - grid_left - grid_gap * (columns - 1)
+            ) / columns
+            for index, panel in enumerate(panels):
+                row, column = divmod(index, columns)
+                left = grid_left + column * (panel_width + grid_gap)
+                right = left + panel_width
+                parts.extend(
+                    _draw_series_panel(
+                        panel,
+                        group_top + row * panel_height,
+                        panel_index,
+                        left=left,
+                        right=right,
+                    )
+                )
+                panel_index += 1
+            group_top += math.ceil(len(panels) / columns) * panel_height
+        return_top = group_top
+    else:
+        for column, panels in enumerate((output_panels, action_panels)):
+            for row, panel in enumerate(panels):
+                top = header_height + row * panel_height
+                left = 76.0 + column * 720.0
+                right = 680.0 + column * 720.0
+                panel_index = row * 2 + column
+                parts.extend(
+                    _draw_series_panel(
+                        panel,
+                        top,
+                        panel_index,
+                        left=left,
+                        right=right,
+                    )
+                )
+        return_top = header_height + panel_rows * panel_height
+    parts.extend(_draw_return_distribution(result, labels, return_top, width=width))
     parts.append("</svg>")
     return "\n".join(parts) + "\n"
 
@@ -271,6 +366,30 @@ def _schema_bounds(row):
     return low, high
 
 
+def _plotted_trajectory(result, label):
+    evaluation = result["evaluations"][label]
+    seed = result["trajectory_seed"]
+    matches = [
+        episode["trajectory"]
+        for episode in evaluation["episodes"]
+        if episode["seed"] == seed
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"policy {label!r} must contain exactly one trajectory for seed {seed}"
+        )
+    return matches[0]
+
+
+def _mapping_values(rows, name):
+    values = []
+    for row in rows:
+        if not isinstance(row, Mapping) or name not in row:
+            raise ValueError(f"trajectory mapping is missing required key {name!r}")
+        values.append(float(row[name]))
+    return _finite_array(f"trajectory mapping {name!r}", values)
+
+
 def _series_panel(
     result,
     labels,
@@ -284,22 +403,22 @@ def _series_panel(
 ):
     series = []
     for label_index, label in enumerate(labels):
-        evaluation = result["evaluations"][label]
+        trajectory = _plotted_trajectory(result, label)
         series.append(
             {
                 "label": label,
                 "color": _COLORS[label_index % len(_COLORS)],
-                "time": evaluation["trajectory_summary"]["physical_time"]["median"],
-                "band": evaluation["trajectory_summary"][field],
+                "time": trajectory["physical_time"],
+                "values": trajectory[field],
                 "index": index,
             }
         )
     reference = None
     if reference_field is not None:
-        evaluation = result["evaluations"][labels[0]]
+        trajectory = _plotted_trajectory(result, labels[0])
         reference = {
-            "time": evaluation["trajectory_summary"]["physical_time"]["median"],
-            "band": evaluation["trajectory_summary"][reference_field],
+            "time": trajectory["physical_time"],
+            "values": trajectory[reference_field],
             "index": index,
         }
     return {
@@ -308,7 +427,108 @@ def _series_panel(
         "reference": reference,
         "horizontal": horizontal,
         "y_limits": y_limits,
+        "annotations": [],
     }
+
+
+def _level_boundary_panel(result, labels, schema):
+    level_states = []
+    for index, row in enumerate(schema["state"]):
+        name = str(row["name"])
+        lower_name = name.lower()
+        is_level = "level" in lower_name or (
+            lower_name.startswith("h") and lower_name[1:].isdigit()
+        )
+        if is_level:
+            bounds = _schema_bounds(row)
+            if bounds is None:
+                raise ValueError("level state schema must declare finite bounds")
+            low, high = bounds
+            if "unit" not in row:
+                raise ValueError("level state schema must declare a physical unit")
+            level_states.append((index, name, str(row["unit"]), low, high))
+    if not level_states:
+        raise ValueError("trajectory schema must contain bounded level states")
+    units = {unit for _index, _name, unit, _low, _high in level_states}
+    if len(units) != 1:
+        raise ValueError("level state schema must use one physical unit")
+    unit = next(iter(units))
+
+    series = []
+    annotations = []
+    all_closest = []
+    for label_index, label in enumerate(labels):
+        trajectory = _plotted_trajectory(result, label)
+        time = _finite_array("trajectory time", trajectory["physical_time"])
+        state = _finite_array("trajectory true_state", trajectory["true_state"])
+        if state.ndim != 2 or state.shape[1] != len(schema["state"]):
+            raise ValueError("trajectory true_state does not match its schema")
+        _matching_lengths(time, state)
+        distances = []
+        constraints = []
+        for state_index, name, _unit, low, high in level_states:
+            distances.extend(
+                (
+                    state[:, state_index] - low,
+                    high - state[:, state_index],
+                )
+            )
+            tank = _level_state_label(name)
+            constraints.extend((f"{tank} lower", f"{tank} upper"))
+        distance_matrix = np.column_stack(distances)
+        closest = np.min(distance_matrix, axis=1)
+        all_closest.extend(closest.tolist())
+        time_index, constraint_index = np.unravel_index(
+            int(np.argmin(distance_matrix)),
+            distance_matrix.shape,
+        )
+        color = _COLORS[label_index % len(_COLORS)]
+        series.append(
+            {
+                "label": label,
+                "color": color,
+                "time": time,
+                "values": closest,
+                "index": None,
+                "marker": {
+                    "time": float(time[time_index]),
+                    "value": float(closest[time_index]),
+                    "label": constraints[constraint_index],
+                },
+            }
+        )
+        annotations.append(
+            {
+                "color": color,
+                "text": (
+                    f"{label}: {constraints[constraint_index]}, "
+                    f"{_number(closest[time_index])} {unit} @ "
+                    f"{_number(time[time_index])} s"
+                ),
+            }
+        )
+    minimum = float(np.min(all_closest))
+    maximum = float(np.max(all_closest))
+    y_limits = (
+        (0.0, 1.0 if maximum == 0.0 else 1.05 * maximum)
+        if minimum >= 0.0
+        else _plot_range(all_closest, include_zero=True)
+    )
+    return {
+        "title": f"Closest level-boundary distance [{unit}]",
+        "series": series,
+        "reference": None,
+        "horizontal": 0.0,
+        "y_limits": y_limits,
+        "annotations": annotations,
+    }
+
+
+def _level_state_label(name):
+    lower = str(name).lower()
+    if lower.startswith("h") and lower[1:].isdigit():
+        return f"tank {int(lower[1:])}"
+    return str(name).replace("_", " ")
 
 
 def _single_series_panel(
@@ -319,27 +539,26 @@ def _single_series_panel(
     field,
     mapping_name,
 ):
-    evaluation = result["evaluations"][label]
+    trajectory = _plotted_trajectory(result, label)
     return {
         "title": title,
         "series": [
             {
                 "label": mapping_name,
                 "color": "#5f6368",
-                "time": evaluation["trajectory_summary"]["physical_time"]["median"],
-                "band": evaluation["trajectory_summary"][field][mapping_name],
+                "time": trajectory["physical_time"],
+                "values": _mapping_values(trajectory[field], mapping_name),
                 "index": None,
             }
         ],
         "reference": None,
         "horizontal": None,
         "y_limits": None,
+        "annotations": [],
     }
 
 
-def _draw_series_panel(panel, top, panel_index):
-    left = 76.0
-    right = 1040.0
+def _draw_series_panel(panel, top, panel_index, *, left, right):
     chart_top = float(top + 36)
     bottom = float(top + 180)
     all_x = []
@@ -347,19 +566,16 @@ def _draw_series_panel(panel, top, panel_index):
     resolved_series = []
     for series in panel["series"]:
         time = _finite_array("trajectory time", series["time"])
-        median = _band_component(series["band"], "median", series["index"])
-        minimum = _band_component(series["band"], "min", series["index"])
-        maximum = _band_component(series["band"], "max", series["index"])
-        _matching_lengths(time, median, minimum, maximum)
+        values = _series_component(series["values"], series["index"])
+        _matching_lengths(time, values)
         all_x.extend(time.tolist())
-        all_y.extend(minimum.tolist())
-        all_y.extend(maximum.tolist())
-        resolved_series.append((series, time, median, minimum, maximum))
+        all_y.extend(values.tolist())
+        resolved_series.append((series, time, values))
     reference = panel["reference"]
     resolved_reference = None
     if reference is not None:
         time = _finite_array("reference time", reference["time"])
-        values = _band_component(reference["band"], "median", reference["index"])
+        values = _series_component(reference["values"], reference["index"])
         _matching_lengths(time, values)
         all_x.extend(time.tolist())
         all_y.extend(values.tolist())
@@ -434,24 +650,11 @@ def _draw_series_panel(panel, top, panel_index):
         parts.append(
             f'<polyline points="{points}" fill="none" stroke="#111111" stroke-width="1.8" stroke-dasharray="7 5"/>'
         )
-    for series, time, median, minimum, maximum in resolved_series:
+    for series, time, values in resolved_series:
         color = series["color"]
-        polygon = _band_polygon(
-            time,
-            minimum,
-            maximum,
-            x_min,
-            x_max,
-            y_min,
-            y_max,
-            left,
-            right,
-            chart_top,
-            bottom,
-        )
         points = _polyline_points(
             time,
-            median,
+            values,
             x_min,
             x_max,
             y_min,
@@ -461,19 +664,45 @@ def _draw_series_panel(panel, top, panel_index):
             chart_top,
             bottom,
         )
-        parts.extend(
-            [
-                f'<polygon points="{polygon}" fill="{color}" fill-opacity="0.16" stroke="none"/>',
-                f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="2.2"/>',
-            ]
+        parts.append(
+            f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="2.2"/>'
         )
+        marker = series.get("marker")
+        if marker is not None:
+            marker_x = _map_x(marker["time"], x_min, x_max, left, right)
+            marker_y = _map_y(marker["value"], y_min, y_max, chart_top, bottom)
+            parts.append(
+                f'<circle cx="{marker_x:.2f}" cy="{marker_y:.2f}" r="4.5" '
+                f'fill="{color}" stroke="#ffffff" stroke-width="1.5">'
+                f'<title>{html.escape(series["label"])}: '
+                f'{html.escape(marker["label"])}, {_number(marker["value"])} '
+                f'@ {_number(marker["time"])} s</title></circle>'
+            )
     parts.append("</g>")
+    annotations = panel["annotations"]
+    if annotations:
+        line_height = 14.0
+        box_width = min(330.0, 0.58 * (right - left))
+        box_height = 8.0 + line_height * len(annotations)
+        box_left = right - box_width
+        parts.append(
+            f'<rect x="{box_left:.2f}" y="{chart_top + 4:.2f}" '
+            f'width="{box_width:.2f}" height="{box_height:.2f}" rx="4" '
+            'fill="#ffffff" fill-opacity="0.88" stroke="#dadce0"/>'
+        )
+        for index, annotation in enumerate(annotations):
+            y = chart_top + 17.0 + index * line_height
+            parts.append(
+                f'<text class="tick" text-anchor="end" x="{right - 7:.2f}" '
+                f'y="{y:.2f}" style="fill:{annotation["color"]}">'
+                f'{html.escape(annotation["text"])}</text>'
+            )
     return parts
 
 
-def _draw_return_distribution(result, labels, top):
+def _draw_return_distribution(result, labels, top, *, width):
     left = 160.0
-    right = 1040.0
+    right = float(width - 40)
     chart_top = float(top + 42)
     row_height = 34.0
     bottom = chart_top + row_height * len(labels)
@@ -484,11 +713,13 @@ def _draw_return_distribution(result, labels, top):
         )
         for label in labels
     }
+    if any(len(values) != len(result["seeds"]) for values in distributions.values()):
+        raise ValueError("return distributions must match the comparison seeds")
     all_values = np.concatenate(tuple(distributions.values()))
     value_min, value_max = _plot_range(all_values.tolist(), include_zero=False)
     parts = [
         f'<text class="panel-title" x="76" y="{top + 22}">Cumulative return by policy</text>',
-        f'<text class="tick" x="430" y="{top + 22}">circles: evaluation seeds; diamond: median</text>',
+        f'<text class="tick" x="720" y="{top + 22}">circles: all return seeds; diamond: median</text>',
     ]
     for tick in range(5):
         fraction = tick / 4
@@ -515,10 +746,12 @@ def _draw_return_distribution(result, labels, top):
             if len(values) > 1
             else np.zeros(1)
         )
-        for value, offset in zip(values, offsets):
+        for seed, value, offset in zip(result["seeds"], values, offsets):
             x = _map_x(value, value_min, value_max, left, right)
             parts.append(
-                f'<circle cx="{x:.2f}" cy="{y + offset:.2f}" r="4" fill="{color}" fill-opacity="0.48"/>'
+                f'<circle cx="{x:.2f}" cy="{y + offset:.2f}" r="4" '
+                f'fill="{color}" fill-opacity="0.48">'
+                f'<title>seed {seed}: {_number(value)}</title></circle>'
             )
         median_x = _map_x(
             float(np.median(values)), value_min, value_max, left, right
@@ -543,14 +776,14 @@ def _draw_return_distribution(result, labels, top):
     return parts
 
 
-def _band_component(band, name, index):
-    values = _finite_array(f"trajectory band {name}", band[name])
+def _series_component(raw_values, index):
+    values = _finite_array("trajectory series", raw_values)
     if index is None:
         if values.ndim != 1:
-            raise ValueError("scalar trajectory bands must be one-dimensional")
+            raise ValueError("scalar trajectory series must be one-dimensional")
         return values
     if values.ndim != 2 or index >= values.shape[1]:
-        raise ValueError("vector trajectory band does not match its schema")
+        raise ValueError("vector trajectory series does not match its schema")
     return values[:, index]
 
 
@@ -608,46 +841,6 @@ def _polyline_points(
     )
 
 
-def _band_polygon(
-    x,
-    minimum,
-    maximum,
-    x_min,
-    x_max,
-    y_min,
-    y_max,
-    left,
-    right,
-    top,
-    bottom,
-):
-    upper = _polyline_points(
-        x,
-        maximum,
-        x_min,
-        x_max,
-        y_min,
-        y_max,
-        left,
-        right,
-        top,
-        bottom,
-    )
-    lower = _polyline_points(
-        x[::-1],
-        minimum[::-1],
-        x_min,
-        x_max,
-        y_min,
-        y_max,
-        left,
-        right,
-        top,
-        bottom,
-    )
-    return f"{upper} {lower}"
-
-
 def _number(value):
     number = float(value)
     magnitude = abs(number)
@@ -656,4 +849,8 @@ def _number(value):
     return f"{number:.3g}"
 
 
-__all__ = ["COMPARISON_SCHEMA_VERSION", "compare_policies"]
+__all__ = [
+    "COMPARISON_SCHEMA_VERSION",
+    "compare_policies",
+    "render_trajectory_svg",
+]

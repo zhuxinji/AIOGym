@@ -7,78 +7,84 @@ import numpy as np
 
 from aiogym.core.contracts import Scenario
 from aiogym.core.specs import Reward
-from aiogym.scenarios._shared import economic_reward
-from aiogym.scenarios._metrics import (
-    TANK3_OUTPUT_INDICES,
-    TANK3_TRACKING_TOLERANCES,
-    TANK3_TRACKING_WEIGHTS,
-    economic_episode_metrics,
-    regulation_episode_metrics,
-    tank3_regulation_episode_metrics,
+from .episodes import (
+    BENCHMARKS,
+    make_default_episode,
+    sample_training_disturbance,
+    sample_training_episode,
 )
-
-from .episodes import BENCHMARKS, make_default_episode, sample_training_episode
-from .model import ThreeTankModel
-
-
-_TANK3_MOVE_WEIGHTS = (0.0, 0.0, 0.0, 0.01, 0.01)
-_REGULATION_ERROR_SCALES = np.asarray((0.4, 0.4, 0.4, 10.0, 10.0, 10.0))
-_REGULATION_FEEDFORWARD_WEIGHT = 0.1
+from .metrics import (
+    LEVEL_OUTPUT_INDICES,
+    regulation_episode_metrics,
+    thermal_regulation_episode_metrics,
+)
+from .model import TRACKING_ERROR_SCALES, ThreeTankModel
 
 
-def _three_tank_regulation_reward(state, action, next_state, context):
-    del state
+_REGULATION_ERROR_SCALES = np.asarray(TRACKING_ERROR_SCALES, dtype=float)
+_LEVEL_OUTPUT_INDICES = np.asarray(LEVEL_OUTPUT_INDICES, dtype=int)
+_THERMAL_OUTPUT_INDICES = np.arange(len(_REGULATION_ERROR_SCALES), dtype=int)
+_EARLY_TERMINATION_COST_RATE = 2.0
+
+
+def _three_tank_tracking_reward(
+    state,
+    action,
+    next_state,
+    context,
+    *,
+    output_indices,
+):
+    del state, action
     output = np.asarray(context["model"].outputs(next_state), dtype=float)
     reference = np.asarray(context["reference"], dtype=float)
     tracking_rate = float(
-        np.mean(((output - reference) / _REGULATION_ERROR_SCALES) ** 2)
-    )
-    target_action = context["model"].tracking_steady_state_action(
-        reference,
-        context["disturbances"],
-    )
-    if target_action is None:
-        feedforward_rate = 0.0
-    else:
-        action_error = np.asarray(action, dtype=float) - np.asarray(
-            target_action, dtype=float
+        np.mean(
+            (
+                (output[output_indices] - reference[output_indices])
+                / _REGULATION_ERROR_SCALES[output_indices]
+            )
+            ** 2
         )
-        feedforward_rate = _REGULATION_FEEDFORWARD_WEIGHT * float(
-            np.sum(action_error**2)
-        )
+    )
     dt = float(context["control_dt"])
     tracking_cost = dt * tracking_rate
-    feedforward_cost = dt * feedforward_rate
-    return -(tracking_cost + feedforward_cost), {
+    early_termination_cost = 0.0
+    if any(float(value) > 0.0 for value in context["constraint_costs"].values()):
+        remaining_steps = (
+            int(context["episode"].horizon) - int(context["step_index"]) - 1
+        )
+        if remaining_steps < 0:
+            raise ValueError("termination step exceeds the episode horizon")
+        early_termination_cost = (
+            _EARLY_TERMINATION_COST_RATE * remaining_steps * dt
+        )
+    return -tracking_cost - early_termination_cost, {
         "tracking_error": -tracking_cost,
-        "feedforward": -feedforward_cost,
+        "early_termination": -early_termination_cost,
         "slew": 0.0,
         "effort": 0.0,
     }
 
 
-def _tank3_regulation_reward(state, action, next_state, context):
-    del state
-    output = np.asarray(context["model"].outputs(next_state), dtype=float)
-    reference = np.asarray(context["reference"], dtype=float)
-    indices = np.asarray(TANK3_OUTPUT_INDICES, dtype=int)
-    tolerances = np.asarray(TANK3_TRACKING_TOLERANCES, dtype=float)
-    weights = np.asarray(TANK3_TRACKING_WEIGHTS, dtype=float)
-    error = (output[indices] - reference[indices]) / tolerances
-    tracking = weights * error**2
-    previous = np.asarray(context["previous_applied_action"], dtype=float)
-    move_weights = np.asarray(_TANK3_MOVE_WEIGHTS, dtype=float)
-    move = move_weights * (np.asarray(action, dtype=float) - previous) ** 2
-    dt = float(context["control_dt"])
-    level_cost = dt * float(tracking[0])
-    temperature_cost = dt * float(tracking[1])
-    move_cost = dt * float(np.sum(move))
-    total = level_cost + temperature_cost + move_cost
-    return -total, {
-        "tank3_level_tracking": -level_cost,
-        "tank3_temperature_tracking": -temperature_cost,
-        "move": -move_cost,
-    }
+def _three_tank_regulation_reward(state, action, next_state, context):
+    return _three_tank_tracking_reward(
+        state,
+        action,
+        next_state,
+        context,
+        output_indices=_LEVEL_OUTPUT_INDICES,
+    )
+
+
+def _three_tank_thermal_regulation_reward(state, action, next_state, context):
+    return _three_tank_tracking_reward(
+        state,
+        action,
+        next_state,
+        context,
+        output_indices=_THERMAL_OUTPUT_INDICES,
+    )
 
 
 def _pid_terms(
@@ -119,57 +125,59 @@ def _pid_terms(
     return terms
 
 
-_PID_CONFIGS = {
-    "regulation": {
-        "matrix_terms": _pid_terms(
-            hydraulic_kp_scale=8.0,
-            hydraulic_ki_scale=0.0005,
-            heater_kp=0.15,
-            heater_ki=0.001,
-        ),
-        "bias": "default_action",
-        "feedforward": "tracking_steady_state_action",
-    },
-    "tank3-regulation": {
-        "matrix_terms": _pid_terms(
-            hydraulic_kp_scale=2.0,
-            hydraulic_ki_scale=0.02,
-            heater_kp=0.12,
-            heater_ki=0.001,
-        ),
-        "bias": "default_action",
-        "feedforward": "tracking_steady_state_action",
-    },
+_LEVEL_PID = {
+    "matrix_terms": _pid_terms(
+        hydraulic_kp_scale=8.0,
+        hydraulic_ki_scale=0.01,
+    ),
+    "bias": "default_action",
 }
 
-_MPC_CONFIGS = {
-    "regulation": {
-        "Ts": 1.0,
-        "P": 120,
-        "move_supp": [10.0, 10.0, 10.0, 10.0, 0.01],
-        "steady_input_weight": [0.001, 0.001, 0.001, 0.001, 0.015],
-        "q_y": 1.0,
-        "reseed_on_feedforward_change": True,
-    },
-    "tank3-regulation": {
-        "Ts": 2.0,
-        "P": 60,
-        "move_supp": [100000.0, 100000.0, 100000.0, 0.001, 0.005],
-        "steady_input_weight": [0.0, 0.0, 0.0, 0.01, 0.01],
-        "cv_scale": [0.4, 0.4, 0.01, 100.0, 100.0, 0.5],
-        "q_y": [0.0, 0.0, 2.0, 0.0, 0.0, 1.0],
-        "reseed_on_feedforward_change": True,
-    },
+_THERMAL_PID = {
+    "matrix_terms": _pid_terms(
+        hydraulic_kp_scale=8.0,
+        hydraulic_ki_scale=0.01,
+        heater_kp=0.3,
+        heater_ki=0.005,
+    ),
+    "bias": "default_action",
+}
+
+_LEVEL_MPC = {
+    "Ts": 1.0,
+    "P": 60,
+    "cv_scale": list(TRACKING_ERROR_SCALES),
+    "move_supp": [50.0, 50.0, 50.0, 50.0, 0.05],
+    "steady_input_weight": [40.0, 40.0, 40.0, 40.0, 3.0],
+    "q_y": [1.0, 0.0, 1.0, 0.0, 1.0, 0.0],
+    "reseed_on_feedforward_change": True,
+}
+
+_THERMAL_MPC = {
+    "Ts": 1.0,
+    "P": 60,
+    "cv_scale": list(TRACKING_ERROR_SCALES),
+    "move_supp": [50.0, 50.0, 50.0, 50.0, 0.05],
+    "steady_input_weight": [40.0, 40.0, 40.0, 40.0, 3.0],
+    "q_y": 1.0,
+    "reseed_on_feedforward_change": True,
 }
 
 
 def _controller_config(controller_id, reward_id):
-    config_id = "tank3-regulation" if reward_id == "tank3-regulation" else "regulation"
-    if controller_id == "pid":
-        return deepcopy(_PID_CONFIGS[config_id])
-    if controller_id == "mpc":
-        return deepcopy(_MPC_CONFIGS[config_id])
-    raise ValueError(f"three_tank has no controller {controller_id!r}")
+    profiles = {
+        "regulation": {"pid": _LEVEL_PID, "mpc": _LEVEL_MPC},
+        "thermal_regulation": {
+            "pid": _THERMAL_PID,
+            "mpc": _THERMAL_MPC,
+        },
+    }
+    try:
+        return deepcopy(profiles[reward_id][controller_id])
+    except KeyError as error:
+        raise ValueError(
+            f"three_tank has no {controller_id!r} controller for reward {reward_id!r}"
+        ) from error
 
 
 def _regulation_reward():
@@ -177,29 +185,18 @@ def _regulation_reward():
         id="regulation",
         function=_three_tank_regulation_reward,
         episode_metric_function=regulation_episode_metrics,
-        primary_metric="tracking_iae",
-        metric_direction="minimize",
+        primary_metric="return",
+        metric_direction="maximize",
         safety_violation_penalty=100.0,
     )
 
 
-def _tank3_reward():
+def _thermal_regulation_reward():
     return Reward(
-        id="tank3-regulation",
-        function=_tank3_regulation_reward,
-        episode_metric_function=tank3_regulation_episode_metrics,
-        primary_metric="tank3_tracking_iae",
-        metric_direction="minimize",
-        safety_violation_penalty=100.0,
-    )
-
-
-def _economic_reward():
-    return Reward(
-        id="economic",
-        function=economic_reward,
-        episode_metric_function=economic_episode_metrics,
-        primary_metric="economic_objective",
+        id="thermal_regulation",
+        function=_three_tank_thermal_regulation_reward,
+        episode_metric_function=thermal_regulation_episode_metrics,
+        primary_metric="return",
         metric_direction="maximize",
         safety_violation_penalty=100.0,
     )
@@ -211,11 +208,11 @@ SCENARIO = Scenario(
     control_dt=1.0,
     make_default_episode=make_default_episode,
     sample_training_episode=sample_training_episode,
+    sample_training_disturbance=sample_training_disturbance,
     benchmarks=BENCHMARKS,
     rewards={
         "regulation": _regulation_reward(),
-        "tank3-regulation": _tank3_reward(),
-        "economic": _economic_reward(),
+        "thermal_regulation": _thermal_regulation_reward(),
     },
     default_reward="regulation",
     controller_config=_controller_config,

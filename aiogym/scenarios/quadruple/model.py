@@ -83,31 +83,37 @@ class QuadrupleModel(_QuadruplePhysicsKernel):
         state = self.state_schema()
         reference = self.output_schema()
         return [
-            *({**row, "low": 0.0, "high": 1.0} for row in state),
+            *(
+                {**row, "kind": "measurement", "low": 0.0, "high": 1.0}
+                for row in state
+            ),
             *(
                 {
                     **row,
-                    "name": f"{row['name']}_error",
-                    "low": -1.0,
+                    "name": f"{row['name']}_setpoint",
+                    "kind": "reference",
+                    "low": 0.0,
                     "high": 1.0,
                 }
                 for row in reference
             ),
-            *self.action_schema(),
         ]
 
     def observation(self, state, reference, previous_action, disturbances):
-        del disturbances
+        del previous_action, disturbances
         state_rows = super().state_schema()
         normalized_state = [
             (float(value) - float(row["bounds"][0]))
             / (float(row["bounds"][1]) - float(row["bounds"][0]))
             for value, row in zip(state, state_rows)
         ]
-        output = np.asarray(self.controlled_output(state), dtype=float)
-        scale = np.asarray(self.controlled_output_scales(), dtype=float)
-        error = (np.asarray(reference, dtype=float) - output) / scale
-        return [*normalized_state, *error.tolist(), *list(previous_action)]
+        reference_rows = super().controlled_output_schema()
+        normalized_reference = [
+            (float(value) - float(row["bounds"][0]))
+            / (float(row["bounds"][1]) - float(row["bounds"][0]))
+            for value, row in zip(reference, reference_rows)
+        ]
+        return [*normalized_state, *normalized_reference]
 
     def measurement(self, state, disturbances=None):
         context = self.runtime_env({} if disturbances is None else disturbances)
@@ -137,6 +143,13 @@ class QuadrupleModel(_QuadruplePhysicsKernel):
     def tracking_steady_state_action(self, reference, disturbances=None):
         del disturbances
         return super().tracking_steady_state_action(reference)
+
+    def tracking_steady_state_state(self, reference, disturbances=None):
+        action = self.tracking_steady_state_action(reference, disturbances)
+        if action is None:
+            return None
+        maximum = float(self.p["max_voltage"])
+        return self.equilibrium_state([value * maximum for value in action])
 
     def constraint_costs(self, state, disturbances=None):
         context = self.runtime_env({} if disturbances is None else disturbances)

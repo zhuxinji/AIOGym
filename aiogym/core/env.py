@@ -38,6 +38,12 @@ def validate_episode(model: ProcessModel, episode: EpisodeSpec) -> EpisodeSpec:
         raise ValueError(f"episode initial_state must contain {len(state_low)} values")
     if np.any(initial_state < state_low) or np.any(initial_state > state_high):
         raise ValueError("episode initial_state must belong to the model state bounds")
+    action_low, action_high = _bounds(model.action_schema())
+    initial_action = np.asarray(episode.initial_action, dtype=np.float32)
+    if initial_action.shape != action_low.shape:
+        raise ValueError(f"episode initial_action must contain {len(action_low)} values")
+    if np.any(initial_action < action_low) or np.any(initial_action > action_high):
+        raise ValueError("episode initial_action must belong to the model action bounds")
     output_low, output_high = _bounds(model.output_schema())
     reference = np.asarray(episode.reference, dtype=np.float32)
     if reference.shape != output_low.shape:
@@ -102,13 +108,13 @@ class ProcessControlEnv(gym.Env):
         self._reference_events: dict[int, tuple[float, ...]] = {}
         self._disturbance_events: dict[int, Mapping[str, float]] = {}
         self._previous_applied_action = np.asarray(
-            model.default_action(), dtype=np.float32
+            episode.initial_action, dtype=np.float32
         )
         if (
             self._previous_applied_action.shape != self.action_space.shape
             or not self.action_space.contains(self._previous_applied_action)
         ):
-            raise ValueError("model default action must belong to action_space")
+            raise ValueError("episode initial_action must belong to action_space")
         self.episode_parameters: dict[str, Any] = {}
         self.runtime_config: dict[str, Any] = {}
         self.runtime_variation: dict[str, Any] = {}
@@ -129,9 +135,19 @@ class ProcessControlEnv(gym.Env):
         unknown = set(supplied) - {"episode"}
         if unknown:
             raise ValueError(f"unknown reset options: {sorted(unknown)}")
+        if self.benchmark is not None and supplied:
+            raise ValueError("reset options cannot override a Benchmark episode")
+        if self.benchmark is not None and seed is None:
+            raise ValueError("Benchmark reset requires a case seed")
+        if self.benchmark is not None:
+            resolved_episode = self.benchmark.make_episode(self.model, seed)
+        elif "episode" in supplied:
+            resolved_episode = supplied["episode"]
+        else:
+            resolved_episode = self.default_episode
         episode = validate_episode(
             self.model,
-            self.default_episode if "episode" not in supplied else supplied["episode"],
+            resolved_episode,
         )
         self.episode = episode
         self.episode_steps = episode.horizon
@@ -147,9 +163,13 @@ class ProcessControlEnv(gym.Env):
         self._disturbance_events = dict(episode.disturbance_schedule)
         self._apply_events()
         self._previous_applied_action = np.asarray(
-            self.model.default_action(), dtype=np.float32
+            episode.initial_action, dtype=np.float32
         )
-        self.episode_parameters = {"reset_seed": seed}
+        self.episode_parameters = (
+            {"case_seed": int(seed)}
+            if self.benchmark is not None
+            else {"reset_seed": seed}
+        )
         self.runtime_variation = {}
         constraints = self._constraints()
         margins = self._safety_margins()
@@ -412,46 +432,49 @@ def make_env(
     parameters: Mapping[str, Any] | None = None,
     benchmark: str | None = None,
     randomize: bool = False,
+    disturbance: bool = False,
     noise: bool | float | Mapping[str, Any] = False,
     delay: bool | Mapping[str, Any] = False,
     fault: bool | Mapping[str, Any] = False,
 ) -> gym.Env:
     if not isinstance(randomize, bool):
         raise TypeError("randomize must be a boolean")
+    if not isinstance(disturbance, bool):
+        raise TypeError("disturbance must be a boolean")
     definition = get_scenario(scenario)
     if benchmark is not None and (reward is not None or parameters is not None):
         raise ValueError(
-            "benchmark fixes the scenario default model parameters and reward; "
+            "benchmark fixes model parameters and reward; "
             "do not pass parameters or reward"
         )
-    reward_id = definition.default_reward if reward is None else reward
+    resolved_benchmark = (
+        None if benchmark is None else get_benchmark(scenario, benchmark)
+    )
+    reward_id = (
+        resolved_benchmark.reward_id
+        if resolved_benchmark is not None
+        else definition.default_reward if reward is None else reward
+    )
     resolved_reward = get_reward(scenario, reward_id)
     resolved_noise = resolve_noise_option(noise)
     resolved_delay = resolve_delay_option(delay)
     resolved_fault = resolve_fault_option(fault)
     if benchmark is not None and (
         randomize
+        or disturbance
         or resolved_noise is not None
         or resolved_delay is not None
         or resolved_fault is not None
     ):
         raise ValueError(
-            "benchmark cannot be combined with randomize, noise, delay, or fault"
+            "benchmark cannot be combined with randomize, disturbance, noise, "
+            "delay, or fault"
         )
     model = definition.make_model(parameters)
-    resolved_benchmark = (
-        None if benchmark is None else get_benchmark(scenario, benchmark)
-    )
-    benchmark_noise = (
-        None
-        if resolved_benchmark is None or resolved_benchmark.measurement_noise is None
-        else dict(resolved_benchmark.measurement_noise)
-    )
-    effective_noise = resolved_noise if resolved_benchmark is None else benchmark_noise
     episode = (
         definition.make_default_episode(model)
         if resolved_benchmark is None
-        else resolved_benchmark.make_episode(model)
+        else resolved_benchmark.make_episode(model, 0)
     )
     base = ProcessControlEnv(
         model,
@@ -466,21 +489,31 @@ def make_env(
         "parameters": dict(model.resolved_parameters),
         "benchmark": benchmark,
         "randomize": randomize,
-        "noise": effective_noise,
+        "disturbance": True if disturbance else None,
+        "noise": resolved_noise,
         "delay": resolved_delay,
         "fault": resolved_fault,
         "control_dt": definition.control_dt,
     }
     env: gym.Env = base
-    if randomize:
-        env = EpisodeSamplingWrapper(env, definition.sample_training_episode)
+    if randomize or disturbance:
+        env = EpisodeSamplingWrapper(
+            env,
+            episode_sampler=(
+                definition.sample_training_episode if randomize else None
+            ),
+            disturbance_sampler=(
+                definition.sample_training_disturbance if disturbance else None
+            ),
+            reward_id=reward_id,
+        )
     if resolved_delay is not None or resolved_fault is not None:
         env = ActionChannelWrapper(
             env, delay=resolved_delay, fault=resolved_fault
         )
-    if effective_noise is not None or resolved_delay is not None:
+    if resolved_noise is not None or resolved_delay is not None:
         env = ObservationChannelWrapper(
-            env, delay=resolved_delay, noise=effective_noise
+            env, delay=resolved_delay, noise=resolved_noise
         )
     return env
 

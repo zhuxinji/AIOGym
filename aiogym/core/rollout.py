@@ -45,7 +45,7 @@ def rollout(
     policy_metadata: Mapping[str, Any] | None = None,
 ) -> RolloutResult:
     observation, reset_info = env.reset(seed=seed)
-    policy.reset(seed=seed)
+    policy.reset(seed=0 if env.unwrapped.benchmark is not None else seed)
     if not isinstance(reset_info, Mapping):
         raise TypeError("environment reset info must be a mapping")
     info: Mapping[str, Any] = reset_info

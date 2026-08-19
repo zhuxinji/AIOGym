@@ -1,4 +1,4 @@
-"""Small Stable-Baselines3 train, save, and load workflow."""
+"""Backend-neutral train, save, and load workflow."""
 from __future__ import annotations
 
 import copy
@@ -10,23 +10,33 @@ from pathlib import Path
 
 import numpy as np
 
-from aiogym.controllers.policies import SB3CheckpointPolicy
 from aiogym.core.io import jsonable, write_json
 
-from ._metadata import environment_metadata
-from ._sb3_runtime import (
-    ALGORITHMS,
-    algorithm_class,
-    effective_algorithm_kwargs,
-    runtime_versions,
+from ._metadata import environment_metadata, validate_environment_compatibility
+from .algorithms import (
+    TrainingStep,
+    get_algorithm,
+    resolve_algorithm_kwargs,
 )
+from .behavior_cloning import (
+    load_demonstrations,
+)
+from .compare import render_trajectory_svg
+from ._checkpoint import (
+    CHECKPOINT_SCHEMA_VERSION,
+    backend_runtime_metadata,
+    load_checkpoint,
+    save_checkpoint,
+)
+from .evaluate import evaluate
 from .training_curve import (
     TRAINING_CURVE_SCHEMA_VERSION,
     plot_training_curve,
 )
 
 
-TRAINING_SCHEMA_VERSION = "aiogym.training.v4"
+TRAINING_SCHEMA_VERSION = "aiogym.training.v8"
+TRAINING_EVALUATION_SCHEMA_VERSION = "aiogym.training_evaluation.v1"
 
 
 def train(
@@ -38,17 +48,44 @@ def train(
     seed: int = 0,
     algorithm_kwargs: Mapping | None = None,
     record_every: int = 500,
+    evaluation_env=None,
+    evaluate_every: int | None = None,
+    evaluation_seed: int = 0,
+    demonstrations: str | Path | None = None,
+    behavior_cloning_epochs: int | None = None,
+    behavior_cloning_batch_size: int = 256,
+    behavior_cloning_learning_rate: float = 3e-4,
 ):
-    """Train one SB3 policy without taking ownership of ``env``."""
+    """Train one registered algorithm without taking ownership of ``env``."""
 
     if env.unwrapped.benchmark is not None:
         raise ValueError("train does not accept a benchmark environment")
-    key = str(algorithm).lower()
-    if key not in ALGORITHMS:
-        raise ValueError(f"algorithm must be one of {', '.join(ALGORITHMS)}")
+    backend = get_algorithm(algorithm)
+    key = backend.id
     resolved_steps = _positive_integer("steps", steps)
     resolved_seed = _nonnegative_integer("seed", seed)
     resolved_record_every = _positive_integer("record_every", record_every)
+    resolved_evaluate_every = (
+        None
+        if evaluate_every is None
+        else _positive_integer("evaluate_every", evaluate_every)
+    )
+    resolved_evaluation_seed = _nonnegative_integer(
+        "evaluation_seed", evaluation_seed
+    )
+    _validate_evaluation_env(env, evaluation_env, resolved_evaluate_every)
+    cloning = _behavior_cloning_inputs(
+        backend=backend,
+        demonstrations=demonstrations,
+        epochs=behavior_cloning_epochs,
+        batch_size=behavior_cloning_batch_size,
+        learning_rate=behavior_cloning_learning_rate,
+    )
+    demonstration_data = (
+        None
+        if cloning is None
+        else load_demonstrations(cloning["dataset"], env=env)
+    )
     requested_kwargs = copy.deepcopy(
         {} if algorithm_kwargs is None else dict(algorithm_kwargs)
     )
@@ -67,59 +104,62 @@ def train(
         )
     directory.mkdir(parents=True, exist_ok=True)
 
-    resolved_kwargs = effective_algorithm_kwargs(
-        key,
-        resolved_steps,
-        serialized_kwargs,
+    resolved_kwargs = resolve_algorithm_kwargs(
+        backend,
+        steps=resolved_steps,
+        values=serialized_kwargs,
     )
-    model_kwargs = copy.deepcopy(resolved_kwargs)
-    policy = model_kwargs.pop("policy")
-    action_noise = model_kwargs.get("action_noise")
-    if action_noise is not None:
-        if key not in {"ddpg", "td3"}:
-            raise ValueError("action_noise is supported only for ddpg and td3")
-        if not isinstance(action_noise, dict):
-            raise TypeError("action_noise must be a JSON object")
-        if set(action_noise) != {"type", "std"}:
-            raise ValueError("action_noise requires exactly 'type' and 'std'")
-        noise_type = action_noise["type"]
-        if noise_type not in {"normal", "ornstein-uhlenbeck"}:
-            raise ValueError(
-                "action_noise type must be 'normal' or 'ornstein-uhlenbeck'"
-            )
-        noise_std = action_noise["std"]
-        if isinstance(noise_std, bool) or not isinstance(noise_std, (int, float)):
-            raise TypeError("action_noise std must be a positive number")
-        if noise_std <= 0:
-            raise ValueError("action_noise std must be a positive number")
-        from stable_baselines3.common.noise import (
-            NormalActionNoise,
-            OrnsteinUhlenbeckActionNoise,
-        )
-
-        action_dimension = int(np.prod(env.action_space.shape))
-        noise_class = (
-            NormalActionNoise
-            if noise_type == "normal"
-            else OrnsteinUhlenbeckActionNoise
-        )
-        model_kwargs["action_noise"] = noise_class(
-            mean=np.zeros(action_dimension, dtype=float),
-            sigma=np.full(action_dimension, float(noise_std), dtype=float),
-        )
-    model = algorithm_class(key)(
-        policy,
-        env,
+    model = backend.create(
+        env=env,
         seed=resolved_seed,
-        **model_kwargs,
+        algorithm_kwargs=copy.deepcopy(resolved_kwargs),
     )
-    curve_callback = _training_curve_callback(resolved_record_every)
-    model.learn(total_timesteps=resolved_steps, callback=curve_callback)
-    curve = curve_callback.payload()
+    behavior_cloning_report = None
+    if cloning is not None:
+        observations, actions, source = demonstration_data
+        behavior_cloning_report = backend.behavior_cloning(
+            model,
+            observations,
+            actions,
+            epochs=cloning["epochs"],
+            batch_size=cloning["batch_size"],
+            learning_rate=cloning["learning_rate"],
+            seed=resolved_seed,
+            source=source,
+        )
+        if not isinstance(behavior_cloning_report, Mapping):
+            raise TypeError("algorithm backend behavior_clone must return a mapping")
+    curve_recorder = _TrainingCurveRecorder(resolved_record_every)
+    evaluation_recorder = None
+    if resolved_evaluate_every is not None:
+        evaluation_recorder = _TrainingEvaluationRecorder(
+            backend=backend,
+            model=model,
+            env=evaluation_env,
+            checkpoint_env=env,
+            evaluate_every=resolved_evaluate_every,
+            seed=resolved_evaluation_seed,
+            best_checkpoint=directory / "best" / "model.zip",
+        )
+        evaluation_recorder.start()
+
+    def record_step(step: TrainingStep) -> None:
+        curve_recorder.on_step(step)
+        if evaluation_recorder is not None:
+            evaluation_recorder.on_step(step)
+
+    actual_steps = backend.learn(
+        model,
+        steps=resolved_steps,
+        on_step=record_step,
+    )
+    resolved_actual_steps = _positive_integer("backend actual_steps", actual_steps)
+    curve_recorder.finish(resolved_actual_steps)
+    if evaluation_recorder is not None:
+        evaluation_recorder.finish(resolved_actual_steps)
+    curve = curve_recorder.payload()
     checkpoint = directory / "model.zip"
-    model.save(checkpoint)
-    if not checkpoint.is_file():
-        raise FileNotFoundError(f"SB3 did not create checkpoint: {checkpoint}")
+    save_checkpoint(backend, model, checkpoint, env=env)
 
     git_executable = shutil.which("git")
     git_commit = None
@@ -134,8 +174,58 @@ def train(
         if completed.returncode == 0:
             git_commit = completed.stdout.strip()
 
+    evaluation_metadata = None
+    evaluation_history_path = None
+    best_checkpoint = None
+    best_tracking_figure = None
+    if evaluation_recorder is not None:
+        evaluation_history = evaluation_recorder.payload()
+        evaluation_history_path = write_json(
+            directory / "evaluation_history.json",
+            evaluation_history,
+        )
+        best_checkpoint = directory / "best" / "model.zip"
+        if not best_checkpoint.is_file():
+            raise FileNotFoundError(
+                f"training evaluation did not create checkpoint: {best_checkpoint}"
+            )
+        best_policy = load_policy(best_checkpoint, env=evaluation_env)
+        best_evaluation = evaluate(
+            env=evaluation_env,
+            policy=best_policy,
+            seeds=[resolved_evaluation_seed],
+        )
+        best_tracking_figure = best_checkpoint.parent / "tracking.svg"
+        trajectory_report = {
+            "environment": best_evaluation["environment"],
+            "trajectory_schema": best_evaluation["trajectory_schema"],
+            "seeds": best_evaluation["seeds"],
+            "trajectory_seed": best_evaluation["seeds"][0],
+            "evaluations": {f"{key} best": best_evaluation},
+        }
+        best_tracking_figure.write_text(
+            render_trajectory_svg(
+                trajectory_report,
+                title=(
+                    f"{best_evaluation['environment']['scenario']} {key.upper()} "
+                    "best policy - fixed training case"
+                ),
+            ),
+            encoding="utf-8",
+        )
+        evaluation_metadata = {
+            "environment": environment_metadata(evaluation_env),
+            "evaluate_every": resolved_evaluate_every,
+            "seed": resolved_evaluation_seed,
+            "ranking_metric": evaluation_history["ranking_metric"],
+            "best_step": evaluation_history["best_step"],
+            "best_value": evaluation_history["best_value"],
+            "tracking_figure": "best/tracking.svg",
+        }
+
     metadata = {
         "schema_version": TRAINING_SCHEMA_VERSION,
+        "checkpoint_schema": CHECKPOINT_SCHEMA_VERSION,
         "algorithm": key,
         "steps": resolved_steps,
         "actual_steps": curve["actual_steps"],
@@ -143,10 +233,31 @@ def train(
         "record_every": resolved_record_every,
         "algorithm_kwargs": resolved_kwargs,
         "environment": environment_metadata(env),
-        "runtime": runtime_versions(),
+        "behavior_cloning": (
+            None
+            if behavior_cloning_report is None
+            else {
+                "dataset": behavior_cloning_report["dataset"],
+                "transition_count": behavior_cloning_report["transition_count"],
+                "action_field": behavior_cloning_report["action_field"],
+                "epochs": behavior_cloning_report["epochs"],
+                "batch_size": behavior_cloning_report["batch_size"],
+                "learning_rate": behavior_cloning_report["learning_rate"],
+                "artifact": "behavior_cloning.json",
+            }
+        ),
+        "evaluation": evaluation_metadata,
+        "runtime": backend_runtime_metadata(backend),
         "git_commit": git_commit,
     }
     write_json(directory / "metadata.json", metadata)
+    behavior_cloning_path = (
+        None
+        if behavior_cloning_report is None
+        else write_json(
+            directory / "behavior_cloning.json", behavior_cloning_report
+        )
+    )
     curve_path = write_json(directory / "training_curve.json", curve)
     curve_figure = plot_training_curve(
         curve,
@@ -156,27 +267,62 @@ def train(
         **metadata,
         "path": str(directory.resolve()),
         "checkpoint": str(checkpoint.resolve()),
+        "best_checkpoint": (
+            None if best_checkpoint is None else str(best_checkpoint.resolve())
+        ),
+        "best_tracking_figure": (
+            None
+            if best_tracking_figure is None
+            else str(best_tracking_figure.resolve())
+        ),
+        "evaluation_history": (
+            None
+            if evaluation_history_path is None
+            else str(evaluation_history_path.resolve())
+        ),
+        "behavior_cloning_artifact": (
+            None
+            if behavior_cloning_path is None
+            else str(behavior_cloning_path.resolve())
+        ),
         "training_curve": str(curve_path.resolve()),
         "training_curve_figure": str(curve_figure.resolve()),
+    }
+
+
+def _behavior_cloning_inputs(
+    *, backend, demonstrations, epochs, batch_size, learning_rate
+):
+    if demonstrations is None:
+        if epochs is not None:
+            raise ValueError("behavior_cloning_epochs requires demonstrations")
+        return None
+    if backend.behavior_cloning is None:
+        raise ValueError(
+            f"algorithm backend {backend.id} does not support behavior cloning"
+        )
+    if epochs is None:
+        raise ValueError("demonstrations requires behavior_cloning_epochs")
+    return {
+        "dataset": Path(demonstrations),
+        "epochs": _positive_integer("behavior_cloning_epochs", epochs),
+        "batch_size": _positive_integer(
+            "behavior_cloning_batch_size", batch_size
+        ),
+        "learning_rate": _positive_float(
+            "behavior_cloning_learning_rate", learning_rate
+        ),
     }
 
 
 def load_policy(
     checkpoint: str | Path,
     *,
-    algorithm: str,
-    env=None,
+    env,
 ):
-    """Load one explicit SB3 ``model.zip`` as an AIO-Gym policy."""
+    """Load one self-describing AIO-Gym ``model.zip`` policy."""
 
-    key = str(algorithm).lower()
-    if key not in ALGORITHMS:
-        raise ValueError(f"algorithm must be one of {', '.join(ALGORITHMS)}")
-    path = Path(checkpoint)
-    if path.name != "model.zip" or not path.is_file():
-        raise ValueError("checkpoint must be an existing model.zip file")
-    model = algorithm_class(key).load(str(path), env=env)
-    return SB3CheckpointPolicy(model, algorithm=key, checkpoint=path)
+    return load_checkpoint(checkpoint, env=env)
 
 
 def _positive_integer(name, value):
@@ -195,103 +341,263 @@ def _nonnegative_integer(name, value):
     return value
 
 
-def _training_curve_callback(record_every):
-    try:
-        from stable_baselines3.common.callbacks import BaseCallback
-    except ModuleNotFoundError as error:
-        raise RuntimeError(
-            "Stable-Baselines3 is required for train(); install `aiogym[rl]`"
-        ) from error
+def _positive_float(name, value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{name} must be a positive number")
+    result = float(value)
+    if not math.isfinite(result) or result <= 0.0:
+        raise ValueError(f"{name} must be a positive finite number")
+    return result
 
-    class TrainingCurveCallback(BaseCallback):
-        def __init__(self):
-            super().__init__(verbose=0)
-            self._window_start = 0
-            self._window_rewards = []
-            self._window_completed = 0
-            self._window_terminated = 0
-            self._window_truncated = 0
-            self._episode_return = 0.0
-            self._episode_length = 0
-            self._records = []
-            self._episodes = []
 
-        def _on_step(self):
-            rewards = np.asarray(self.locals["rewards"], dtype=float).reshape(-1)
-            dones = np.asarray(self.locals["dones"], dtype=bool).reshape(-1)
-            infos = self.locals["infos"]
-            if rewards.shape != (1,) or dones.shape != (1,) or len(infos) != 1:
-                raise ValueError("train supports exactly one environment")
-            reward = float(rewards[0])
-            if not math.isfinite(reward):
-                raise FloatingPointError("training reward must be finite")
-            self._window_rewards.append(reward)
-            self._episode_return += reward
-            self._episode_length += 1
-            if bool(dones[0]):
-                info = infos[0]
-                if "TimeLimit.truncated" not in info:
-                    raise KeyError("SB3 terminal info is missing TimeLimit.truncated")
-                truncated = bool(info["TimeLimit.truncated"])
-                outcome = "truncated" if truncated else "terminated"
-                self._episodes.append(
-                    {
-                        "end_step": int(self.num_timesteps),
-                        "return": float(self._episode_return),
-                        "length": int(self._episode_length),
-                        "outcome": outcome,
-                    }
-                )
-                self._window_completed += 1
-                self._window_truncated += int(truncated)
-                self._window_terminated += int(not truncated)
-                self._episode_return = 0.0
-                self._episode_length = 0
-            if int(self.num_timesteps) - self._window_start == record_every:
-                self._flush_window(int(self.num_timesteps))
-            return True
+def _validate_evaluation_env(training_env, evaluation_env, evaluate_every):
+    if evaluate_every is None:
+        if evaluation_env is not None:
+            raise ValueError("evaluation_env requires evaluate_every")
+        return
+    if evaluation_env is None:
+        raise ValueError("evaluate_every requires evaluation_env")
+    if evaluation_env is training_env:
+        raise ValueError("evaluation_env must be separate from the training env")
+    if evaluation_env.unwrapped.benchmark is not None:
+        raise ValueError("training evaluation does not accept a Benchmark env")
+    training_metadata = environment_metadata(training_env)
+    evaluation_metadata = environment_metadata(evaluation_env)
+    if evaluation_metadata["randomize"]:
+        raise ValueError("training evaluation env must not randomize episodes")
+    for channel in ("disturbance", "noise", "delay", "fault"):
+        if evaluation_metadata[channel] is not None:
+            raise ValueError(
+                f"training evaluation env must not enable {channel}"
+            )
+    validate_environment_compatibility(training_metadata, evaluation_env)
+    if training_env.observation_space != evaluation_env.observation_space:
+        raise ValueError("evaluation observation space must match training")
+    if training_env.action_space != evaluation_env.action_space:
+        raise ValueError("evaluation action space must match training")
 
-        def _on_training_end(self):
-            if self._window_rewards:
-                self._flush_window(int(self.num_timesteps))
 
-        def _flush_window(self, end_step):
-            rewards = np.asarray(self._window_rewards, dtype=float)
-            self._records.append(
+class _TrainingEvaluationRecorder:
+    def __init__(
+        self,
+        *,
+        backend,
+        model,
+        env,
+        checkpoint_env,
+        evaluate_every,
+        seed,
+        best_checkpoint,
+    ):
+        self._backend = backend
+        self._model = model
+        self._env = env
+        self._checkpoint_env = checkpoint_env
+        self._evaluate_every = evaluate_every
+        self._seed = seed
+        self._best_checkpoint = best_checkpoint
+        self._records = []
+        self._best_step = None
+        self._best_value = None
+        self._best_index = None
+        self._ranking_metric = None
+        self._direction = None
+
+    def start(self):
+        self._evaluate(0)
+
+    def on_step(self, event: TrainingStep):
+        if event.step % self._evaluate_every == 0:
+            self._evaluate(event.step)
+
+    def finish(self, actual_steps):
+        if not self._records or self._records[-1]["step"] != actual_steps:
+            self._evaluate(actual_steps)
+
+    def _evaluate(self, step):
+        policy = self._backend.policy(
+            self._model,
+            checkpoint=self._best_checkpoint,
+        )
+        result = evaluate(env=self._env, policy=policy, seeds=[self._seed])
+        ranking = result["ranking_metrics"][0]
+        metric = ranking["name"]
+        direction = ranking["direction"]
+        if self._ranking_metric is None:
+            self._ranking_metric = metric
+            self._direction = direction
+        elif metric != self._ranking_metric or direction != self._direction:
+            raise ValueError("training evaluation ranking metric changed")
+        value = float(result["aggregate"][metric]["median"])
+        episode = result["episodes"][0]
+        record = {
+            "step": int(step),
+            "value": value,
+            "episode_return": float(episode["return"]),
+            "episode_length": int(episode["length"]),
+            "terminated": bool(episode["terminated"]),
+            "truncated": bool(episode["truncated"]),
+            "metrics": dict(episode["metrics"]),
+        }
+        self._records.append(record)
+        improved = _is_better_training_evaluation(
+            record,
+            None if self._best_step is None else self._records[self._best_index],
+            direction,
+        )
+        if improved:
+            self._best_checkpoint.parent.mkdir(parents=True, exist_ok=True)
+            save_checkpoint(
+                self._backend,
+                self._model,
+                self._best_checkpoint,
+                env=self._checkpoint_env,
+                overwrite=True,
+            )
+            self._best_step = int(step)
+            self._best_value = value
+            self._best_index = len(self._records) - 1
+
+    def payload(self):
+        if not self._records or self._best_step is None:
+            raise RuntimeError("training evaluation produced no records")
+        return {
+            "schema_version": TRAINING_EVALUATION_SCHEMA_VERSION,
+            "evaluate_every": int(self._evaluate_every),
+            "seed": int(self._seed),
+            "ranking_metric": {
+                "name": self._ranking_metric,
+                "direction": self._direction,
+            },
+            "selection_order": [
+                {"name": "safe_completion", "direction": "maximize"},
+                {"name": "episode_length", "direction": "maximize"},
                 {
-                    "start_step": int(self._window_start),
-                    "end_step": int(end_step),
-                    "transition_count": int(rewards.size),
-                    "mean_reward": float(np.mean(rewards)),
-                    "reward_std": float(np.std(rewards)),
-                    "minimum_reward": float(np.min(rewards)),
-                    "maximum_reward": float(np.max(rewards)),
-                    "completed_episodes": int(self._window_completed),
-                    "terminated_episodes": int(self._window_terminated),
-                    "truncated_episodes": int(self._window_truncated),
+                    "name": self._ranking_metric,
+                    "direction": self._direction,
+                },
+            ],
+            "best_step": int(self._best_step),
+            "best_value": float(self._best_value),
+            "records": list(self._records),
+        }
+
+
+def _is_better_training_evaluation(candidate, best, metric_direction):
+    if best is None:
+        return True
+    candidate_completion = not candidate["terminated"]
+    best_completion = not best["terminated"]
+    if candidate_completion != best_completion:
+        return candidate_completion
+    if candidate["episode_length"] != best["episode_length"]:
+        return candidate["episode_length"] > best["episode_length"]
+    if metric_direction == "minimize":
+        return candidate["value"] < best["value"]
+    if metric_direction == "maximize":
+        return candidate["value"] > best["value"]
+    raise ValueError("training evaluation metric direction must be minimize or maximize")
+
+
+class _TrainingCurveRecorder:
+    def __init__(self, record_every):
+        self._record_every = record_every
+        self._window_start = 0
+        self._window_rewards = []
+        self._window_completed = 0
+        self._window_terminated = 0
+        self._window_truncated = 0
+        self._episode_return = 0.0
+        self._episode_length = 0
+        self._records = []
+        self._episodes = []
+        self._last_step = 0
+        self._actual_steps = None
+
+    def on_step(self, event: TrainingStep):
+        if not isinstance(event, TrainingStep):
+            raise TypeError("algorithm backend on_step requires TrainingStep")
+        if (
+            isinstance(event.step, bool)
+            or not isinstance(event.step, int)
+            or event.step != self._last_step + 1
+        ):
+            raise ValueError(
+                "algorithm backend must report consecutive TrainingStep.step values"
+            )
+        reward = float(event.reward)
+        if not math.isfinite(reward):
+            raise FloatingPointError("training reward must be finite")
+        if not isinstance(event.terminated, bool) or not isinstance(
+            event.truncated, bool
+        ):
+            raise TypeError("TrainingStep terminated and truncated must be bool")
+        self._last_step = event.step
+        self._window_rewards.append(reward)
+        self._episode_return += reward
+        self._episode_length += 1
+        if event.terminated or event.truncated:
+            outcome = "truncated" if event.truncated else "terminated"
+            self._episodes.append(
+                {
+                    "end_step": int(event.step),
+                    "return": float(self._episode_return),
+                    "length": int(self._episode_length),
+                    "outcome": outcome,
                 }
             )
-            self._window_start = int(end_step)
-            self._window_rewards = []
-            self._window_completed = 0
-            self._window_terminated = 0
-            self._window_truncated = 0
+            self._window_completed += 1
+            self._window_truncated += int(event.truncated)
+            self._window_terminated += int(event.terminated and not event.truncated)
+            self._episode_return = 0.0
+            self._episode_length = 0
+        if event.step - self._window_start == self._record_every:
+            self._flush_window(event.step)
 
-        def payload(self):
-            if self._window_rewards:
-                raise RuntimeError("training curve was requested before training ended")
-            actual_steps = int(self.num_timesteps)
-            if actual_steps <= 0 or not self._records:
-                raise RuntimeError("training produced no curve records")
-            return {
-                "schema_version": TRAINING_CURVE_SCHEMA_VERSION,
-                "record_every": int(record_every),
-                "actual_steps": actual_steps,
-                "records": list(self._records),
-                "episodes": list(self._episodes),
+    def finish(self, actual_steps):
+        if actual_steps != self._last_step:
+            raise ValueError(
+                "algorithm backend learn() actual_steps must equal its last "
+                "TrainingStep.step"
+            )
+        if self._window_rewards:
+            self._flush_window(actual_steps)
+        self._actual_steps = actual_steps
+
+    def _flush_window(self, end_step):
+        rewards = np.asarray(self._window_rewards, dtype=float)
+        self._records.append(
+            {
+                "start_step": int(self._window_start),
+                "end_step": int(end_step),
+                "transition_count": int(rewards.size),
+                "mean_reward": float(np.mean(rewards)),
+                "reward_std": float(np.std(rewards)),
+                "minimum_reward": float(np.min(rewards)),
+                "maximum_reward": float(np.max(rewards)),
+                "completed_episodes": int(self._window_completed),
+                "terminated_episodes": int(self._window_terminated),
+                "truncated_episodes": int(self._window_truncated),
             }
+        )
+        self._window_start = int(end_step)
+        self._window_rewards = []
+        self._window_completed = 0
+        self._window_terminated = 0
+        self._window_truncated = 0
 
-    return TrainingCurveCallback()
+    def payload(self):
+        if self._actual_steps is None:
+            raise RuntimeError("training curve was requested before training ended")
+        if not self._records:
+            raise RuntimeError("training produced no curve records")
+        return {
+            "schema_version": TRAINING_CURVE_SCHEMA_VERSION,
+            "record_every": int(self._record_every),
+            "actual_steps": int(self._actual_steps),
+            "records": list(self._records),
+            "episodes": list(self._episodes),
+        }
 
 
-__all__ = ["ALGORITHMS", "TRAINING_SCHEMA_VERSION", "load_policy", "train"]
+__all__ = ["TRAINING_SCHEMA_VERSION", "load_policy", "train"]

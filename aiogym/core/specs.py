@@ -4,7 +4,10 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 import math
+from numbers import Integral
 from typing import Any, Literal
+
+import numpy as np
 
 from .io import deep_freeze, deep_thaw
 
@@ -15,7 +18,10 @@ RewardFunction = Callable[
     float | tuple[float, Mapping[str, float]],
 ]
 EpisodeMetricFunction = Callable[[Any, Any], Mapping[str, float]]
-EpisodeFactory = Callable[[Any], "EpisodeSpec"]
+EpisodeFactory = Callable[[Any, np.random.Generator], "EpisodeSpec"]
+
+
+_BENCHMARK_CASE_STREAM = 401
 
 
 @dataclass(frozen=True)
@@ -23,10 +29,12 @@ class EpisodeSpec:
     """One fully resolved process episode.
 
     This is an internal runtime value. Public environment selection is expressed
-    through ``benchmark=`` or ``randomize=True`` rather than named episodes.
+    through ``benchmark=``, ``randomize=True``, or ``disturbance=True`` rather
+    than named episodes.
     """
 
     initial_state: tuple[float, ...]
+    initial_action: tuple[float, ...]
     reference: tuple[float, ...]
     horizon: int
     disturbances: Mapping[str, float] = field(default_factory=dict)
@@ -37,6 +45,7 @@ class EpisodeSpec:
 
     def __post_init__(self) -> None:
         initial_state = _finite_tuple("initial_state", self.initial_state)
+        initial_action = _finite_tuple("initial_action", self.initial_action)
         reference = _finite_tuple("reference", self.reference)
         if isinstance(self.horizon, bool) or int(self.horizon) != self.horizon:
             raise ValueError("horizon must be a positive integer")
@@ -58,6 +67,7 @@ class EpisodeSpec:
                 f"disturbance_schedule[{step}]", values
             )
         object.__setattr__(self, "initial_state", initial_state)
+        object.__setattr__(self, "initial_action", initial_action)
         object.__setattr__(self, "reference", reference)
         object.__setattr__(self, "horizon", horizon)
         object.__setattr__(self, "disturbances", deep_freeze(disturbances))
@@ -71,6 +81,7 @@ class EpisodeSpec:
     def as_dict(self) -> dict[str, Any]:
         return {
             "initial_state": list(self.initial_state),
+            "initial_action": list(self.initial_action),
             "reference": list(self.reference),
             "horizon": self.horizon,
             "disturbances": deep_thaw(self.disturbances),
@@ -90,16 +101,22 @@ class Benchmark:
     """A fixed evaluation protocol owned by one scenario."""
 
     id: str
-    make_episode: EpisodeFactory
+    reward_id: str
+    episode_factory: EpisodeFactory
     metric_function: EpisodeMetricFunction
     ranking_metrics: tuple[tuple[str, MetricDirection], ...]
-    measurement_noise: Mapping[str, float] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not self.id.strip() or "/" in self.id:
             raise ValueError("benchmark id must be a non-empty local name")
-        if not callable(self.make_episode):
-            raise TypeError("benchmark make_episode must be callable")
+        if (
+            not isinstance(self.reward_id, str)
+            or not self.reward_id.strip()
+            or "/" in self.reward_id
+        ):
+            raise ValueError("benchmark reward_id must be a non-empty local name")
+        if not callable(self.episode_factory):
+            raise TypeError("benchmark episode_factory must be callable")
         if not callable(self.metric_function):
             raise TypeError("benchmark metric_function must be callable")
         if not self.ranking_metrics:
@@ -113,22 +130,20 @@ class Benchmark:
             if direction not in {"minimize", "maximize"}:
                 raise ValueError("ranking metric direction must be minimize or maximize")
             names.add(name)
-        if self.measurement_noise is None:
-            noise = None
-        elif not isinstance(self.measurement_noise, Mapping):
-            raise TypeError("benchmark measurement_noise must be a mapping or None")
-        else:
-            noise = {str(name): float(value) for name, value in self.measurement_noise.items()}
-            if set(noise) != {"std", "bias_std"}:
-                raise ValueError(
-                    "benchmark measurement_noise must contain exactly std and bias_std"
-                )
-            if not all(math.isfinite(value) and value >= 0.0 for value in noise.values()):
-                raise ValueError(
-                    "benchmark measurement_noise values must be finite and non-negative"
-                )
-            noise = deep_freeze(noise)
-        object.__setattr__(self, "measurement_noise", noise)
+
+    def make_episode(self, model: Any, case_seed: int) -> EpisodeSpec:
+        if isinstance(case_seed, bool) or not isinstance(case_seed, Integral):
+            raise TypeError("benchmark case_seed must be a non-negative integer")
+        resolved_seed = int(case_seed)
+        if resolved_seed < 0:
+            raise ValueError("benchmark case_seed must be a non-negative integer")
+        rng = np.random.default_rng(
+            np.random.SeedSequence([resolved_seed, _BENCHMARK_CASE_STREAM])
+        )
+        episode = self.episode_factory(model, rng)
+        if not isinstance(episode, EpisodeSpec):
+            raise TypeError("benchmark episode_factory must return EpisodeSpec")
+        return episode
 
 
 @dataclass(frozen=True)

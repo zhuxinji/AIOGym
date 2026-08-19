@@ -9,13 +9,18 @@ import pytest
 
 
 def test_public_api_is_scenario_reward_oriented_and_small():
-    assert aiogym.__version__ == "0.7.0"
+    assert aiogym.__version__ == "0.8.0"
     assert set(aiogym.__all__) == {
         "__version__",
+        "AlgorithmBackend",
         "DatasetReader",
+        "Policy",
+        "SB3AlgorithmBackend",
+        "TrainingStep",
         "collect",
         "compare_policies",
         "evaluate",
+        "list_algorithms",
         "list_scenarios",
         "list_benchmarks",
         "list_parameters",
@@ -24,6 +29,8 @@ def test_public_api_is_scenario_reward_oriented_and_small():
         "make_controller",
         "make_env",
         "plot_training_curve",
+        "register_algorithm",
+        "register_sb3_algorithm",
         "train",
     }
     assert "three_tank" in aiogym.list_scenarios()
@@ -56,12 +63,18 @@ def test_every_built_in_scenario_has_a_documentation_page():
 def test_subpackages_do_not_export_internal_definition_types():
     assert aiogym.core.__all__ == ()
     assert set(aiogym.workflows.__all__) == {
+        "AlgorithmBackend",
+        "SB3AlgorithmBackend",
+        "TrainingStep",
         "collect",
         "compare_policies",
         "DatasetReader",
         "evaluate",
+        "list_algorithms",
         "load_policy",
         "plot_training_curve",
+        "register_algorithm",
+        "register_sb3_algorithm",
         "train",
     }
     assert not hasattr(aiogym.workflows, "TrainConfig")
@@ -71,12 +84,13 @@ def test_public_environment_and_controller_flow():
     env = aiogym.make_env("three_tank", reward="regulation")
     try:
         policy = aiogym.make_controller("hold", env=env)
+        assert isinstance(policy, aiogym.Policy)
         result = aiogym.evaluate(env=env, policy=policy, seeds=[0], max_steps=2)
     finally:
         env.close()
     assert result["environment"]["reward"] == "regulation"
     assert result["episodes"][0]["length"] == 2
-    assert "tracking_iae" in result["aggregate"]
+    assert "tracking_ise" in result["aggregate"]
 
 
 def test_scenario_only_environment_uses_defaults():
@@ -91,7 +105,7 @@ def test_scenario_only_environment_uses_defaults():
 
 def test_composite_scenario_reward_selector_is_not_registered():
     with pytest.raises(KeyError, match="unknown scenario"):
-        aiogym.make_env("three_tank/economic")
+        aiogym.make_env("three_tank/regulation")
 
 
 @pytest.mark.parametrize(

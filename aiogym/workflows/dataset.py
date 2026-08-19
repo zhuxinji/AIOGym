@@ -123,7 +123,6 @@ class DatasetReader:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.metadata = _read_metadata(self.path / "metadata.json")
-        self.manifest = self.metadata
         self._records = tuple(self.metadata["episodes"])
         self._by_id = {row["episode_id"]: row for row in self._records}
 

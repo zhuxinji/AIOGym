@@ -1,15 +1,16 @@
-"""Shared training-episode and policy-channel variation wrappers."""
+"""Shared training-episode, physical-disturbance, and channel wrappers."""
 from __future__ import annotations
 
 from collections import deque
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 import math
 from typing import Any
 
 import gymnasium as gym
 import numpy as np
 
-from .contracts import EpisodeSampler
+from .contracts import EpisodeSampler, TrainingDisturbanceSampler
 from .specs import EpisodeSpec
 
 
@@ -136,22 +137,48 @@ def _sample_integer(rng: np.random.Generator, bounds: tuple[int, int]) -> int:
 
 
 class EpisodeSamplingWrapper(gym.Wrapper):
-    """Replace the base episode with one sampled training episode per reset."""
+    """Resolve scenario-owned tracking conditions and physical disturbances."""
 
-    def __init__(self, env: gym.Env, sampler: EpisodeSampler) -> None:
+    def __init__(
+        self,
+        env: gym.Env,
+        *,
+        episode_sampler: EpisodeSampler | None,
+        disturbance_sampler: TrainingDisturbanceSampler | None,
+        reward_id: str,
+    ) -> None:
         super().__init__(env)
-        self._sampler = sampler
-        self._rng = np.random.default_rng()
+        if episode_sampler is None and disturbance_sampler is None:
+            raise ValueError("episode or disturbance sampling must be enabled")
+        self._episode_sampler = episode_sampler
+        self._disturbance_sampler = disturbance_sampler
+        self._reward_id = reward_id
+        self._episode_rng = np.random.default_rng()
+        self._disturbance_rng = np.random.default_rng()
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         if options:
-            raise ValueError("reset options cannot override a randomized episode")
-        self._rng = _reset_rng(seed, 101, self._rng)
-        episode, family = self._sampler(self.unwrapped.model, self._rng)
-        if not isinstance(episode, EpisodeSpec):
-            raise TypeError("sample_training_episode must return an EpisodeSpec")
-        if not isinstance(family, str) or not family.strip():
-            raise ValueError("sample_training_episode family must be non-empty")
+            raise ValueError("reset options cannot override a sampled training episode")
+        self._episode_rng = _reset_rng(seed, 101, self._episode_rng)
+        self._disturbance_rng = _reset_rng(seed, 102, self._disturbance_rng)
+        if self._episode_sampler is None:
+            episode = self.unwrapped.default_episode
+            family = "tracking"
+        else:
+            episode, family = self._episode_sampler(
+                self.unwrapped.model, self._episode_rng, self._reward_id
+            )
+            if not isinstance(episode, EpisodeSpec):
+                raise TypeError("sample_training_episode must return an EpisodeSpec")
+            if not isinstance(family, str) or not family.strip():
+                raise ValueError("sample_training_episode family must be non-empty")
+        if self._disturbance_sampler is not None:
+            schedule = self._disturbance_sampler(
+                self.unwrapped.model, self._disturbance_rng
+            )
+            if not isinstance(schedule, Mapping):
+                raise TypeError("sample_training_disturbance must return a mapping")
+            episode = replace(episode, disturbance_schedule=schedule)
         self.unwrapped.episode_family = family
         return self.env.reset(seed=seed, options={"episode": episode})
 
@@ -257,7 +284,7 @@ class ActionChannelWrapper(gym.Wrapper):
 
 
 class ObservationChannelWrapper(gym.Wrapper):
-    """Apply normalized observation delay, bias, and white noise."""
+    """Apply normalized observation delay, bias, and white measurement noise."""
 
     def __init__(
         self,
@@ -274,6 +301,32 @@ class ObservationChannelWrapper(gym.Wrapper):
         self._queue: deque[np.ndarray] = deque()
         self._observation_delay = 0
         self._bias = np.zeros(self.observation_space.shape, dtype=np.float32)
+        observation_schema = tuple(self.unwrapped.model.observation_schema())
+        if len(observation_schema) != self.observation_space.shape[0]:
+            raise ValueError("observation schema must match observation space")
+        if noise is None:
+            self._noise_mask = np.ones(self.observation_space.shape, dtype=np.float32)
+        else:
+            missing_kind = [
+                index for index, row in enumerate(observation_schema) if "kind" not in row
+            ]
+            if missing_kind:
+                raise ValueError(
+                    "observation noise requires kind metadata for schema rows "
+                    f"{missing_kind}"
+                )
+            kinds = [row["kind"] for row in observation_schema]
+            if any(
+                not isinstance(kind, str)
+                or kind not in {"measurement", "reference", "action"}
+                for kind in kinds
+            ):
+                raise ValueError(
+                    "observation schema kind must be measurement, reference, or action"
+                )
+            self._noise_mask = np.asarray(
+                [kind != "reference" for kind in kinds], dtype=np.float32
+            )
         scale = np.asarray(
             self.observation_space.high - self.observation_space.low,
             dtype=np.float32,
@@ -299,7 +352,9 @@ class ObservationChannelWrapper(gym.Wrapper):
         )
         bias_std = 0.0 if self._noise_config is None else self._noise_config["bias_std"]
         self._bias = np.asarray(
-            self._noise_rng.normal(0.0, bias_std, size=initial.shape) * self._scale,
+            self._noise_rng.normal(0.0, bias_std, size=initial.shape)
+            * self._scale
+            * self._noise_mask,
             dtype=np.float32,
         )
         self.unwrapped.runtime_variation.update(
@@ -322,7 +377,11 @@ class ObservationChannelWrapper(gym.Wrapper):
 
     def _apply(self, observation: np.ndarray) -> np.ndarray:
         std = 0.0 if self._noise_config is None else self._noise_config["std"]
-        white = self._noise_rng.normal(0.0, std, size=observation.shape) * self._scale
+        white = (
+            self._noise_rng.normal(0.0, std, size=observation.shape)
+            * self._scale
+            * self._noise_mask
+        )
         varied = observation + self._bias + white
         return np.clip(
             varied, self.observation_space.low, self.observation_space.high

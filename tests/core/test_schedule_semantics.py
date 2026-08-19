@@ -137,6 +137,7 @@ def schedule_scenario():
     )
     episode = EpisodeSpec(
         initial_state=(0.0,),
+        initial_action=(0.0,),
         reference=(0.1,),
         horizon=3,
         disturbances={"gain": 2.0},
@@ -150,7 +151,8 @@ def schedule_scenario():
     benchmarks = {
         name: Benchmark(
             id=name,
-            make_episode=lambda model, value=episode: value,
+            reward_id="regulation",
+            episode_factory=lambda model, rng, value=episode: value,
             metric_function=regulation_episode_metrics,
             ranking_metrics=(("tracking_iae", "minimize"),),
         )
@@ -161,7 +163,11 @@ def schedule_scenario():
         make_model=ScheduleModel,
         control_dt=1.0,
         make_default_episode=lambda model: episode,
-        sample_training_episode=lambda model, rng: (episode, "tracking"),
+        sample_training_episode=lambda model, rng, reward_id: (
+            episode,
+            "tracking",
+        ),
+        sample_training_disturbance=lambda model, rng: {},
         benchmarks=benchmarks,
         rewards={"regulation": reward},
         default_reward="regulation",
@@ -286,6 +292,7 @@ def test_quadruple_schedule_changes_context_at_declared_physical_time():
     try:
         _, info = env.reset(seed=0)
         initial_reference = info["reference"].copy()
+        scheduled_reference = env.unwrapped.episode.reference_schedule[120]
         for _ in range(120):
             _, _, terminated, truncated, info = env.step(action)
             assert not terminated
@@ -293,7 +300,7 @@ def test_quadruple_schedule_changes_context_at_declared_physical_time():
         assert info["step_index"] == 120
         assert info["physical_time"] == 120.0
         assert info["transition_reference"] == pytest.approx(initial_reference)
-        assert info["reference"] == pytest.approx([16.0, 10.0])
+        assert info["reference"] == pytest.approx(scheduled_reference)
         _, _, _, _, next_info = env.step(action)
         assert next_info["transition_reference"] == pytest.approx(info["reference"])
         assert next_info["transition_step_index"] == 120

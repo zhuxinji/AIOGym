@@ -141,23 +141,6 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  symbolic-smoke:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
-          cache-dependency-path: pyproject.toml
-      - run: python -m pip install -e ".[symbolic,test]"
-      - name: CasADi dynamics smoke
-        run: python -m pytest -q tests/scenarios/test_symbolic_backend.py
-
   rl-smoke:
     runs-on: ubuntu-latest
     strategy:
@@ -172,5 +155,9 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
       - run: python -m pip install -e ".[rl,test]"
-      - name: Supported algorithms and end-to-end workflow smoke
-        run: python -m pytest -q tests/workflows/test_train.py tests/e2e/test_workflow_paths.py
+      - name: Supported algorithms, behavior cloning, and end-to-end workflow smoke
+        run: >-
+          python -m pytest -q
+          tests/workflows/test_train.py
+          tests/workflows/test_behavior_cloning.py
+          tests/e2e/test_workflow_paths.py

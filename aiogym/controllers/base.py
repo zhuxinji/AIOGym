@@ -29,18 +29,14 @@ def make_controller(
     defaults.update({} if config is None else dict(config))
     defaults = _compile_named_profile(defaults, base_env)
     if key == "pid":
-        from .pid import MatrixPIDPolicy
+        from .pid import PIDPolicy
 
-        if "kp" in defaults:
-            bias = defaults.pop("bias") if "bias" in defaults else None
-            if isinstance(bias, str) and bias == "default_action":
-                bias = base_env.model.default_action()
-            return MatrixPIDPolicy(base_env, bias=bias, **defaults)
-        if "loops" not in defaults or not defaults["loops"]:
+        if "kp" not in defaults:
             raise ValueError(f"scenario {scenario.id!r} has no PID controller")
-        from .pid import FixedSetpointPIDPolicy
-
-        return FixedSetpointPIDPolicy(base_env, **defaults)
+        bias = defaults.pop("bias") if "bias" in defaults else None
+        if isinstance(bias, str) and bias == "default_action":
+            bias = base_env.model.default_action()
+        return PIDPolicy(base_env, bias=bias, **defaults)
     if key == "mpc":
         from .mpc import FixedSetpointMPCPolicy
 
@@ -59,13 +55,7 @@ def make_controller(
 
 def _compile_named_profile(profile, env):
     resolved = dict(profile)
-    named_loops = "loops" in resolved and any(
-        "actuator" in row or "output" in row for row in resolved["loops"]
-    )
-    named_holds = "holds" in resolved and any(
-        "actuator" in row for row in resolved["holds"]
-    )
-    if not named_loops and not named_holds and "matrix_terms" not in resolved:
+    if "matrix_terms" not in resolved:
         return resolved
     action_names = [row["name"] for row in env.model.action_schema()]
     output_names = [row["name"] for row in env.model.output_schema()]
@@ -76,37 +66,19 @@ def _compile_named_profile(profile, env):
         except ValueError as error:
             raise ValueError(f"unknown PID {kind} {name!r}") from error
 
-    if named_loops:
-        resolved["loops"] = [
-            {
-                **{key: value for key, value in row.items() if key not in {"actuator", "output"}},
-                "u_index": index(action_names, row["actuator"], "actuator"),
-                "y_index": index(output_names, row["output"], "output"),
-            }
-            for row in resolved["loops"]
-        ]
-    if named_holds:
-        resolved["holds"] = [
-            {
-                **{key: value for key, value in row.items() if key != "actuator"},
-                "u_index": index(action_names, row["actuator"], "actuator"),
-            }
-            for row in resolved["holds"]
-        ]
-    terms = resolved.pop("matrix_terms", None)
-    if terms is not None:
-        rows = len(action_names)
-        columns = len(output_names)
-        matrices = {
-            name: np.zeros((rows, columns), dtype=float)
-            for name in ("kp", "ki", "kd")
-        }
-        for term in terms:
-            row = index(action_names, term["actuator"], "actuator")
-            column = index(output_names, term["output"], "output")
-            for name in matrices:
-                matrices[name][row, column] += float(term[name])
-        resolved.update({name: value.tolist() for name, value in matrices.items()})
+    terms = resolved.pop("matrix_terms")
+    rows = len(action_names)
+    columns = len(output_names)
+    matrices = {
+        name: np.zeros((rows, columns), dtype=float)
+        for name in ("kp", "ki", "kd")
+    }
+    for term in terms:
+        row = index(action_names, term["actuator"], "actuator")
+        column = index(output_names, term["output"], "output")
+        for name in matrices:
+            matrices[name][row, column] += float(term[name])
+    resolved.update({name: value.tolist() for name, value in matrices.items()})
     return resolved
 
 

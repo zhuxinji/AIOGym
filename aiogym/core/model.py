@@ -1,8 +1,6 @@
 """Shared numerical helpers for the built-in physics models."""
 from __future__ import annotations
 
-from .backends import _NUMERIC_OPS, _casadi_ops
-
 
 # Volumetric heat capacity of liquid water, J/(m3*K).
 RHO_CP = 4_186_000.0
@@ -13,7 +11,7 @@ def _copy_value(v):
 
 
 class PhysicsModelBase:
-    """Shared vector, schema, disturbance, and backend operations."""
+    """Shared vector, schema, disturbance, and numerical operations."""
 
     state_names = ()
     state_units = {}
@@ -76,16 +74,6 @@ class PhysicsModelBase:
             raise ValueError(f"{self.scenario} expected {expected} action values, got {len(values)}")
         return values
 
-    def physical_action_vector(self, act):
-        """Return actuator values in the model's physical tracking-cost units.
-
-        Models whose canonical action vector is normalized should override this
-        method.  The default preserves existing models whose public actuator
-        vector is already expressed in its reporting unit.
-        """
-
-        return self.action_vector(act)
-
     def default_action(self):
         return [0.5] * self.action_dim()
 
@@ -101,24 +89,10 @@ class PhysicsModelBase:
             )
         return values
 
-    def dynamics(self, x, u, disturbances=None, backend="numeric", ca=None):
-        """Generic continuous dynamics dx/dt = f(x, u, env).
-
-        ``backend="numeric"`` returns numbers for simulation. ``backend="casadi"``
-        returns a CasADi expression graph for NMPC, using the same model formula.
-        """
-        if backend == "casadi":
-            if ca is None:
-                raise ValueError("backend='casadi' requires the casadi module as ca=...")
-            return self._dynamics(
-                x, u, self.dynamics_disturbance_map(disturbances), _casadi_ops(ca)
-            )
-        if backend != "numeric":
-            raise ValueError(f"unknown dynamics backend: {backend!r}")
+    def dynamics(self, x, u, disturbances=None):
+        """Generic continuous numeric dynamics ``dx/dt = f(x, u, env)``."""
         context = {} if disturbances is None else disturbances
-        return self._dynamics(
-            self.state_vector(x), self.action_vector(u), context, _NUMERIC_OPS
-        )
+        return self._dynamics(self.state_vector(x), self.action_vector(u), context)
 
     def outputs(self, x):
         """Semantic outputs derived from x.
@@ -149,9 +123,7 @@ class PhysicsModelBase:
         context = {} if env is None else dict(env)
         return {**self.outputs(x), **context}
 
-    def controlled_output(self, x, backend="numeric", ca=None):
-        if backend == "casadi":
-            return [x[i] for i in range(len(self.initial_state()))]
+    def controlled_output(self, x):
         return self.state_vector(x)
 
     def setpoint_vector(self, y_sp=None):
@@ -181,53 +153,7 @@ class PhysicsModelBase:
             scales.append(max(float(scale if scale is not None else 1.0), 1e-12))
         return scales
 
-    def integral_observation_limits(self):
-        """Return per-output integral-error saturation and normalization limits."""
-
-        return list(self.controlled_output_scales())
-
-    def dynamics_disturbance_specs(self):
-        specs = []
-        defaults = self.disturbance_defaults()
-        for row in self.disturbance_schema():
-            if "kind" in row and row["kind"] == "setpoint":
-                continue
-            name = row["name"]
-            default = defaults[name]
-            if isinstance(default, (list, tuple)):
-                specs.extend((name, i) for i in range(len(default)))
-            else:
-                specs.append((name, None))
-        return tuple(specs)
-
-    def dynamics_disturbance_names(self):
-        return tuple(name if idx is None else f"{name}[{idx}]" for name, idx in self.dynamics_disturbance_specs())
-
-    def dynamics_disturbance_map(self, d):
-        values = {}
-        for j, (name, idx) in enumerate(self.dynamics_disturbance_specs()):
-            if idx is None:
-                values[name] = d[j]
-            else:
-                values.setdefault(name, []).append(d[j])
-        return values
-
-    def disturbance_vector(self, values=None):
-        merged = self.disturbance_defaults()
-        if values is not None:
-            merged.update(dict(values))
-        out = []
-        for name, idx in self.dynamics_disturbance_specs():
-            value = merged[name]
-            if idx is None:
-                out.append(value)
-            elif isinstance(value, (int, float)):
-                out.append(value)
-            else:
-                out.append(value[idx])
-        return out
-
-    def energy_kw(self, u, backend="numeric", ca=None):
+    def energy_kw(self, u):
         return 0.0
 
     def action_energy_kw(self, act, x=None, env=None):
@@ -235,9 +161,7 @@ class PhysicsModelBase:
 
         return float(self.energy_kw(self.action_vector(act)))
 
-    def display_outputs(self, x, backend="numeric", ca=None):
-        if backend == "casadi":
-            return {"levels": [], "temps": [x[i] for i in range(len(self.initial_state()))]}
+    def display_outputs(self, x):
         return {"levels": [], "temps": list(x)}
 
     def disturbance_schema(self):

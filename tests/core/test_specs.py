@@ -18,6 +18,7 @@ def _metrics(env, episode):
 def test_episode_spec_contains_only_resolved_episode_data():
     episode = EpisodeSpec(
         initial_state=(0.2, 20.0),
+        initial_action=(0.5,),
         reference=(0.3,),
         horizon=10,
         disturbances={"gain": 1.0},
@@ -26,6 +27,7 @@ def test_episode_spec_contains_only_resolved_episode_data():
     )
     assert set(episode.as_dict()) == {
         "initial_state",
+        "initial_action",
         "reference",
         "horizon",
         "disturbances",
@@ -33,44 +35,54 @@ def test_episode_spec_contains_only_resolved_episode_data():
         "disturbance_schedule",
     }
     with pytest.raises(TypeError, match="unexpected keyword argument"):
-        EpisodeSpec(**episode.as_dict(), controller="residual")
+        EpisodeSpec(**episode.as_dict(), controller="sac")
 
 
 def test_benchmark_declares_fixed_episode_metrics_and_ranking():
     benchmark = Benchmark(
         id="tracking",
-        make_episode=lambda model: EpisodeSpec(
-            initial_state=(0.0,), reference=(0.0,), horizon=2
+        reward_id="regulation",
+        episode_factory=lambda model, rng: EpisodeSpec(
+            initial_state=(0.0,),
+            initial_action=(0.0,),
+            reference=(0.0,),
+            horizon=2,
         ),
         metric_function=_metrics,
         ranking_metrics=(("return", "maximize"),),
-        measurement_noise={"std": 0.01, "bias_std": 0.0},
     )
     assert benchmark.ranking_metrics == (("return", "maximize"),)
-    assert benchmark.measurement_noise == {"std": 0.01, "bias_std": 0.0}
-    with pytest.raises(TypeError):
-        benchmark.measurement_noise["std"] = 0.02
+    assert benchmark.reward_id == "regulation"
 
-
-@pytest.mark.parametrize(
-    "measurement_noise",
-    (
-        {"std": 0.01},
-        {"std": -0.01, "bias_std": 0.0},
-        {"std": 0.01, "bias_std": float("nan")},
-    ),
-)
-def test_benchmark_rejects_invalid_measurement_noise(measurement_noise):
-    with pytest.raises(ValueError, match="measurement_noise"):
+    with pytest.raises(ValueError, match="reward_id"):
         Benchmark(
             id="tracking",
-            make_episode=lambda model: EpisodeSpec(
-                initial_state=(0.0,), reference=(0.0,), horizon=2
-            ),
+            reward_id="",
+            episode_factory=benchmark.episode_factory,
             metric_function=_metrics,
             ranking_metrics=(("return", "maximize"),),
-            measurement_noise=measurement_noise,
         )
+
+
+def test_benchmark_case_seed_deterministically_resolves_episode():
+    benchmark = Benchmark(
+        id="tracking",
+        reward_id="regulation",
+        episode_factory=lambda model, rng: EpisodeSpec(
+            initial_state=(float(rng.uniform()),),
+            initial_action=(0.0,),
+            reference=(0.0,),
+            horizon=2,
+        ),
+        metric_function=_metrics,
+        ranking_metrics=(("return", "maximize"),),
+    )
+    assert benchmark.make_episode(None, 7) == benchmark.make_episode(None, 7)
+    assert benchmark.make_episode(None, 7) != benchmark.make_episode(None, 8)
+    with pytest.raises(TypeError, match="case_seed"):
+        benchmark.make_episode(None, True)
+    with pytest.raises(ValueError, match="case_seed"):
+        benchmark.make_episode(None, -1)
 
 
 def test_reward_is_runtime_function_metric_metadata_and_safety_penalty():

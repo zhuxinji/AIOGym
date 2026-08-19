@@ -12,9 +12,14 @@ The model retains its source laboratory units:
   physical voltage through `max_voltage`;
 - area, flow, voltage, and time: `cm^2`, `cm^3/s`, `V`, and `s`.
 
-The policy observation has eight values: four normalized tank levels, two
-normalized lower-tank reference errors, and two previous pump commands. Default,
-randomized, and benchmark environments all keep this interface.
+The policy observation has six values: four normalized tank levels and the two
+normalized lower-tank setpoints. Both states and setpoints use their physical
+`0--20 cm` ranges and therefore appear in `[0, 1]`. The policy learns the
+tracking error from the current levels and setpoints instead of receiving an
+explicit error feature. Default, randomized, and benchmark environments all
+keep this interface. The controller selects a new action every second; the
+plant is integrated internally at 0.1-second intervals while that action is
+held constant.
 
 ## Benchmarks
 
@@ -22,85 +27,96 @@ randomized, and benchmark environments all keep this interface.
 aiogym list benchmarks --scenario quadruple
 ```
 
-| Benchmark | Fixed protocol | Horizon | Noise | Ranking |
-|---|---|---:|---|---|
-| `tracking` | equilibrium start; SP becomes `(16, 10)` cm at 120 s and `(10, 16)` cm at 360 s | 600 s | std 0.001 | tracking IAE |
-| `disturbance-rejection` | pump-flow factor 0.85 at step 150, restored at 350 | 600 s | std 0.001 | unsafe rate, disturbance IAE, recovery time |
-| `boundary-safety` | all tanks start at 90% of the resolved maximum level | 400 s | std 0.001 | unsafe rate, time to violation, tracking IAE |
+| Benchmark | Protocol | Horizon | Ranking |
+|---|---|---:|---|
+| `tracking` | case-seeded feasible equilibrium start; independently resolved equilibrium targets at steps 120 and 360 | 600 steps / 600 s | unsafe rate, cumulative return |
+| `disturbance-rejection` | pump-flow factor 0.85 at step 150 (150 s), restored at step 350 (350 s) | 600 steps / 600 s | unsafe rate, cumulative return |
+| `boundary-safety` | all tanks start at 90% of the resolved maximum level | 400 steps / 400 s | unsafe rate, cumulative return |
 
-The deterministic default training episode starts at the default equilibrium,
-holds its initial reference for 300 s, and then steps to `(15, 10.5)` cm for
-the remaining 300 s. The target has a feasible unsaturated steady pump command.
-This single-step protocol is distinct from the fixed tracking Benchmark below.
-With `randomize=True`, every reset instead samples one of the three training
-families with values and event times distinct from the fixed benchmarks. Random
-tracking targets span at least 15% of each output's physical range from the
-nominal SP.
+All Benchmarks use exact observations without measurement noise. For tracking,
+each non-negative evaluation seed selects one reproducible case. Reset samples
+the initial lower-tank reference and two staged targets in `7–16 cm`. Both
+controlled levels must change by at least `3 cm` at each event. The model then
+derives both pump actions and the complete four-tank equilibrium for every
+reference. Each equilibrium must reproduce the requested lower-tank levels,
+keep all four tanks inside `0–20 cm`, keep both normalized pump actions inside
+`0.02–0.95`, and have zero model derivative. All three equilibria are resolved
+once during reset; no precomputed case table or event-time steady-state solve is
+used.
 
-The tracking SP spans 6 cm, or 30% of each output's 0--20 cm physical range.
-The targets stay away from the hard bounds and both have feasible steady pump
-commands.
+The deterministic default training episode has 600 control steps. It starts at
+the default equilibrium while requesting `(18, 8)` cm, so both controlled
+outputs have an immediate error of at least 4 cm. After 300 steps (300 s), the
+reference changes to `(8, 18)` cm for the remaining 300 steps. Both targets have
+feasible unsaturated steady pump commands and are distinct from the formal
+tracking Benchmark targets.
+This single-step protocol is distinct from the case-seeded tracking Benchmark.
+With `randomize=True`, every reset instead samples a new operating condition
+for one tracking task using an independent random stream. 80% of episodes start
+from a feasible interior equilibrium and apply one sampled target at a random
+time. 20% start with all four levels at `80–92%` of the hard upper bound and
+immediately track a feasible interior target. `disturbance=True` is independent
+of this operating-condition distribution: it temporarily multiplies pump flow
+by `0.78–0.94`, beginning at step `120–240` for `120–240` steps, before
+restoring the factor to `1.0`. The fixed disturbance-rejection and
+boundary-safety Benchmarks remain evaluation-only protocols. Interior tracking
+moves span at least 15% of each controlled output's physical range.
+
+The tracking Benchmark's `7–16 cm` envelope stays away from the hard bounds.
+The `3 cm` minimum move equals 15% of each output's physical range.
 
 ## SAC training
 
-The repository includes a Quadruple-specific SAC profile at
-`configs/quadruple-sac.json`. It keeps the generic training workflow unchanged
-and is passed explicitly so the profile is not applied to unrelated scenarios:
+Without `--algorithm-kwargs`, Stable-Baselines3 supplies every SAC
+hyperparameter from its defaults:
 
 ```bash
 aiogym train quadruple sac --steps 50000 --seed 0 --record-every 500 \
-  --algorithm-kwargs configs/quadruple-sac.json \
-  --output checkpoints/quadruple/sac-optimized-50k/seed-0
+  --evaluate-every 5000 --evaluation-seed 0 \
+  --output rl/checkpoints/quadruple/sac-sb3-default-50k/seed-0
 ```
 
-The profile uses a `0.001` learning rate, `0.995` discount, fixed `0.0005`
-entropy coefficient, and batch size `256`. It was selected on the deterministic
-default training episode and then checked separately on the fixed tracking
-Benchmark. Training still starts from a new policy and uses only online
-environment interaction; there is no warm start or offline dataset.
+SAC retains its native SB3 initialization and exploration.
 
 For a multi-seed result, repeat training with different `--seed` values and
 report all checkpoints. Do not select a checkpoint using the formal Benchmark.
 
 ## PPO training
 
-The Quadruple PPO profile aligns each on-policy rollout with the 600-step
-training episode and performs ten optimization epochs per rollout:
+PPO likewise uses its SB3 defaults when no algorithm-kwargs file is supplied:
 
 ```bash
 aiogym train quadruple ppo --steps 50000 --seed 0 --record-every 500 \
-  --algorithm-kwargs configs/quadruple-ppo.json \
-  --output checkpoints/quadruple/ppo-optimized-50k/seed-0
+  --evaluate-every 5000 --evaluation-seed 0 \
+  --output rl/checkpoints/quadruple/ppo-sb3-default-50k/seed-0
 ```
 
-The profile uses `n_steps=600`, batch size `100`, ten epochs, a `0.995`
-discount, and the standard `0.0003` learning rate. PPO rounds the requested
-training budget up to a whole rollout, so a 50,000-step request executes
-50,400 environment steps. As with SAC, the formal tracking Benchmark is used
-only after training.
+With the default `n_steps=2048`, PPO rounds a 50,000-step request up to 51,200
+environment steps.
 
 ## DDPG training
 
-DDPG needs explicit exploration noise because its actor is deterministic. The
-Quadruple profile supplies normal action noise through the JSON training
-contract:
+DDPG also uses its SB3 defaults. In particular, AIO-Gym does not add action
+noise unless it is explicitly configured:
 
 ```bash
-aiogym train quadruple ddpg --reward smooth-regulation \
-  --steps 50000 --seed 0 --record-every 500 \
-  --algorithm-kwargs configs/quadruple-ddpg.json \
-  --output checkpoints/quadruple/ddpg-smooth-50k/seed-0
+aiogym train quadruple ddpg --steps 50000 --seed 0 --record-every 500 \
+  --evaluate-every 5000 --evaluation-seed 0 \
+  --output rl/checkpoints/quadruple/ddpg-sb3-default-50k/seed-0
 ```
 
-The profile uses action-noise standard deviation `0.1`, 1,000 random warm-up
-steps, batch size `256`, a `0.995` discount, and learning rate `0.001`.
-`smooth-regulation` adds a `0.1 * sum(delta_action**2)` training penalty to
-discourage deterministic two-step actuator oscillation, then scales the dense
-training reward by `100` so it is not overwhelmed by the safety penalty.
-Formal Benchmarks keep the original `regulation` reward and unchanged tracking
-metrics.
-It is an explicit reproducible profile rather than a universal optimum; report
-multiple training seeds before making statistical performance claims.
+Training uses the Scenario's default `regulation` Reward.
+
+Periodic training evaluation always uses a separate deterministic default
+environment, never a fixed Benchmark. It evaluates at step zero, every 5,000
+steps, and the final step. The final learner is saved as `model.zip`; checkpoint
+selection first requires safe completion, then prefers the longer episode, and
+only then maximizes the Reward's cumulative `return` primary metric. The
+selected model is saved as
+`best/model.zip`, its fixed-training-case trajectory is written to
+`best/tracking.svg`, and compact results are recorded in `evaluation_history.json`.
+Formal tracking, disturbance-rejection, and boundary-safety Benchmarks remain
+post-training tests.
 
 ## Phase configuration and parameter overrides
 
@@ -137,6 +153,14 @@ result = aiogym.evaluate(env=env, policy=pid, seeds=[0, 1, 2])
 env.close()
 ```
 
+Here, seeds `0`, `1`, and `2` are three different operating cases. The same
+seed resolves the same initial state, initial action, and staged references for
+every compared policy. Disturbance-rejection and boundary-safety remain fixed
+protocols, so their case seeds intentionally resolve the same episode.
+
 PID and MPC do not select different settings by Benchmark. The same controller
 configuration is used across tracking, disturbance rejection, and boundary
-safety so comparisons represent one policy under three tests.
+safety so comparisons represent one policy under three tests. The Quadruple PID
+uses diagonal gains `(Kp, Ki, Kd) = (1.0159437333, 0.1, 0)` and
+`(2.0, 0.0900169896, 0)` for the two lower-tank loops. These gains use the
+1-second control interval.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -11,40 +12,20 @@ pytest.importorskip("stable_baselines3")
 
 pytestmark = pytest.mark.rl
 
+import aiogym
 from aiogym import load_policy, make_env, plot_training_curve, train
-from aiogym.workflows._sb3_runtime import (
-    algorithm_class,
-    effective_algorithm_kwargs,
-)
+from aiogym.workflows import algorithms as algorithm_registry
+from aiogym.workflows.algorithms import get_algorithm
+from aiogym.workflows.train import _is_better_training_evaluation
 
 
 SMALL_POLICY = {"policy_kwargs": {"net_arch": [8, 8]}}
-QUADRUPLE_SAC_PROFILE = json.loads(
-    (
-        Path(__file__).resolve().parents[2]
-        / "configs"
-        / "quadruple-sac.json"
-    ).read_text(encoding="utf-8")
-)
-QUADRUPLE_PPO_PROFILE = json.loads(
-    (
-        Path(__file__).resolve().parents[2]
-        / "configs"
-        / "quadruple-ppo.json"
-    ).read_text(encoding="utf-8")
-)
-QUADRUPLE_DDPG_PROFILE = json.loads(
-    (
-        Path(__file__).resolve().parents[2]
-        / "configs"
-        / "quadruple-ddpg.json"
-    ).read_text(encoding="utf-8")
-)
 THREE_TANK_SAC_PROFILE = json.loads(
     (
         Path(__file__).resolve().parents[2]
+        / "rl"
         / "configs"
-        / "three-tank-residual-sac.json"
+        / "three-tank-sac-nstep10.json"
     ).read_text(encoding="utf-8")
 )
 
@@ -63,7 +44,6 @@ def test_off_policy_training_saves_loads_and_predicts(tmp_path):
         )
         policy = load_policy(
             output / "model.zip",
-            algorithm="sac",
             env=env,
         )
         observation, _ = env.reset(seed=11)
@@ -71,12 +51,19 @@ def test_off_policy_training_saves_loads_and_predicts(tmp_path):
     finally:
         env.close()
 
-    assert result["schema_version"] == "aiogym.training.v4"
+    assert result["schema_version"] == "aiogym.training.v8"
+    assert result["checkpoint_schema"] == "aiogym.checkpoint.v2"
     assert result["algorithm"] == "sac"
     assert result["steps"] == 2
     assert result["actual_steps"] == 2
     assert result["seed"] == 4
     assert result["record_every"] == 500
+    assert result["evaluation"] is None
+    assert result["behavior_cloning"] is None
+    assert result["behavior_cloning_artifact"] is None
+    assert result["best_checkpoint"] is None
+    assert result["best_tracking_figure"] is None
+    assert result["evaluation_history"] is None
     assert set(path.name for path in output.iterdir()) == {
         "metadata.json",
         "model.zip",
@@ -90,10 +77,10 @@ def test_off_policy_training_saves_loads_and_predicts(tmp_path):
     assert metadata["steps"] == 2
     assert metadata["actual_steps"] == 2
     assert metadata["seed"] == 4
-    assert metadata["algorithm_kwargs"] == effective_algorithm_kwargs(
-        "sac", 2, SMALL_POLICY
+    assert metadata["algorithm_kwargs"] == get_algorithm("sac").effective_kwargs(
+        steps=2, values=SMALL_POLICY
     )
-    assert metadata["environment"]["observation_shape"] == [8]
+    assert metadata["environment"]["observation_shape"] == [6]
     assert metadata["environment"]["action_shape"] == [2]
     curve = json.loads(
         (output / "training_curve.json").read_text(encoding="utf-8")
@@ -101,49 +88,113 @@ def test_off_policy_training_saves_loads_and_predicts(tmp_path):
     assert curve["schema_version"] == "aiogym.training_curve.v1"
     assert [row["end_step"] for row in curve["records"]] == [2]
     assert [row["transition_count"] for row in curve["records"]] == [2]
+    with zipfile.ZipFile(output / "model.zip") as checkpoint:
+        assert set(checkpoint.namelist()) == {"manifest.json", "payload.zip"}
+        manifest = json.loads(checkpoint.read("manifest.json"))
+    assert manifest["schema_version"] == "aiogym.checkpoint.v2"
+    assert manifest["algorithm"] == "sac"
+    assert manifest["environment"] == metadata["environment"]
+    assert manifest["runtime"]["model_class"] == "stable_baselines3.sac.sac:SAC"
     ET.parse(output / "training_curve.svg")
 
 
-def test_quadruple_sac_profile_matches_validated_training_configuration():
-    assert QUADRUPLE_SAC_PROFILE == {
-        "batch_size": 256,
-        "ent_coef": 0.0005,
-        "gamma": 0.995,
-        "learning_rate": 0.001,
-        "learning_starts": 0,
-    }
-    resolved = effective_algorithm_kwargs(
-        "sac", 50_000, QUADRUPLE_SAC_PROFILE
+def test_checkpoint_rejects_incompatible_model_parameters(tmp_path):
+    training_env = make_env("quadruple")
+    incompatible_env = make_env(
+        "quadruple",
+        parameters={"pump_gain": [3.2, 3.2]},
     )
-    assert resolved["buffer_size"] == 50_001
-    assert resolved["train_freq"] == 1
-    assert resolved["gradient_steps"] == 1
+    benchmark_env = make_env("quadruple", benchmark="tracking")
+    try:
+        result = train(
+            env=training_env,
+            algorithm="sac",
+            steps=2,
+            algorithm_kwargs=SMALL_POLICY,
+            output=tmp_path / "training",
+        )
+        with pytest.raises(ValueError, match="checkpoint parameters"):
+            load_policy(result["checkpoint"], env=incompatible_env)
+        assert isinstance(load_policy(result["checkpoint"], env=benchmark_env), aiogym.Policy)
+    finally:
+        benchmark_env.close()
+        incompatible_env.close()
+        training_env.close()
 
 
-def test_quadruple_ppo_profile_matches_validated_training_configuration():
-    assert QUADRUPLE_PPO_PROFILE == {
-        "batch_size": 100,
-        "ent_coef": 0.0,
-        "gae_lambda": 0.95,
-        "gamma": 0.995,
-        "learning_rate": 0.0003,
-        "n_epochs": 10,
-        "n_steps": 600,
-    }
-    resolved = effective_algorithm_kwargs(
-        "ppo", 50_000, QUADRUPLE_PPO_PROFILE
+def test_training_periodically_evaluates_and_saves_best_checkpoint(tmp_path):
+    env = make_env("quadruple")
+    evaluation_env = make_env("quadruple")
+    output = tmp_path / "evaluated-sac"
+    try:
+        result = train(
+            env=env,
+            algorithm="sac",
+            steps=2,
+            seed=0,
+            algorithm_kwargs=SMALL_POLICY,
+            evaluation_env=evaluation_env,
+            evaluate_every=1,
+            evaluation_seed=7,
+            output=output,
+        )
+    finally:
+        evaluation_env.close()
+        env.close()
+
+    history = json.loads(
+        (output / "evaluation_history.json").read_text(encoding="utf-8")
     )
-    assert resolved["policy"] == "MlpPolicy"
-
-
-def test_quadruple_ddpg_profile_has_explicit_exploration_noise():
-    assert QUADRUPLE_DDPG_PROFILE == {
-        "action_noise": {"std": 0.1, "type": "normal"},
-        "batch_size": 256,
-        "gamma": 0.995,
-        "learning_rate": 0.001,
-        "learning_starts": 1000,
+    assert history["schema_version"] == "aiogym.training_evaluation.v1"
+    assert [row["step"] for row in history["records"]] == [0, 1, 2]
+    assert history["ranking_metric"] == {
+        "name": "return",
+        "direction": "maximize",
     }
+    assert history["selection_order"] == [
+        {"name": "safe_completion", "direction": "maximize"},
+        {"name": "episode_length", "direction": "maximize"},
+        {"name": "return", "direction": "maximize"},
+    ]
+    assert (output / "best" / "model.zip").is_file()
+    tracking_figure = output / "best" / "tracking.svg"
+    ET.parse(tracking_figure)
+    tracking_svg = tracking_figure.read_text(encoding="utf-8")
+    assert "quadruple SAC best policy - fixed training case" in tracking_svg
+    assert "Output: lower_tank_1_level [cm]" in tracking_svg
+    assert "Applied action: pump_1_voltage [normalized_voltage]" in tracking_svg
+    assert result["best_checkpoint"] == str(
+        (output / "best" / "model.zip").resolve()
+    )
+    assert result["best_tracking_figure"] == str(tracking_figure.resolve())
+    assert result["evaluation"]["seed"] == 7
+    assert result["evaluation"]["tracking_figure"] == "best/tracking.svg"
+
+
+def test_training_evaluation_never_prefers_short_unsafe_episode():
+    safe = {"terminated": False, "episode_length": 600, "value": 200.0}
+    unsafe = {"terminated": True, "episode_length": 300, "value": 50.0}
+    assert not _is_better_training_evaluation(unsafe, safe, "minimize")
+    assert _is_better_training_evaluation(safe, unsafe, "minimize")
+
+
+@pytest.mark.parametrize("variation", ("disturbance", "noise"))
+def test_training_evaluation_requires_deterministic_environment(tmp_path, variation):
+    env = make_env("quadruple")
+    evaluation_env = make_env("quadruple", **{variation: True})
+    try:
+        with pytest.raises(ValueError, match=f"must not enable {variation}"):
+            train(
+                env=env,
+                algorithm="sac",
+                steps=2,
+                evaluation_env=evaluation_env,
+                evaluate_every=1,
+                output=tmp_path / "invalid-evaluation",
+            )
+    finally:
+        evaluation_env.close()
+        env.close()
 
 
 def test_ddpg_training_materializes_json_action_noise(tmp_path):
@@ -200,10 +251,12 @@ def test_ddpg_training_accepts_ornstein_uhlenbeck_noise(tmp_path):
 def test_three_tank_sac_profile_matches_experimental_training_configuration():
     assert THREE_TANK_SAC_PROFILE == {
         "batch_size": 256,
-        "ent_coef": 0.0001,
+        "buffer_size": 100000,
         "gamma": 0.9995,
-        "learning_rate": 0.001,
-        "learning_starts": 0,
+        "learning_rate": 0.0003,
+        "learning_starts": 5000,
+        "n_steps": 10,
+        "policy_kwargs": {"net_arch": [256, 256]},
     }
 
 
@@ -257,13 +310,44 @@ def test_on_policy_training_completes(tmp_path):
     assert result["steps"] == 2
 
 
+def test_external_sb3_algorithm_class_uses_the_complete_workflow(tmp_path):
+    from stable_baselines3 import A2C
+
+    aiogym.register_sb3_algorithm("a2c", A2C)
+    env = make_env("quadruple")
+    try:
+        result = train(
+            env=env,
+            algorithm="a2c",
+            steps=2,
+            algorithm_kwargs={"n_steps": 2, **SMALL_POLICY},
+            output=tmp_path / "a2c",
+        )
+        policy = load_policy(result["checkpoint"], env=env)
+        observation, _ = env.reset(seed=0)
+        action = policy.act(observation, {})
+    finally:
+        env.close()
+        del algorithm_registry._BACKENDS["a2c"]
+    assert result["algorithm"] == "a2c"
+    assert result["actual_steps"] == 2
+    assert action.shape == env.action_space.shape
+    assert np.isfinite(action).all()
+
+
+def test_sb3_registration_rejects_non_algorithm_class():
+    with pytest.raises(TypeError, match="BaseAlgorithm subclass"):
+        aiogym.register_sb3_algorithm("not_sb3", object)
+    assert "not_sb3" not in aiogym.list_algorithms()
+
+
 @pytest.mark.parametrize("algorithm", ("ddpg", "ppo", "sac", "td3"))
 def test_supported_algorithm_constructors(algorithm):
     env = make_env("quadruple")
     try:
-        kwargs = effective_algorithm_kwargs(algorithm, 2, SMALL_POLICY)
-        policy = kwargs.pop("policy")
-        model = algorithm_class(algorithm)(policy, env, seed=0, **kwargs)
+        backend = get_algorithm(algorithm)
+        kwargs = backend.effective_kwargs(steps=2, values=SMALL_POLICY)
+        model = backend.create(env=env, seed=0, algorithm_kwargs=kwargs)
         assert model.action_space.shape == env.action_space.shape
     finally:
         env.close()

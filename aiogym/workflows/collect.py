@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from aiogym.controllers import make_controller
+from aiogym.core.contracts import policy_metadata
 from aiogym.core.rollout import rollout
 
 from ._metadata import environment_metadata
@@ -28,11 +29,11 @@ def collect(
     resolved_policy = (
         make_controller(policy, env=env) if isinstance(policy, str) else policy
     )
-    policy_metadata = dict(resolved_policy.metadata())
+    resolved_policy_metadata = policy_metadata(resolved_policy)
     writer = DatasetWriter(
         output,
         environment=environment_metadata(env),
-        policy=policy_metadata,
+        policy=resolved_policy_metadata,
         base_seed=base_seed,
     )
     for index in range(count):
@@ -42,7 +43,7 @@ def collect(
             resolved_policy,
             seed=episode_seed,
             max_steps=max_steps,
-            policy_metadata=policy_metadata,
+            policy_metadata=resolved_policy_metadata,
         )
         arrays, metadata = _episode_arrays(result)
         writer.append(index, episode_seed, arrays, metadata=metadata)

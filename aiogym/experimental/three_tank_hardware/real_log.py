@@ -10,14 +10,15 @@ from typing import Any
 from ._integrity import content_digest
 
 
-REAL_LOG_SCHEMA_VERSION = "aiogym.three_tank.real-step.v3"
+REAL_LOG_SCHEMA_VERSION = "aiogym.three_tank.real-step.v6"
 MEASUREMENT_NAMES = (
     "tank_1_level",
-    "tank_2_level",
-    "tank_3_level",
     "tank_1_temperature",
+    "tank_2_level",
     "tank_2_temperature",
+    "tank_3_level",
     "tank_3_temperature",
+    "reservoir_temperature",
 )
 ACTUATOR_NAMES = ("pump_P101", "valve_V12", "valve_V23", "valve_V34", "heater_H1")
 FLOW_MEASUREMENT_NAMES = ("V12_flow", "V23_flow", "V34_flow")
@@ -52,7 +53,6 @@ def build_real_step_record(
     reward_id: str,
     backend_version: str,
     hardware_mode: str,
-    residual_authority: float,
     safety: Mapping[str, Any] | None = None,
     raw_channels: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -81,9 +81,6 @@ def build_real_step_record(
         raise ValueError(
             "received_monotonic_time_s must be finite and no earlier than the source"
         )
-    authority = float(residual_authority)
-    if not math.isfinite(authority) or not 0.0 <= authority <= 1.0:
-        raise ValueError("residual_authority must belong to [0, 1]")
     record = {
         "schema_version": REAL_LOG_SCHEMA_VERSION,
         "run_id": str(run_id),
@@ -93,7 +90,7 @@ def build_real_step_record(
         "received_monotonic_time_s": received_timestamp,
         "wall_time_utc": str(wall_time_utc),
         "measurement_names": list(MEASUREMENT_NAMES),
-        "measurement": _finite_vector("measurement", measurement, 6),
+        "measurement": _finite_vector("measurement", measurement, 7),
         "flow_measurement_names": list(FLOW_MEASUREMENT_NAMES),
         "flow_measurement_m3s": _nonnegative_vector(
             "flow_measurement", flow_measurement, 3
@@ -103,7 +100,7 @@ def build_real_step_record(
             "transition_disturbance", transition_disturbance
         ),
         "disturbance": _finite_mapping("disturbance", disturbance),
-        "commanded_action": _finite_vector("commanded_action", commanded_action, 2),
+        "commanded_action": _finite_vector("commanded_action", commanded_action, 5),
         "actuator_names": list(ACTUATOR_NAMES),
         "applied_action": _finite_vector("applied_action", applied_action, 5),
         "calibration_id": str(calibration_id),
@@ -113,7 +110,6 @@ def build_real_step_record(
         "reward_id": str(reward_id),
         "backend_version": str(backend_version),
         "hardware_mode": str(hardware_mode),
-        "residual_authority": authority,
         "safety": {} if safety is None else dict(safety),
         "raw_channels": {} if raw_channels is None else dict(raw_channels),
     }
@@ -150,7 +146,6 @@ def validate_real_step_record(value: Mapping[str, Any]) -> dict[str, Any]:
         "reward_id",
         "backend_version",
         "hardware_mode",
-        "residual_authority",
         "safety",
         "raw_channels",
         "record_hash",
@@ -184,7 +179,6 @@ def validate_real_step_record(value: Mapping[str, Any]) -> dict[str, Any]:
         reward_id=record["reward_id"],
         backend_version=record["backend_version"],
         hardware_mode=record["hardware_mode"],
-        residual_authority=record["residual_authority"],
         safety=record["safety"],
         raw_channels=record["raw_channels"],
     )

@@ -9,7 +9,7 @@ from typing import Any
 from ._integrity import content_digest
 
 
-CALIBRATION_SCHEMA_VERSION = "aiogym.three_tank.calibration.v1"
+CALIBRATION_SCHEMA_VERSION = "aiogym.three_tank.calibration.v2"
 CALIBRATION_PARAMETER_UNITS = {
     "area_1": "m2",
     "area_2": "m2",
@@ -20,6 +20,7 @@ CALIBRATION_PARAMETER_UNITS = {
     "ua_1": "W/K",
     "ua_2": "W/K",
     "ua_3": "W/K",
+    "ua_reservoir": "W/K",
     "heater_efficiency": "fraction",
     "pump_flow_max": "m3/s",
     "sensor_delay": "s",
@@ -38,6 +39,7 @@ _NONNEGATIVE_PARAMETERS = {
     "ua_1",
     "ua_2",
     "ua_3",
+    "ua_reservoir",
     "sensor_delay",
     "actuator_delay",
 }

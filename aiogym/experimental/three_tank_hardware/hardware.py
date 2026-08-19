@@ -10,14 +10,13 @@ import gymnasium as gym
 import numpy as np
 
 from aiogym.core.env import make_env
-from aiogym.scenarios.three_tank.control import resolve_residual_action
 
 from .calibration import validate_calibration
-from aiogym.scenarios.three_tank.model import TANK3_MAXIMUM_ACTION_STEP
 from .real_log import RealLogWriter, build_real_step_record
 
 
-HARDWARE_BACKEND_VERSION = "aiogym.three_tank.hardware.v3"
+HARDWARE_BACKEND_VERSION = "aiogym.three_tank.hardware.v6"
+DEFAULT_HARDWARE_MAXIMUM_ACTION_STEP = (0.05, 0.08, 0.08, 0.08, 0.05)
 
 
 @dataclass(frozen=True)
@@ -60,14 +59,35 @@ class HardwareSample:
         object.__setattr__(self, "measurement", measurement)
         object.__setattr__(self, "flow_measurement", flow_measurement)
         object.__setattr__(self, "applied_action", applied)
-        object.__setattr__(
-            self, "boundary", {} if self.boundary is None else dict(self.boundary)
+        boundary = {} if self.boundary is None else dict(self.boundary)
+        if "reservoir_temperature_degC" not in boundary:
+            raise ValueError(
+                "boundary must contain reservoir_temperature_degC"
+            )
+        reservoir_temperature = float(
+            boundary["reservoir_temperature_degC"]
         )
-        object.__setattr__(
-            self,
-            "interlocks",
-            {} if self.interlocks is None else dict(self.interlocks),
-        )
+        if not math.isfinite(reservoir_temperature):
+            raise ValueError(
+                "boundary reservoir_temperature_degC must be finite"
+            )
+        boundary["reservoir_temperature_degC"] = reservoir_temperature
+        object.__setattr__(self, "boundary", boundary)
+        interlocks = {} if self.interlocks is None else dict(self.interlocks)
+        required_interlocks = {
+            "emergency_stop",
+            "reservoir_available",
+            "watchdog_healthy",
+        }
+        missing_interlocks = sorted(required_interlocks - set(interlocks))
+        if missing_interlocks:
+            raise ValueError(
+                f"interlocks are missing required fields: {missing_interlocks}"
+            )
+        for name in required_interlocks:
+            if not isinstance(interlocks[name], bool):
+                raise TypeError(f"interlock {name} must be bool")
+        object.__setattr__(self, "interlocks", interlocks)
         object.__setattr__(
             self,
             "raw_channels",
@@ -87,11 +107,11 @@ class HardwareTransport(Protocol):
 
 @dataclass(frozen=True)
 class SafetyConfig:
-    low_heater_level_m: float = 0.09
-    high_pump_level_m: float = 0.33
+    low_heater_level_m: float = 0.11
+    high_pump_level_m: float = 0.415
     high_heater_temperature_degC: float = 60.0
     maximum_sample_age_s: float = 2.0
-    maximum_action_step: tuple[float, ...] = TANK3_MAXIMUM_ACTION_STEP
+    maximum_action_step: tuple[float, ...] = DEFAULT_HARDWARE_MAXIMUM_ACTION_STEP
     emergency_action: tuple[float, ...] = (0.0, 0.0, 0.0, 1.0, 0.0)
 
     def __post_init__(self):
@@ -169,8 +189,8 @@ class SafetyGuardian:
         maximum_step = np.asarray(self.config.maximum_action_step, dtype=float)
         applied = np.clip(requested_action, previous - maximum_step, previous + maximum_step)
         reasons = []
-        levels = np.asarray(sample.measurement[:3], dtype=float)
-        temperatures = np.asarray(sample.measurement[3:], dtype=float)
+        levels = np.asarray(sample.measurement[0::2], dtype=float)
+        temperatures = np.asarray(sample.measurement[1::2], dtype=float)
         if np.any(levels >= self.config.high_pump_level_m):
             applied[0] = 0.0
             reasons.append("high_level_pump_inhibit")
@@ -192,7 +212,7 @@ class SafetyGuardian:
 
 
 class ThreeTankHardwareEnv(gym.Env):
-    """Gym-compatible Tank 3 environment over an injected real transport."""
+    """Gym-compatible Three-Tank environment over an injected real transport."""
 
     metadata = {"render_modes": []}
 
@@ -204,7 +224,6 @@ class ThreeTankHardwareEnv(gym.Env):
         calibration: Mapping[str, Any],
         guardian: SafetyGuardian | None = None,
         armed: bool = False,
-        residual_authority: float | None = None,
         log_writer: RealLogWriter | None = None,
         run_id: str = "three-tank-real",
         episode_id: str = "episode-0",
@@ -215,15 +234,6 @@ class ThreeTankHardwareEnv(gym.Env):
             raise ValueError("hardware mode must be 'shadow' or 'closed-loop'")
         if resolved_mode == "closed-loop" and not armed:
             raise ValueError("closed-loop hardware mode requires armed=True")
-        if resolved_mode == "closed-loop" and residual_authority is None:
-            raise ValueError(
-                "closed-loop hardware mode requires explicit residual_authority"
-            )
-        resolved_authority = (
-            1.0 if residual_authority is None else float(residual_authority)
-        )
-        if not math.isfinite(resolved_authority) or not 0.0 <= resolved_authority <= 1.0:
-            raise ValueError("residual_authority must belong to [0, 1]")
         validated_calibration = validate_calibration(
             calibration, require_measured=resolved_mode == "closed-loop"
         )
@@ -231,7 +241,6 @@ class ThreeTankHardwareEnv(gym.Env):
         base = base_env.unwrapped
         self.transport = transport
         self.mode = resolved_mode
-        self.residual_authority = resolved_authority
         self.calibration = validated_calibration
         self.guardian = SafetyGuardian() if guardian is None else guardian
         self.log_writer = log_writer
@@ -244,13 +253,7 @@ class ThreeTankHardwareEnv(gym.Env):
         self.episode = base.episode
         self.control_dt = base.control_dt
         self.episode_steps = base.episode_steps
-        self.action_space = gym.spaces.Box(
-            low=-1.0,
-            high=1.0,
-            shape=(2,),
-            dtype=np.float32,
-        )
-        self.physical_action_space = base.action_space
+        self.action_space = base.action_space
         self.observation_space = base.observation_space
         self.episode_family = "benchmark:tracking"
         self.runtime_variation = {}
@@ -260,6 +263,7 @@ class ThreeTankHardwareEnv(gym.Env):
             "parameters": dict(self.model.resolved_parameters),
             "benchmark": "tracking",
             "randomize": False,
+            "disturbance": None,
             "noise": None,
             "delay": None,
             "fault": None,
@@ -271,14 +275,17 @@ class ThreeTankHardwareEnv(gym.Env):
         self._reference_state = np.asarray(self.episode.reference, dtype=float)
         self.disturbances = self.model.default_disturbances()
         self._previous_applied_action = np.asarray(
-            self.model.default_action(), dtype=float
+            self.episode.initial_action, dtype=float
         )
 
     @property
     def state(self):
         if self._sample is None:
             raise RuntimeError("hardware environment has not been reset")
-        return _measurement_to_state(self._sample.measurement)
+        return _measurement_to_state(
+            self._sample.measurement,
+            self._sample.boundary,
+        )
 
     @property
     def y_sp(self):
@@ -296,7 +303,9 @@ class ThreeTankHardwareEnv(gym.Env):
                 self._sample.applied_action, dtype=float
             )
         else:
-            self._previous_applied_action = self._resolve_action([0.0, 0.0])
+            self._previous_applied_action = np.asarray(
+                self.model.default_action(), dtype=float
+            )
         return self._observation(), self._info(
             commanded=None,
             recommended=None,
@@ -321,7 +330,7 @@ class ThreeTankHardwareEnv(gym.Env):
             reference=transition_reference
         )
         if reference_feasibility["accepted"]:
-            recommended = self._resolve_action(commanded)
+            recommended = commanded.astype(float)
             decision = self.guardian.apply(
                 recommended,
                 sample=self._sample,
@@ -422,16 +431,6 @@ class ThreeTankHardwareEnv(gym.Env):
         )
         return self._observation(), float(reward), terminated, truncated, info
 
-    def _resolve_action(self, command):
-        scaled_command = np.asarray(command, dtype=float) * self.residual_authority
-        return resolve_residual_action(
-            self.model,
-            residual=scaled_command,
-            state=self.state,
-            reference=self._reference_state,
-            disturbances=self.disturbances,
-        )
-
     def _reference_feasibility(self, *, reference=None):
         target = np.asarray(
             self._reference_state if reference is None else reference, dtype=float
@@ -504,7 +503,6 @@ class ThreeTankHardwareEnv(gym.Env):
             "backend_version": HARDWARE_BACKEND_VERSION,
             "backend_kind": "real",
             "hardware_mode": self.mode,
-            "residual_authority": self.residual_authority,
             "scenario_id": self.scenario.id,
             "benchmark_id": self.benchmark.id,
             "reward_id": self.reward.id,
@@ -518,7 +516,7 @@ class ThreeTankHardwareEnv(gym.Env):
             "physical_time": self._step_index * self.control_dt,
             "true_state": None,
             "measured_state": self.state.copy(),
-            "y": np.asarray(self._sample.measurement, dtype=float),
+            "y": np.asarray(self.model.outputs(self.state), dtype=float),
             "flow_measurement_m3s": np.asarray(
                 self._sample.flow_measurement, dtype=float
             ),
@@ -578,7 +576,7 @@ class ThreeTankHardwareEnv(gym.Env):
                 source_monotonic_time_s=self._sample.source_monotonic_time_s,
                 received_monotonic_time_s=self._sample.received_monotonic_time_s,
                 wall_time_utc=self._sample.wall_time_utc,
-                measurement=self._sample.measurement,
+                measurement=self.state,
                 flow_measurement=self._sample.flow_measurement,
                 reference=reference,
                 transition_disturbance=transition_disturbance,
@@ -592,11 +590,9 @@ class ThreeTankHardwareEnv(gym.Env):
                 reward_id=self.reward.id,
                 backend_version=HARDWARE_BACKEND_VERSION,
                 hardware_mode=self.mode,
-                residual_authority=self.residual_authority,
                 safety={
                     **decision.as_dict(),
                     "mode": self.mode,
-                    "residual_authority": self.residual_authority,
                 },
                 raw_channels=self._sample.raw_channels,
             )
@@ -606,9 +602,14 @@ class ThreeTankHardwareEnv(gym.Env):
         self.transport.close()
 
 
-def _measurement_to_state(measurement):
-    h1, h2, h3, t1, t2, t3 = map(float, measurement)
-    return np.asarray([h1, t1, h2, t2, h3, t3], dtype=float)
+def _measurement_to_state(measurement, boundary):
+    return np.asarray(
+        (
+            *map(float, measurement),
+            float(boundary["reservoir_temperature_degC"]),
+        ),
+        dtype=float,
+    )
 
 
 def _finite_vector(name, values, length):

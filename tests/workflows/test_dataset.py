@@ -36,6 +36,7 @@ def test_collect_uses_the_given_env_and_round_trips_episodes(tmp_path):
     assert reader.metadata["environment"]["scenario"] == "three_tank"
     assert reader.metadata["environment"]["benchmark"] is None
     assert reader.metadata["environment"]["randomize"] is False
+    assert reader.metadata["environment"]["disturbance"] is None
     assert reader.metadata["environment"]["reward"] == "regulation"
     assert reader.metadata["environment"]["parameters"]["heater_power"] == 2000.0
     assert sorted(path.name for path in output.glob("episode-*.npz")) == [
@@ -87,6 +88,8 @@ def test_collect_accepts_builtin_and_policy_object(tmp_path):
             assert result["transitions"] == 2
 
         class Policy:
+            env = None
+
             def reset(self, seed=None):
                 self.seed = seed
 

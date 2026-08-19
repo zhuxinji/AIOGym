@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import math
 
-from aiogym.core.backends import _maxv
 from aiogym.core.model import PhysicsModelBase
 
 
@@ -81,12 +80,6 @@ class _QuadruplePhysicsKernel(PhysicsModelBase):
         maximum = float(self.p["max_voltage"])
         return [float(value) / maximum for value in self.p["nominal_voltage"]]
 
-    def physical_action_vector(self, act):
-        """Map canonical pump commands in [0, 1] to physical volts."""
-
-        maximum = float(self.p["max_voltage"])
-        return [value * maximum for value in self.action_vector(act)]
-
     def mpc_init(self):
         return self.default_action()
 
@@ -151,7 +144,7 @@ class _QuadruplePhysicsKernel(PhysicsModelBase):
     def default_setpoint_vector(self):
         return list(self.controlled_output(self.initial_state()))
 
-    def _dynamics(self, x, u, env, ops):
+    def _dynamics(self, x, u, env):
         A = self.p["tank_area"]
         a = self.p["outlet_area"]
         k = self.p["pump_gain"]
@@ -162,30 +155,25 @@ class _QuadruplePhysicsKernel(PhysicsModelBase):
         outlet_factor = env["outlet_area_factor"]
         voltage = [u[i] * vmax for i in range(2)]
         outlet = [
-            # The numeric model keeps the exact max(h, 0) law. CasADi uses the
-            # smooth counterpart so the square-root derivative stays finite as
-            # an NMPC prediction approaches an empty tank.
-            outlet_factor * a[i] * ops.sqrt(2.0 * g * ops.smooth_max(x[i], 0.0, 1e-6))
+            outlet_factor * a[i] * math.sqrt(2.0 * g * max(x[i], 0.0))
             for i in range(4)
         ]
         pump = [pump_factor * k[i] * voltage[i] for i in range(2)]
-        return ops.vector([
+        return [
             (-outlet[0] + outlet[2] + gamma[0] * pump[0]) / A[0],
             (-outlet[1] + outlet[3] + gamma[1] * pump[1]) / A[1],
             (-outlet[2] + (1.0 - gamma[1]) * pump[1]) / A[2],
             (-outlet[3] + (1.0 - gamma[0]) * pump[0]) / A[3],
-        ])
+        ]
 
-    def display_outputs(self, x, backend="numeric", ca=None):
-        if backend == "casadi":
-            return {"levels": [x[i] for i in range(4)], "temps": []}
-        return {"levels": [_maxv(float(x[i]), 0.0) for i in range(4)], "temps": []}
+    def display_outputs(self, x):
+        return {"levels": [max(float(x[i]), 0.0) for i in range(4)], "temps": []}
 
-    def controlled_output(self, x, backend="numeric", ca=None):
-        return [x[0], x[1]] if backend == "casadi" else [_maxv(float(x[0]), 0.0), _maxv(float(x[1]), 0.0)]
+    def controlled_output(self, x):
+        return [max(float(x[0]), 0.0), max(float(x[1]), 0.0)]
 
     def clamp_state(self, x):
-        return [_maxv(float(value), 0.0) for value in x]
+        return [max(float(value), 0.0) for value in x]
 
     def process_info(self, x, levels, temps, env):
         return {

@@ -19,12 +19,12 @@ def _record(sequence=0):
         source_monotonic_time_s=float(sequence),
         received_monotonic_time_s=float(sequence) + 0.1,
         wall_time_utc="2026-08-08T00:00:00Z",
-        measurement=[0.18, 0.18, 0.18, 22.0, 22.0, 22.0],
-        flow_measurement=[5.0 / 60000.0] * 3,
-        reference=[0.18, 0.18, 0.18, 22.0, 22.0, 22.0],
-        transition_disturbance={"t_reservoir": 20.0},
-        disturbance={"t_reservoir": 20.1},
-        commanded_action=[0.0, 0.0],
+        measurement=[0.18, 22.0, 0.18, 22.0, 0.18, 22.0, 20.5],
+        flow_measurement=[3.0 / 60000.0] * 3,
+        reference=[0.18, 22.0, 0.18, 22.0, 0.18, 22.0],
+        transition_disturbance={"t_makeup": 20.0},
+        disturbance={"t_makeup": 20.1},
+        commanded_action=[0.0, 0.0, 0.0, 0.0, 0.0],
         applied_action=[0.5, 0.5, 0.5, 0.5, 0.2],
         calibration_id="calibration-001",
         calibration_hash="calibration-hash",
@@ -33,7 +33,6 @@ def _record(sequence=0):
         reward_id="regulation",
         backend_version="hardware-v2",
         hardware_mode="shadow",
-        residual_authority=1.0,
         safety={"mode": "shadow", "interlock": False},
         raw_channels={"LT301": 1234},
     )
@@ -41,9 +40,8 @@ def _record(sequence=0):
 
 def test_real_step_record_round_trips_and_rejects_tampering():
     record = _record()
-    assert record["schema_version"].endswith(".v3")
+    assert record["schema_version"].endswith(".v6")
     assert record["reward_id"] == "regulation"
-    assert record["residual_authority"] == 1.0
     assert validate_real_step_record(record) == record
     record["measurement"][2] = 0.3
     with pytest.raises(ValueError, match="record_hash"):

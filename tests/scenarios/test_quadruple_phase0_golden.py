@@ -23,6 +23,7 @@ def test_quadruple_phase0_fixture_is_reproducible():
         source = GOLDEN["condition"]
         episode = EpisodeSpec(
             initial_state=tuple(source["initial_state"]),
+            initial_action=tuple(env.model.default_action()),
             reference=tuple(source["reference"]),
             horizon=source["horizon"],
         )

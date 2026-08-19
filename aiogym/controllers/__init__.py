@@ -5,14 +5,13 @@ from .mpc import (
     FixedSetpointMPCPolicy,
     SuccessiveLinearizationMPC,
 )
-from .pid import FixedSetpointPIDPolicy, MatrixPIDPolicy
+from .pid import PIDPolicy
 from .policies import HoldPolicy, RandomPolicy, SB3CheckpointPolicy
 
 __all__ = [
     "HoldPolicy",
     "FixedSetpointMPCPolicy",
-    "FixedSetpointPIDPolicy",
-    "MatrixPIDPolicy",
+    "PIDPolicy",
     "RandomPolicy",
     "SB3CheckpointPolicy",
     "SuccessiveLinearizationMPC",

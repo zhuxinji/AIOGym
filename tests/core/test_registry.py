@@ -41,14 +41,20 @@ def _metrics(env, episode):
 
 
 def _episode(_model):
-    return EpisodeSpec(initial_state=(0.0,), reference=(0.0,), horizon=2)
+    return EpisodeSpec(
+        initial_state=(0.0,),
+        initial_action=(0.0,),
+        reference=(0.0,),
+        horizon=2,
+    )
 
 
 def _benchmarks():
     return {
         name: Benchmark(
             id=name,
-            make_episode=_episode,
+            reward_id="regulation",
+            episode_factory=lambda model, rng: _episode(model),
             metric_function=_metrics,
             ranking_metrics=(("return", "maximize"),),
         )
@@ -69,7 +75,11 @@ def _scenario():
         make_model=RegistryModel,
         control_dt=1.0,
         make_default_episode=_episode,
-        sample_training_episode=lambda model, rng: (_episode(model), "tracking"),
+        sample_training_episode=lambda model, rng, reward_id: (
+            _episode(model),
+            "tracking",
+        ),
+        sample_training_disturbance=lambda model, rng: {},
         benchmarks=_benchmarks(),
         rewards={"regulation": reward},
         default_reward="regulation",
