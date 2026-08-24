@@ -6,6 +6,9 @@ then uses the same public `train()`, `load_policy()`, `evaluate()`,
 `compare_policies()`, training-curve, periodic-evaluation, and best-checkpoint
 paths as the built-in algorithms.
 
+The corresponding first-party contracts and framework adapters are grouped in
+`aiogym.rl`; workflow code only orchestrates training and artifacts.
+
 The backend is deliberately an adapter around the external implementation. The
 external model does not need an SB3 `predict()` method or an SB3 callback.
 
@@ -19,6 +22,7 @@ import my_library
 class MyBackend:
     id = "my_algorithm"
     behavior_cloning = None
+    requires_dataset = False
 
     def effective_kwargs(self, *, steps, values):
         # Validate values and return the complete JSON-safe configuration.
@@ -27,8 +31,9 @@ class MyBackend:
     def create(self, *, env, seed, algorithm_kwargs):
         return MyModel(env=env, seed=seed, **algorithm_kwargs)
 
-    def learn(self, model, *, steps, on_step):
+    def learn(self, model, *, steps, dataset, on_step):
         # Run the algorithm's own interaction and optimization loop.
+        # `dataset` is a validated DatasetReader or None.
         # Report exactly one event after each env.step().
         for step in range(1, steps + 1):
             reward, terminated, truncated = model.train_one_environment_step()
@@ -41,6 +46,7 @@ class MyBackend:
         return steps
 
     def save(self, model, payload):
+        # Retain parameters, optimizer state, replay, and learner counters.
         model.save(payload)  # Must create the requested payload.zip file.
 
     def load(self, payload, *, env=None):
@@ -62,9 +68,10 @@ attribute plus `reset(seed)`, `act(observation, context)`, and `metadata()`.
 `act()` returns one action directly in the environment action space.
 
 The training callback is strict. `learn()` reports consecutive steps starting
-at one, reports every environment transition exactly once, and returns the last
-reported step. AIO-Gym uses those events to build the common training curve and
-to trigger periodic evaluation. Training currently supports exactly one
+at one for each invocation, reports every environment transition exactly once,
+and returns the last reported step. AIO-Gym combines those local steps with the
+checkpoint's completed-step count to build the common training curve and to
+trigger periodic evaluation. Training currently supports exactly one
 environment; batching optimization updates internally does not change this
 transition-reporting rule.
 
@@ -74,8 +81,11 @@ and inference adaptation. AIO-Gym owns output-directory validation,
 `best/model.zip`, final evaluation, comparison, and environment compatibility.
 `effective_kwargs()` and `runtime_metadata()` must return JSON-safe mappings.
 `save()` must create the exact `payload.zip` path passed by AIO-Gym, and
-`load()` must read that payload. AIO-Gym wraps it with a self-describing
-`manifest.json` in the public `model.zip` checkpoint.
+`load()` must read that payload into a model that can either continue learning
+or provide a Policy. The payload must retain the optimizer, replay, and learner
+state owned by the algorithm. AIO-Gym wraps it with a self-describing
+`manifest.json` in the public `model.zip` checkpoint. The same backend then
+supports `train(..., resume_from=checkpoint)` without another workflow.
 
 ## Stable-Baselines3 algorithms
 
@@ -139,3 +149,9 @@ the algorithm id from the checkpoint manifest and requires the target `env` so
 AIO-Gym can validate environment compatibility before calling the backend.
 Duplicate ids, incomplete adapters, invalid ids, missing checkpoint files,
 malformed training events, and unsupported behavior cloning fail immediately.
+
+Set `requires_dataset = True` only when learning cannot run without a Dataset,
+as with RLPD. AIO-Gym then validates `dataset=` before creating the output
+directory and passes the resulting `DatasetReader` to `learn()`. A backend that
+sets it to `False` may receive a Dataset only when its behavior-cloning hook
+consumes that Dataset before online learning.

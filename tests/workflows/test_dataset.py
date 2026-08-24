@@ -38,7 +38,7 @@ def test_collect_uses_the_given_env_and_round_trips_episodes(tmp_path):
     assert reader.metadata["environment"]["randomize"] is False
     assert reader.metadata["environment"]["disturbance"] is None
     assert reader.metadata["environment"]["reward"] == "regulation"
-    assert reader.metadata["environment"]["parameters"]["heater_power"] == 2000.0
+    assert reader.metadata["environment"]["parameters"]["pump_power_max"] == 370.0
     assert sorted(path.name for path in output.glob("episode-*.npz")) == [
         "episode-000000.npz",
         "episode-000001.npz",
@@ -151,7 +151,7 @@ def test_reader_rejects_unknown_schema_and_inconsistent_metadata(tmp_path):
         env.close()
     metadata_path = output / "metadata.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    metadata["schema_version"] = "aiogym.dataset.v0"
+    metadata["schema_version"] = "invalid"
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     with pytest.raises(ValueError, match="unsupported dataset schema"):
         DatasetReader(output)

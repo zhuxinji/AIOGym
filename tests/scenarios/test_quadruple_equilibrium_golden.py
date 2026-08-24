@@ -11,16 +11,16 @@ from aiogym.core.specs import EpisodeSpec
 
 
 GOLDEN = json.loads(
-    (Path(__file__).with_name("golden") / "quadruple-phase0-v1.json").read_text(
+    (Path(__file__).with_name("golden") / "quadruple-equilibrium-v1.json").read_text(
         encoding="utf-8"
     )
 )
 
 
-def test_quadruple_phase0_fixture_is_reproducible():
+def test_quadruple_equilibrium_fixture_is_reproducible():
     env = aiogym.make_env("quadruple", reward="regulation")
     try:
-        source = GOLDEN["condition"]
+        source = GOLDEN["episode"]
         episode = EpisodeSpec(
             initial_state=tuple(source["initial_state"]),
             initial_action=tuple(env.model.default_action()),

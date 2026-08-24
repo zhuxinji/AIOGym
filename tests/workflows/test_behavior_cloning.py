@@ -36,7 +36,7 @@ def test_behavior_cloning_pretrains_and_saves_the_standard_sb3_checkpoint(tmp_pa
             steps=1,
             seed=0,
             algorithm_kwargs=SMALL_POLICY,
-            demonstrations=dataset,
+            dataset=dataset,
             behavior_cloning_epochs=30,
             behavior_cloning_batch_size=8,
             behavior_cloning_learning_rate=0.01,
@@ -78,7 +78,7 @@ def test_behavior_cloning_supports_the_other_off_policy_actors(
             algorithm=algorithm,
             steps=1,
             algorithm_kwargs=SMALL_POLICY,
-            demonstrations=dataset,
+            dataset=dataset,
             behavior_cloning_epochs=1,
             behavior_cloning_batch_size=2,
             output=output,
@@ -113,7 +113,7 @@ def test_behavior_cloning_rejects_incompatible_scenario_before_writing_output(
                 env=target_env,
                 algorithm="sac",
                 steps=1,
-                demonstrations=dataset,
+                dataset=dataset,
                 behavior_cloning_epochs=1,
                 output=output,
             )
@@ -123,12 +123,12 @@ def test_behavior_cloning_rejects_incompatible_scenario_before_writing_output(
 def test_behavior_cloning_requires_an_off_policy_actor_and_explicit_epochs(tmp_path):
     env = make_env("quadruple")
     try:
-        with pytest.raises(ValueError, match="does not support behavior cloning"):
+        with pytest.raises(ValueError, match="does not consume a training Dataset"):
             train(
                 env=env,
                 algorithm="ppo",
                 steps=1,
-                demonstrations=tmp_path / "dataset",
+                dataset=tmp_path / "dataset",
                 behavior_cloning_epochs=1,
                 output=tmp_path / "ppo",
             )
@@ -137,10 +137,10 @@ def test_behavior_cloning_requires_an_off_policy_actor_and_explicit_epochs(tmp_p
                 env=env,
                 algorithm="sac",
                 steps=1,
-                demonstrations=tmp_path / "dataset",
+                dataset=tmp_path / "dataset",
                 output=tmp_path / "missing-epochs",
             )
-        with pytest.raises(ValueError, match="requires demonstrations"):
+        with pytest.raises(ValueError, match="requires dataset"):
             train(
                 env=env,
                 algorithm="sac",
@@ -153,7 +153,7 @@ def test_behavior_cloning_requires_an_off_policy_actor_and_explicit_epochs(tmp_p
                 env=env,
                 algorithm="sac",
                 steps=1,
-                demonstrations=tmp_path / "dataset",
+                dataset=tmp_path / "dataset",
                 behavior_cloning_epochs=1,
                 behavior_cloning_batch_size=0,
                 output=tmp_path / "invalid-batch",
@@ -163,7 +163,7 @@ def test_behavior_cloning_requires_an_off_policy_actor_and_explicit_epochs(tmp_p
                 env=env,
                 algorithm="sac",
                 steps=1,
-                demonstrations=tmp_path / "dataset",
+                dataset=tmp_path / "dataset",
                 behavior_cloning_epochs=1,
                 behavior_cloning_learning_rate=float("nan"),
                 output=tmp_path / "invalid-learning-rate",

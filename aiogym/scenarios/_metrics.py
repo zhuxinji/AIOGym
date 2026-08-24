@@ -1,4 +1,5 @@
 """Reward-owned episode metric implementations for built-in scenarios."""
+
 from __future__ import annotations
 
 import math
@@ -30,10 +31,7 @@ def regulation_episode_metrics(
                 "tracking_ise": float(np.sum(matrix**2) * trace["dt"]),
                 "tracking_itae": float(
                     sum(
-                        (index + 1)
-                        * trace["dt"]
-                        * float(np.sum(row))
-                        * trace["dt"]
+                        (index + 1) * trace["dt"] * float(np.sum(row)) * trace["dt"]
                         for index, row in enumerate(absolute)
                     )
                 ),
@@ -44,16 +42,12 @@ def regulation_episode_metrics(
         )
         event_steps = sorted(
             int(step)
-            for step in episode.reset_info["episode_spec"][
-                "disturbance_schedule"
-            ]
+            for step in episode.reset_info["episode_spec"]["disturbance_schedule"]
         )
         if event_steps:
             first = min(event_steps)
             last = max(event_steps)
-            metrics["disturbance_iae"] = float(
-                np.sum(absolute[first:]) * trace["dt"]
-            )
+            metrics["disturbance_iae"] = float(np.sum(absolute[first:]) * trace["dt"])
             metrics["disturbance_ise"] = float(
                 np.sum(matrix[first:] ** 2) * trace["dt"]
             )
@@ -88,9 +82,7 @@ def _episode_trace(
         if len(np.unique(selected)) != len(selected):
             raise ValueError("output_indices must not contain duplicates")
         if np.any(selected < 0) or np.any(selected >= len(first_output)):
-            raise ValueError(
-                "output_indices contains an index outside the outputs"
-            )
+            raise ValueError("output_indices contains an index outside the outputs")
     dt = float(env.unwrapped.control_dt)
     metrics = {
         "return": float(episode.episode_return),
@@ -156,9 +148,7 @@ def _output_reference(transition):
 
 def _output_scale(env, size, *, output_scale=None):
     source = (
-        env.unwrapped.model.controlled_output_scales()
-        if output_scale is None
-        else output_scale
+        env.unwrapped.model.output_scales() if output_scale is None else output_scale
     )
     values = np.asarray(source, dtype=float).reshape(-1)
     if values.shape != (size,) or not np.all(values > 0):

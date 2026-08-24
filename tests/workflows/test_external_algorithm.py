@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 import aiogym
-from aiogym.workflows import algorithms as algorithm_registry
+from aiogym.rl import algorithms as algorithm_registry
 
 
 @dataclass
@@ -44,6 +44,7 @@ class ConstantPolicy:
 class ConstantAlgorithmBackend:
     id = "external_constant"
     behavior_cloning = None
+    requires_dataset = False
 
     def effective_kwargs(self, *, steps, values):
         del steps
@@ -57,7 +58,8 @@ class ConstantAlgorithmBackend:
         action = np.asarray(env.unwrapped.model.default_action(), dtype=np.float32)
         return ConstantModel(action=action, env=env, seed=seed)
 
-    def learn(self, model, *, steps, on_step):
+    def learn(self, model, *, steps, dataset, on_step):
+        del dataset
         observation, _ = model.env.reset(seed=model.seed)
         del observation
         episode = 0
@@ -173,6 +175,38 @@ def test_load_policy_rejects_non_aiogym_checkpoint(tmp_path):
             aiogym.load_policy(checkpoint, env=env)
     finally:
         env.close()
+
+
+def test_external_algorithm_checkpoint_can_continue_training(tmp_path):
+    backend = ConstantAlgorithmBackend()
+    aiogym.register_algorithm(backend)
+    env = aiogym.make_env("quadruple")
+    try:
+        first = aiogym.train(
+            env=env,
+            algorithm=backend.id,
+            steps=2,
+            seed=8,
+            output=tmp_path / "first",
+        )
+        continued = aiogym.train(
+            env=env,
+            algorithm=backend.id,
+            steps=3,
+            resume_from=first["checkpoint"],
+            output=tmp_path / "continued",
+        )
+        with zipfile.ZipFile(continued["checkpoint"]) as checkpoint:
+            manifest = json.loads(checkpoint.read("manifest.json"))
+    finally:
+        env.close()
+        del algorithm_registry._BACKENDS[backend.id]
+
+    assert continued["initial_steps"] == 2
+    assert continued["added_steps"] == 3
+    assert continued["actual_steps"] == 5
+    assert continued["seed"] == 8
+    assert manifest["policy"]["training"]["completed_steps"] == 5
 
 
 def test_installed_entry_point_discovers_external_backend(monkeypatch):

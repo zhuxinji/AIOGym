@@ -42,9 +42,7 @@ def test_randomization_is_seeded_and_records_resolved_episode_and_channels():
 
 def test_episode_sampling_rng_is_independent_from_channel_options():
     plain = make_env("three_tank", randomize=True)
-    varied = make_env(
-        "three_tank", randomize=True, noise=True, delay=True, fault=True
-    )
+    varied = make_env("three_tank", randomize=True, noise=True, delay=True, fault=True)
     try:
         _, plain_info = plain.reset(seed=19)
         _, varied_info = varied.reset(seed=19)
@@ -58,8 +56,8 @@ def test_episode_sampling_rng_is_independent_from_channel_options():
 @pytest.mark.parametrize(
     ("scenario", "start_bounds", "duration_bounds", "factor_bounds"),
     (
-        ("quadruple", (120, 240), (120, 240), (0.78, 0.94)),
-        ("three_tank", (450, 800), (300, 600), (0.72, 0.94)),
+        ("quadruple", (36, 72), (36, 72), (0.78, 0.94)),
+        ("three_tank", (112, 200), (75, 150), (0.72, 0.94)),
     ),
 )
 def test_physical_disturbance_is_seeded_and_changes_model_dynamics(
@@ -132,12 +130,24 @@ def test_training_distribution_is_tracking_only_with_twenty_percent_boundary_tai
     assert all(not info["episode_spec"]["disturbance_schedule"] for info in reset_infos)
     boundary_count = sum(
         np.all(
-            np.asarray(info["episode_spec"]["initial_state"], dtype=float)[0:6:2]
+            np.asarray(info["episode_spec"]["initial_state"], dtype=float)
             >= 0.80 * maximum
         )
         for info in reset_infos
     )
     assert 30 <= boundary_count <= 50
+    moves = []
+    for info in reset_infos:
+        spec = info["episode_spec"]
+        assert spec["horizon"] == 600
+        assert not spec["reference_schedule"]
+        start = np.asarray(spec["initial_state"], dtype=float)
+        target = spec["reference"]
+        level_move = np.abs(np.asarray(target, dtype=float) - np.asarray(start))
+        moves.extend(level_move.tolist())
+        if not np.all(start >= 0.80 * maximum):
+            assert np.all(level_move >= 0.05)
+    assert max(moves) > 0.12
 
 
 def test_quadruple_training_distribution_is_tracking_only_with_boundary_tail():
@@ -171,27 +181,34 @@ def test_base_environment_does_not_randomize_automatically():
     assert first_info["episode_family"] == second_info["episode_family"] == "default"
 
 
-def test_sampled_tracking_reference_event_is_episode_specific():
+def test_sampled_tracking_target_is_active_at_reset():
     env = make_env("three_tank", randomize=True)
     try:
         for seed in range(100):
             _, reset_info = env.reset(seed=seed)
-            if reset_info["episode_spec"]["reference_schedule"]:
+            initial_state = np.asarray(
+                reset_info["episode_spec"]["initial_state"], dtype=float
+            )
+            maximum = np.asarray(
+                env.unwrapped.model.parameter("height_max"), dtype=float
+            )
+            if not np.all(initial_state >= 0.80 * maximum):
                 break
         else:
             raise AssertionError("no interior tracking episode sampled")
-        schedule = reset_info["episode_spec"]["reference_schedule"]
-        step_text, target = next(iter(schedule.items()))
-        initial = reset_info["episode_spec"]["reference"]
+        spec = reset_info["episode_spec"]
+        target = spec["reference"]
+        initial = spec["initial_state"]
         initial_action = np.asarray(
-            reset_info["episode_spec"]["initial_action"], dtype=float
+            spec["initial_action"], dtype=float
         )
-        assert np.all(0.125 <= np.asarray(initial)[0::2])
-        assert np.all(np.asarray(initial)[0::2] <= 0.4)
-        assert np.all(0.125 <= np.asarray(target)[0::2])
-        assert np.all(np.asarray(target)[0::2] <= 0.4)
-        assert 20.5 <= initial[5] <= 26.0
-        assert 20.5 <= target[5] <= 26.0
+        assert spec["horizon"] == 600
+        assert not spec["reference_schedule"]
+        assert np.all(0.125 <= np.asarray(initial))
+        assert np.all(np.asarray(initial) <= 0.4)
+        assert np.all(0.125 <= np.asarray(target))
+        assert np.all(np.asarray(target) <= 0.4)
+        assert np.all(np.abs(np.asarray(target) - np.asarray(initial)) >= 0.05)
         assert np.all((0.02 <= initial_action) & (initial_action <= 0.85))
         flow_lpm = (
             env.unwrapped.model.step_info(
@@ -202,8 +219,6 @@ def test_sampled_tracking_reference_event_is_episode_specific():
             * 60000.0
         )
         assert 1.0 <= flow_lpm <= 6.0
-        env.unwrapped._step_index = int(step_text)
-        env.unwrapped._apply_events()
         assert np.allclose(env.unwrapped.y_sp, target)
     finally:
         env.close()
@@ -225,8 +240,8 @@ def test_randomized_direct_action_dataset_keeps_episode_metadata(tmp_path):
     episode = DatasetReader(result["path"])[0]
     assert episode.metadata["episode_family"] == "tracking"
     assert episode.metadata["episode_spec"]["horizon"] > 0
-    assert episode.array("action").shape == (2, 5)
-    assert episode.array("channel_action").shape == (2, 5)
+    assert episode.array("action").shape == (2, 4)
+    assert episode.array("channel_action").shape == (2, 4)
 
 
 def test_randomized_direct_action_environment_uses_the_standard_evaluator():

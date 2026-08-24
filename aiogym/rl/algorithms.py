@@ -51,6 +51,7 @@ class AlgorithmBackend(Protocol):
 
     id: str
     behavior_cloning: BehaviorCloningHook | None
+    requires_dataset: bool
 
     def effective_kwargs(
         self,
@@ -72,6 +73,7 @@ class AlgorithmBackend(Protocol):
         model: Any,
         *,
         steps: int,
+        dataset: Any | None,
         on_step: TrainingStepCallback,
     ) -> int: ...
 
@@ -104,7 +106,7 @@ def register_sb3_algorithm(
 ) -> None:
     """Register one SB3 ``BaseAlgorithm`` subclass in the current process."""
 
-    from ._sb3_runtime import SB3AlgorithmBackend
+    from .sb3 import SB3AlgorithmBackend
 
     backend = SB3AlgorithmBackend(
         id=algorithm,
@@ -157,9 +159,10 @@ def _register_builtins() -> None:
     global _BUILTINS_REGISTERED
     if _BUILTINS_REGISTERED:
         return
-    from ._sb3_runtime import built_in_backends
+    from .sb3 import built_in_backends
+    from .rlpd import RLPDAlgorithmBackend
 
-    for backend in built_in_backends():
+    for backend in (*built_in_backends(), RLPDAlgorithmBackend()):
         _register_backend(backend)
     _BUILTINS_REGISTERED = True
 
@@ -201,6 +204,8 @@ def _register_backend(backend: AlgorithmBackend) -> None:
         backend.behavior_cloning
     ):
         raise TypeError("backend behavior_cloning must be callable or None")
+    if not isinstance(backend.requires_dataset, bool):
+        raise TypeError("backend requires_dataset must be bool")
     if algorithm_id in _BACKENDS:
         raise ValueError(f"algorithm backend is already registered: {algorithm_id}")
     _BACKENDS[algorithm_id] = backend

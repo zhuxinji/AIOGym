@@ -13,41 +13,32 @@ _MINIMUM_TRACKING_MOVE_FRACTION = 0.15
 _BOUNDARY_INITIAL_PROBABILITY = 0.20
 _BOUNDARY_LEVEL_RANGE_FRACTION = (0.80, 0.92)
 _MAXIMUM_SAMPLING_ATTEMPTS = 100
+_TRACKING_HORIZON = 180
 
 
 def make_default_episode(model) -> EpisodeSpec:
     return EpisodeSpec(
         initial_state=tuple(model.initial_state()),
         initial_action=tuple(model.default_action()),
-        reference=(18.0, 8.0),
-        horizon=600,
+        reference=(8.0, 18.0),
+        horizon=_TRACKING_HORIZON,
         disturbances=model.default_disturbances(),
-        reference_schedule={300: (8.0, 18.0)},
     )
 
 
 def _tracking_episode(model, rng) -> EpisodeSpec:
     start = _sample_tracking_equilibrium(model, rng)
-    first = _sample_tracking_equilibrium(
+    target = _sample_tracking_equilibrium(
         model,
         rng,
         previous_reference=start["reference"],
     )
-    second = _sample_tracking_equilibrium(
-        model,
-        rng,
-        previous_reference=first["reference"],
-    )
     return EpisodeSpec(
         initial_state=start["state"],
         initial_action=start["action"],
-        reference=start["reference"],
-        horizon=600,
+        reference=target["reference"],
+        horizon=_TRACKING_HORIZON,
         disturbances=model.default_disturbances(),
-        reference_schedule={
-            120: first["reference"],
-            360: second["reference"],
-        },
     )
 
 
@@ -105,24 +96,27 @@ def _sample_tracking_equilibrium(model, rng, *, previous_reference=None):
 
 
 def _disturbance_episode(model, rng) -> EpisodeSpec:
-    del rng
+    start = int(rng.integers(120, 221))
+    duration = int(rng.integers(150, 251))
+    factor = float(rng.uniform(0.78, 0.90))
     return EpisodeSpec(
         initial_state=tuple(model.initial_state()),
         initial_action=tuple(model.default_action()),
         reference=tuple(model.default_setpoint_vector()),
-        horizon=600,
+        horizon=500,
         disturbances=model.default_disturbances(),
         disturbance_schedule={
-            150: {"pump_flow_factor": 0.85},
-            350: {"pump_flow_factor": 1.0},
+            start: {"pump_flow_factor": factor},
+            start + duration: {"pump_flow_factor": 1.0},
         },
     )
 
 
 def _boundary_episode(model, rng) -> EpisodeSpec:
-    del rng
     maximum = float(model.parameter("max_level"))
-    initial = (0.9 * maximum,) * 4
+    initial = tuple(
+        float(value) for value in rng.uniform(0.82, 0.92, size=4) * maximum
+    )
     reference = np.clip(
         np.asarray(model.default_setpoint_vector(), dtype=float), 0.0, maximum
     )
@@ -130,7 +124,7 @@ def _boundary_episode(model, rng) -> EpisodeSpec:
         initial_state=initial,
         initial_action=tuple(model.default_action()),
         reference=tuple(reference),
-        horizon=400,
+        horizon=180,
         disturbances=model.default_disturbances(),
     )
 
@@ -153,7 +147,7 @@ def sample_training_episode(model, rng, reward_id) -> tuple[EpisodeSpec, str]:
             initial_state=initial_state,
             initial_action=target["action"],
             reference=target["reference"],
-            horizon=600,
+            horizon=_TRACKING_HORIZON,
             disturbances=model.default_disturbances(),
         )
     else:
@@ -162,22 +156,20 @@ def sample_training_episode(model, rng, reward_id) -> tuple[EpisodeSpec, str]:
             rng,
             previous_reference=target["reference"],
         )
-        step = int(rng.integers(90, 241))
         episode = EpisodeSpec(
             initial_state=start["state"],
             initial_action=start["action"],
-            reference=start["reference"],
-            horizon=600,
+            reference=target["reference"],
+            horizon=_TRACKING_HORIZON,
             disturbances=model.default_disturbances(),
-            reference_schedule={step: target["reference"]},
         )
     return episode, "tracking"
 
 
 def sample_training_disturbance(model, rng):
     del model
-    start = int(rng.integers(120, 241))
-    duration = int(rng.integers(120, 241))
+    start = int(rng.integers(36, 73))
+    duration = int(rng.integers(36, 73))
     factor = float(rng.uniform(0.78, 0.94))
     return {
         start: {"pump_flow_factor": factor},

@@ -1,4 +1,4 @@
 include LICENSE
 include README.md
-recursive-include rl/configs *.json
+recursive-include aiogym/rl/configs *.json
 recursive-include docs *.md

@@ -10,17 +10,13 @@ from typing import Any
 from ._integrity import content_digest
 
 
-REAL_LOG_SCHEMA_VERSION = "aiogym.three_tank.real-step.v6"
+REAL_LOG_SCHEMA_VERSION = "aiogym.three_tank.real-step.v8"
 MEASUREMENT_NAMES = (
     "tank_1_level",
-    "tank_1_temperature",
     "tank_2_level",
-    "tank_2_temperature",
     "tank_3_level",
-    "tank_3_temperature",
-    "reservoir_temperature",
 )
-ACTUATOR_NAMES = ("pump_P101", "valve_V12", "valve_V23", "valve_V34", "heater_H1")
+ACTUATOR_NAMES = ("pump_P101", "valve_V12", "valve_V23", "valve_V34")
 FLOW_MEASUREMENT_NAMES = ("V12_flow", "V23_flow", "V34_flow")
 
 
@@ -90,19 +86,19 @@ def build_real_step_record(
         "received_monotonic_time_s": received_timestamp,
         "wall_time_utc": str(wall_time_utc),
         "measurement_names": list(MEASUREMENT_NAMES),
-        "measurement": _finite_vector("measurement", measurement, 7),
+        "measurement": _finite_vector("measurement", measurement, 3),
         "flow_measurement_names": list(FLOW_MEASUREMENT_NAMES),
         "flow_measurement_m3s": _nonnegative_vector(
             "flow_measurement", flow_measurement, 3
         ),
-        "reference": _finite_vector("reference", reference, 6),
+        "reference": _finite_vector("reference", reference, 3),
         "transition_disturbance": _finite_mapping(
             "transition_disturbance", transition_disturbance
         ),
         "disturbance": _finite_mapping("disturbance", disturbance),
-        "commanded_action": _finite_vector("commanded_action", commanded_action, 5),
+        "commanded_action": _finite_vector("commanded_action", commanded_action, 4),
         "actuator_names": list(ACTUATOR_NAMES),
-        "applied_action": _finite_vector("applied_action", applied_action, 5),
+        "applied_action": _finite_vector("applied_action", applied_action, 4),
         "calibration_id": str(calibration_id),
         "calibration_hash": str(calibration_hash),
         "scenario_id": str(scenario_id),

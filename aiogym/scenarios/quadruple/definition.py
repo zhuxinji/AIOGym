@@ -36,9 +36,9 @@ _PID = {
 _MPC = {"Ts": 1.0, "P": 1, "move_supp": 0.0, "cv_scale": [1.0, 1.0]}
 def _controller_config(controller_id, reward_id):
     del reward_id
-    profiles = {"pid": _PID, "mpc": _MPC}
+    configs = {"pid": _PID, "mpc": _MPC}
     try:
-        return deepcopy(profiles[controller_id])
+        return deepcopy(configs[controller_id])
     except KeyError as error:
         raise ValueError(f"quadruple has no {controller_id!r} controller") from error
 

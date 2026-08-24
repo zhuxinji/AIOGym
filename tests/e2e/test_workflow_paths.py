@@ -43,7 +43,7 @@ def test_data_train_load_evaluate_and_compare_pipeline(
             steps=2,
             seed=4,
             algorithm_kwargs=SMALL_POLICY,
-            demonstrations=collected["path"],
+            dataset=collected["path"],
             behavior_cloning_epochs=1,
             behavior_cloning_batch_size=2,
             output=tmp_path / scenario / "train",
@@ -76,7 +76,10 @@ def test_data_train_load_evaluate_and_compare_pipeline(
     )
     assert single["seeds"] == [7, 8]
     assert comparison["seeds"] == [7, 8]
-    assert comparison["evaluations"]["sac"] == single
+    assert comparison["evaluations"]["sac"]["aggregate"] == single["aggregate"]
+    assert (
+        tmp_path / scenario / "comparison" / "trajectories.npz"
+    ).is_file()
     assert set(comparison["ordering"]) == {"pid", "mpc", "sac"}
     assert np.isfinite(
         comparison["evaluations"]["pid"]["aggregate"]["episode_return"][

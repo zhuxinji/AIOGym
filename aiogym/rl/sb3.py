@@ -13,7 +13,6 @@ from typing import Any
 import numpy as np
 
 from aiogym import __version__
-from aiogym.controllers.policies import SB3CheckpointPolicy
 from aiogym.core.io import jsonable
 
 from .algorithms import (
@@ -32,6 +31,39 @@ _BUILTIN_MODEL_CLASSES = {
 }
 
 
+class SB3CheckpointPolicy:
+    """Expose deterministic SB3 prediction through the AIO-Gym Policy API."""
+
+    def __init__(
+        self,
+        model,
+        *,
+        algorithm: str,
+        checkpoint: str | Path,
+    ):
+        self.env = None
+        self.model = model
+        self.algorithm = algorithm.lower()
+        self.checkpoint = str(checkpoint)
+
+    def reset(self, seed=None):
+        del seed
+
+    def act(self, observation, context):
+        del context
+        predicted = self.model.predict(observation, deterministic=True)
+        action = predicted[0] if isinstance(predicted, tuple) else predicted
+        return np.asarray(action, dtype=np.float32)
+
+    def metadata(self):
+        return {
+            "id": "sb3_checkpoint",
+            "kind": "learned_policy",
+            "algorithm": self.algorithm,
+            "checkpoint": self.checkpoint,
+        }
+
+
 @dataclass(frozen=True)
 class SB3AlgorithmBackend:
     """Adapt one SB3 ``BaseAlgorithm`` class to the AIO-Gym workflow."""
@@ -39,6 +71,7 @@ class SB3AlgorithmBackend:
     id: str
     model_class: type | str
     behavior_cloning: BehaviorCloningHook | None = None
+    requires_dataset: bool = False
 
     def __post_init__(self) -> None:
         if isinstance(self.model_class, str):
@@ -100,8 +133,10 @@ class SB3AlgorithmBackend:
         model,
         *,
         steps: int,
+        dataset,
         on_step: TrainingStepCallback,
     ) -> int:
+        del dataset
         try:
             from stable_baselines3.common.callbacks import BaseCallback
         except ModuleNotFoundError as error:
@@ -109,6 +144,7 @@ class SB3AlgorithmBackend:
                 "Stable-Baselines3 is required for this algorithm; "
                 "install `aiogym[rl]`"
             ) from error
+        initial_num_timesteps = int(model.num_timesteps)
 
         class TransitionCallback(BaseCallback):
             def __init__(self):
@@ -130,7 +166,7 @@ class SB3AlgorithmBackend:
                             "SB3 terminal info is missing TimeLimit.truncated"
                         )
                     truncated = bool(info["TimeLimit.truncated"])
-                self.last_step = int(self.num_timesteps)
+                self.last_step = int(self.num_timesteps) - initial_num_timesteps
                 on_step(
                     TrainingStep(
                         step=self.last_step,
@@ -142,11 +178,20 @@ class SB3AlgorithmBackend:
                 return True
 
         callback = TransitionCallback()
-        model.learn(total_timesteps=steps, callback=callback)
+        model.learn(
+            total_timesteps=steps,
+            callback=callback,
+            reset_num_timesteps=False,
+        )
         return callback.last_step
 
     def save(self, model, payload: Path) -> None:
-        model.save(payload)
+        include = (
+            ["replay_buffer"]
+            if getattr(model, "replay_buffer", None) is not None
+            else None
+        )
+        model.save(payload, include=include)
 
     def load(self, payload: Path, *, env=None):
         return self.resolve_model_class().load(str(payload), env=env)
@@ -255,4 +300,8 @@ def _materialize_action_noise(action_noise, *, action_shape):
     )
 
 
-__all__ = ["SB3AlgorithmBackend", "built_in_backends"]
+__all__ = [
+    "SB3AlgorithmBackend",
+    "SB3CheckpointPolicy",
+    "built_in_backends",
+]

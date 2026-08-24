@@ -1,4 +1,5 @@
 """Minimal cross-package contracts for scenarios and policies."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
@@ -52,7 +53,7 @@ class ProcessModel(Protocol):
 
     def action_vector(self, action: Sequence[float]) -> Sequence[float]: ...
 
-    def controlled_output_scales(self) -> Sequence[float]: ...
+    def output_scales(self) -> Sequence[float]: ...
 
     def measurement(
         self,
@@ -119,9 +120,7 @@ class Policy(Protocol):
 
 def validate_policy(policy: Any) -> Policy:
     if not isinstance(policy, Policy):
-        raise TypeError(
-            "policy must provide env, reset(), act(), and metadata()"
-        )
+        raise TypeError("policy must provide env, reset(), act(), and metadata()")
     return policy
 
 

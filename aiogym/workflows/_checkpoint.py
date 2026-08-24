@@ -11,9 +11,9 @@ from pathlib import Path
 
 from aiogym.core.contracts import policy_metadata, validate_policy
 from aiogym.core.io import canonical_json_bytes, jsonable
+from aiogym.rl.algorithms import get_algorithm
 
 from ._metadata import environment_metadata, validate_environment_compatibility
-from .algorithms import get_algorithm
 
 
 CHECKPOINT_SCHEMA_VERSION = "aiogym.checkpoint.v2"
@@ -21,7 +21,15 @@ _MANIFEST_NAME = "manifest.json"
 _PAYLOAD_NAME = "payload.zip"
 
 
-def save_checkpoint(backend, model, checkpoint, *, env, overwrite=False) -> Path:
+def save_checkpoint(
+    backend,
+    model,
+    checkpoint,
+    *,
+    env,
+    training,
+    overwrite=False,
+) -> Path:
     target = _checkpoint_path(checkpoint)
     if not isinstance(overwrite, bool):
         raise TypeError("checkpoint overwrite must be bool")
@@ -39,13 +47,14 @@ def save_checkpoint(backend, model, checkpoint, *, env, overwrite=False) -> Path
             raise FileNotFoundError(
                 f"algorithm backend {backend.id} did not create payload: {payload}"
             )
-        policy = backend.policy(model, checkpoint=target)
+        policy = policy_metadata(backend.policy(model, checkpoint=target))
+        policy["training"] = _validated_training_state(training)
         manifest = {
             "schema_version": CHECKPOINT_SCHEMA_VERSION,
             "algorithm": backend.id,
             "runtime": backend_runtime_metadata(backend),
             "environment": environment_metadata(env),
-            "policy": policy_metadata(policy),
+            "policy": policy,
         }
         archive_path = temporary / target.name
         with zipfile.ZipFile(
@@ -64,6 +73,23 @@ def save_checkpoint(backend, model, checkpoint, *, env, overwrite=False) -> Path
 
 
 def load_checkpoint(checkpoint, *, env):
+    path, _manifest, backend, model = _load_checkpoint_model(checkpoint, env=env)
+    return validate_policy(backend.policy(model, checkpoint=path))
+
+
+def load_training_checkpoint(checkpoint, *, env, algorithm):
+    path, manifest, backend, model = _load_checkpoint_model(
+        checkpoint,
+        env=env,
+        training_algorithm=algorithm,
+    )
+    training = manifest["policy"].get("training")
+    if training is None:
+        raise ValueError("checkpoint does not contain training state")
+    return path, backend, model, _validated_training_state(training)
+
+
+def _load_checkpoint_model(checkpoint, *, env, training_algorithm=None):
     path = _checkpoint_path(checkpoint)
     if not path.is_file():
         raise ValueError("checkpoint must be an existing model.zip file")
@@ -81,6 +107,14 @@ def load_checkpoint(checkpoint, *, env):
                     )
                 manifest = _read_manifest(archive)
                 validate_environment_compatibility(manifest["environment"], env)
+                if training_algorithm is not None:
+                    if manifest["algorithm"] != training_algorithm:
+                        raise ValueError(
+                            f"checkpoint algorithm {manifest['algorithm']!r} does "
+                            "not match requested algorithm "
+                            f"{training_algorithm!r}"
+                        )
+                    _validate_training_environment(manifest["environment"], env)
                 with archive.open(_PAYLOAD_NAME) as source, payload.open(
                     "wb"
                 ) as destination:
@@ -89,7 +123,18 @@ def load_checkpoint(checkpoint, *, env):
             raise ValueError("checkpoint must be a valid AIO-Gym model.zip") from error
         backend = get_algorithm(manifest["algorithm"])
         model = backend.load(payload, env=env)
-    return validate_policy(backend.policy(model, checkpoint=path))
+    return path, manifest, backend, model
+
+
+def _validate_training_environment(expected, env) -> None:
+    actual = environment_metadata(env)
+    if set(expected) != set(actual):
+        raise ValueError("checkpoint training environment fields are invalid")
+    for field, value in expected.items():
+        if field not in actual or value != actual[field]:
+            raise ValueError(
+                f"checkpoint {field} is incompatible with the training environment"
+            )
 
 
 def backend_runtime_metadata(backend) -> dict:
@@ -138,9 +183,31 @@ def _read_manifest(archive) -> dict:
     return manifest
 
 
+def _validated_training_state(value) -> dict:
+    serialized = jsonable(value)
+    expected = {"completed_steps", "seed", "algorithm_kwargs", "dataset"}
+    if not isinstance(serialized, dict) or set(serialized) != expected:
+        raise ValueError(
+            "checkpoint training state requires completed_steps, seed, "
+            "algorithm_kwargs, and dataset"
+        )
+    for name in ("completed_steps", "seed"):
+        item = serialized[name]
+        if isinstance(item, bool) or not isinstance(item, int) or item < 0:
+            raise ValueError(f"checkpoint training {name} must be non-negative")
+    if not isinstance(serialized["algorithm_kwargs"], dict):
+        raise TypeError("checkpoint training algorithm_kwargs must be a JSON object")
+    if serialized["dataset"] is not None and not isinstance(
+        serialized["dataset"], dict
+    ):
+        raise TypeError("checkpoint training dataset must be a JSON object or null")
+    return serialized
+
+
 __all__ = [
     "CHECKPOINT_SCHEMA_VERSION",
     "backend_runtime_metadata",
     "load_checkpoint",
+    "load_training_checkpoint",
     "save_checkpoint",
 ]

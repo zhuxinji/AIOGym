@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import html
 import math
+import os
+import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -15,7 +17,21 @@ from aiogym.core.io import write_json
 from .evaluate import evaluate
 
 
-COMPARISON_SCHEMA_VERSION = "aiogym.comparison.v3"
+COMPARISON_SCHEMA_VERSION = "aiogym.comparison.v4"
+TRAJECTORY_ARCHIVE_SCHEMA_VERSION = "aiogym.trajectory-archive.v1"
+_TRAJECTORY_FIELDS = (
+    "physical_time",
+    "true_state",
+    "output",
+    "reference",
+    "commanded_action",
+    "channel_action",
+    "applied_action",
+    "reward",
+    "disturbance",
+    "constraint_costs",
+    "minimum_safety_margin",
+)
 _COLORS = (
     "#d95f02",
     "#1b75bb",
@@ -36,10 +52,11 @@ def compare_policies(
     max_steps: int | None = None,
     output: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Compare policies and persist one JSON/SVG benchmark report.
+    """Compare policies and persist one compact report plus trajectory archive.
 
-    Benchmark environments default to ``runs/<scenario>/<benchmark>`` and
-    replace only the two managed comparison artifacts. Comparisons outside a
+    Benchmark environments default to
+    ``runs/<scenario>/benchmarks/<benchmark>`` and
+    replace only the three managed comparison artifacts. Comparisons outside a
     Benchmark require an explicit empty output directory.
     """
     if not isinstance(policies, Mapping) or len(policies) < 2:
@@ -69,6 +86,7 @@ def compare_policies(
         raise ValueError("all policy evaluations must use identical ranking metrics")
     first_schema = first["trajectory_schema"]
     static_schema_fields = (
+        "time_unit",
         "state",
         "output",
         "action",
@@ -102,16 +120,27 @@ def compare_policies(
         return (*values, label)
 
     ordering = sorted(labels, key=ranking_key)
+    trajectory_seed = ordered_seeds[0]
+    archive = _write_trajectory_archive(
+        output_directory / "trajectories.npz",
+        evaluations,
+        trajectory_schema,
+        overwrite=overwrite,
+    )
     result = {
         "schema_version": COMPARISON_SCHEMA_VERSION,
         "environment": dict(first["environment"]),
         "trajectory_schema": trajectory_schema,
         "seeds": list(ordered_seeds),
-        "trajectory_seed": ordered_seeds[0],
+        "trajectory_seed": trajectory_seed,
+        "trajectory_archive": archive,
         "max_steps": first["max_steps"],
         "ranking_metrics": ranking_metrics,
         "ordering": ordering,
-        "evaluations": evaluations,
+        "evaluations": {
+            label: _compact_evaluation(evaluations[label], trajectory_seed)
+            for label in labels
+        },
     }
     svg_path = output_directory / "comparison.svg"
     svg_path.write_text(render_trajectory_svg(result), encoding="utf-8")
@@ -133,7 +162,7 @@ def _prepare_output_directory(env, output) -> tuple[Path, bool]:
         raise FileExistsError(
             f"refusing to create comparison in non-empty directory: {directory}"
         )
-    managed_names = {"comparison.json", "comparison.svg"}
+    managed_names = {"comparison.json", "comparison.svg", "trajectories.npz"}
     invalid = sorted(
         path.name
         for path in entries
@@ -148,6 +177,166 @@ def _prepare_output_directory(env, output) -> tuple[Path, bool]:
     return directory, overwrite
 
 
+def _compact_evaluation(evaluation, trajectory_seed):
+    episodes = []
+    for episode in evaluation["episodes"]:
+        compact_episode = {
+            key: value for key, value in episode.items() if key != "trajectory"
+        }
+        if episode["seed"] == trajectory_seed:
+            compact_episode["trajectory"] = episode["trajectory"]
+        episodes.append(compact_episode)
+    return {
+        **{
+            key: value
+            for key, value in evaluation.items()
+            if key not in {"episodes", "trajectory_summary"}
+        },
+        "episodes": episodes,
+    }
+
+
+def _write_trajectory_archive(path, evaluations, schema, *, overwrite):
+    target = Path(path)
+    arrays = {}
+    entries = []
+    columns = _trajectory_columns(schema)
+    for policy_index, (label, evaluation) in enumerate(evaluations.items()):
+        for episode_index, episode in enumerate(evaluation["episodes"]):
+            prefix = f"p{policy_index:03d}_e{episode_index:03d}"
+            trajectory_arrays = _trajectory_arrays(
+                episode["trajectory"],
+                columns,
+            )
+            for field, array in trajectory_arrays.items():
+                arrays[f"{prefix}__{field}"] = array
+            entries.append(
+                {
+                    "id": prefix,
+                    "policy": label,
+                    "seed": episode["seed"],
+                    "length": episode["length"],
+                }
+            )
+    _write_npz(target, arrays, overwrite=overwrite)
+    return {
+        "schema_version": TRAJECTORY_ARCHIVE_SCHEMA_VERSION,
+        "file": target.name,
+        "dtype": "float64",
+        "fields": list(_TRAJECTORY_FIELDS),
+        "columns": columns,
+        "entries": entries,
+    }
+
+
+def _trajectory_columns(schema):
+    state = [row["name"] for row in schema["state"]]
+    output = [row["name"] for row in schema["output"]]
+    action = [row["name"] for row in schema["action"]]
+    return {
+        "true_state": state,
+        "output": output,
+        "reference": output,
+        "commanded_action": action,
+        "channel_action": action,
+        "applied_action": action,
+        "disturbance": list(schema["disturbance_names"]),
+        "constraint_costs": list(schema["constraint_cost_names"]),
+    }
+
+
+def _trajectory_arrays(trajectory, columns):
+    missing = set(_TRAJECTORY_FIELDS) - set(trajectory)
+    if missing:
+        raise ValueError(f"trajectory fields are missing: {sorted(missing)}")
+    lengths = {field: len(trajectory[field]) for field in _TRAJECTORY_FIELDS}
+    if len(set(lengths.values())) != 1:
+        raise ValueError(f"trajectory fields have inconsistent lengths: {lengths}")
+    length = next(iter(lengths.values()))
+    arrays = {}
+    scalar_fields = {
+        "physical_time",
+        "reward",
+        "minimum_safety_margin",
+    }
+    mapping_fields = {"disturbance", "constraint_costs"}
+    for field in _TRAJECTORY_FIELDS:
+        if field in scalar_fields:
+            array = np.asarray(trajectory[field], dtype=np.float64)
+            expected_shape = (length,)
+        elif field in mapping_fields:
+            names = columns[field]
+            rows = trajectory[field]
+            unexpected = sorted(
+                {
+                    name
+                    for row in rows
+                    for name in row
+                    if name not in names
+                }
+            )
+            if unexpected:
+                raise ValueError(
+                    f"trajectory field {field!r} contains unknown columns: {unexpected}"
+                )
+            if field == "disturbance":
+                missing_names = sorted(
+                    {
+                        name
+                        for row in rows
+                        for name in names
+                        if name not in row
+                    }
+                )
+                if missing_names:
+                    raise ValueError(
+                        f"trajectory field {field!r} is missing columns: {missing_names}"
+                    )
+            array = np.asarray(
+                [
+                    [float(row[name]) if name in row else 0.0 for name in names]
+                    for row in rows
+                ],
+                dtype=np.float64,
+            ).reshape(length, len(names))
+            expected_shape = (length, len(names))
+        else:
+            array = np.asarray(trajectory[field], dtype=np.float64)
+            expected_shape = (length, len(columns[field]))
+        if array.shape != expected_shape:
+            raise ValueError(
+                f"trajectory field {field!r} must have shape {expected_shape}; "
+                f"got {array.shape}"
+            )
+        if not np.isfinite(array).all():
+            raise ValueError(f"trajectory field {field!r} must contain finite values")
+        arrays[field] = array
+    return arrays
+
+
+def _write_npz(path, arrays, *, overwrite):
+    target = Path(path)
+    if target.exists() and not overwrite:
+        raise FileExistsError(f"refusing to overwrite existing artifact: {target}")
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=target.parent,
+        prefix=f".{target.name}.",
+        suffix=".tmp",
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            np.savez_compressed(stream, **arrays)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if target.exists() and not overwrite:
+            raise FileExistsError(f"refusing to overwrite existing artifact: {target}")
+        os.replace(temporary, target)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
 def _default_output_directory(env) -> Path:
     base_env = env.unwrapped
     if base_env.benchmark is None:
@@ -156,12 +345,13 @@ def _default_output_directory(env) -> Path:
         )
     scenario_id = base_env.scenario.id.replace("_", "-")
     benchmark_id = base_env.benchmark.id
-    return Path("runs") / scenario_id / benchmark_id
+    return Path("runs") / scenario_id / "benchmarks" / benchmark_id
 
 
 def render_trajectory_svg(result, *, title: str | None = None) -> str:
     labels = tuple(result["evaluations"])
     schema = result["trajectory_schema"]
+    time_unit = str(schema["time_unit"])
     resolved_title = (
         f"{result['environment']['scenario']} policy comparison"
         if title is None
@@ -221,7 +411,9 @@ def render_trajectory_svg(result, *, title: str | None = None) -> str:
                 y_limits=_schema_bounds(row),
             )
         )
-    action_panels.append(_level_boundary_panel(result, labels, schema))
+    action_panels.append(
+        _boundary_distance_panel(result, labels, schema, time_unit=time_unit)
+    )
     disturbance_panels = []
     first_trajectory = _plotted_trajectory(result, labels[0])
     for name in schema["disturbance_names"]:
@@ -240,11 +432,27 @@ def render_trajectory_svg(result, *, title: str | None = None) -> str:
                 )
             )
 
+    for panel in (*output_panels, *action_panels, *disturbance_panels):
+        panel["time_unit"] = time_unit
+
     width = 1440
     header_height = 100
     panel_height = 225
     return_panel_height = max(285, 100 + 34 * len(labels))
     panel_rows = max(len(output_panels), len(action_panels))
+    compact_hydraulic_layout = (
+        not disturbance_panels
+        and result["environment"]["scenario"] == "three_tank"
+        and result["environment"]["benchmark"]
+        in {"tracking", "boundary-safety"}
+        and len(output_panels) == 3
+        and len(action_panels) == 5
+    )
+    compact_single_output_layout = (
+        not disturbance_panels
+        and len(output_panels) == 1
+        and len(action_panels) == 3
+    )
     if disturbance_panels:
         output_panels.sort(
             key=lambda panel: "level" not in panel["title"].lower()
@@ -255,6 +463,8 @@ def render_trajectory_svg(result, *, title: str | None = None) -> str:
             for panels in compact_groups
         )
         height = header_height + panel_height * compact_rows + return_panel_height
+    elif compact_hydraulic_layout or compact_single_output_layout:
+        height = header_height + 3 * panel_height + return_panel_height
     else:
         height = header_height + panel_height * panel_rows + return_panel_height
     parts = [
@@ -329,6 +539,93 @@ def render_trajectory_svg(result, *, title: str | None = None) -> str:
                 panel_index += 1
             group_top += math.ceil(len(panels) / columns) * panel_height
         return_top = group_top
+    elif compact_hydraulic_layout:
+        grid_left = 76.0
+        grid_right = float(width - 40)
+        grid_gap = 48.0
+        panel_index = 0
+        output_width = (
+            grid_right - grid_left - 2 * grid_gap
+        ) / len(output_panels)
+        for column, panel in enumerate(output_panels):
+            left = grid_left + column * (output_width + grid_gap)
+            parts.extend(
+                _draw_series_panel(
+                    panel,
+                    header_height,
+                    panel_index,
+                    left=left,
+                    right=left + output_width,
+                )
+            )
+            panel_index += 1
+        actuator_panels = action_panels[:-1]
+        action_width = (
+            grid_right - grid_left - 3 * grid_gap
+        ) / len(actuator_panels)
+        for column, panel in enumerate(actuator_panels):
+            left = grid_left + column * (action_width + grid_gap)
+            parts.extend(
+                _draw_series_panel(
+                    panel,
+                    header_height + panel_height,
+                    panel_index,
+                    left=left,
+                    right=left + action_width,
+                )
+            )
+            panel_index += 1
+        parts.extend(
+            _draw_series_panel(
+                action_panels[-1],
+                header_height + 2 * panel_height,
+                panel_index,
+                left=grid_left,
+                right=grid_right,
+            )
+        )
+        return_top = header_height + 3 * panel_height
+    elif compact_single_output_layout:
+        grid_left = 76.0
+        grid_right = float(width - 40)
+        grid_gap = 48.0
+        panel_index = 0
+        parts.extend(
+            _draw_series_panel(
+                output_panels[0],
+                header_height,
+                panel_index,
+                left=grid_left,
+                right=grid_right,
+            )
+        )
+        panel_index += 1
+        actuator_panels = action_panels[:-1]
+        action_width = (
+            grid_right - grid_left - grid_gap
+        ) / len(actuator_panels)
+        for column, panel in enumerate(actuator_panels):
+            left = grid_left + column * (action_width + grid_gap)
+            parts.extend(
+                _draw_series_panel(
+                    panel,
+                    header_height + panel_height,
+                    panel_index,
+                    left=left,
+                    right=left + action_width,
+                )
+            )
+            panel_index += 1
+        parts.extend(
+            _draw_series_panel(
+                action_panels[-1],
+                header_height + 2 * panel_height,
+                panel_index,
+                left=grid_left,
+                right=grid_right,
+            )
+        )
+        return_top = header_height + 3 * panel_height
     else:
         for column, panels in enumerate((output_panels, action_panels)):
             for row, panel in enumerate(panels):
@@ -431,7 +728,7 @@ def _series_panel(
     }
 
 
-def _level_boundary_panel(result, labels, schema):
+def _boundary_distance_panel(result, labels, schema, *, time_unit):
     level_states = []
     for index, row in enumerate(schema["state"]):
         name = str(row["name"])
@@ -446,13 +743,37 @@ def _level_boundary_panel(result, labels, schema):
             low, high = bounds
             if "unit" not in row:
                 raise ValueError("level state schema must declare a physical unit")
-            level_states.append((index, name, str(row["unit"]), low, high))
-    if not level_states:
-        raise ValueError("trajectory schema must contain bounded level states")
-    units = {unit for _index, _name, unit, _low, _high in level_states}
-    if len(units) != 1:
-        raise ValueError("level state schema must use one physical unit")
-    unit = next(iter(units))
+            level_states.append((index, name, str(row["unit"]), low, high, 1.0))
+    if level_states:
+        units = {
+            unit for _index, _name, unit, _low, _high, _scale in level_states
+        }
+        if len(units) != 1:
+            raise ValueError("level state schema must use one physical unit")
+        selected_states = level_states
+        unit = next(iter(units))
+        title = f"Closest level-boundary distance [{unit}]"
+    else:
+        selected_states = []
+        for index, row in enumerate(schema["state"]):
+            bounds = _schema_bounds(row)
+            if bounds is None:
+                continue
+            low, high = bounds
+            selected_states.append(
+                (
+                    index,
+                    str(row["name"]),
+                    "fraction",
+                    low,
+                    high,
+                    1.0 / (high - low),
+                )
+            )
+        if not selected_states:
+            raise ValueError("trajectory schema must contain bounded states")
+        unit = "fraction"
+        title = "Closest state-boundary distance [fraction]"
 
     series = []
     annotations = []
@@ -466,11 +787,11 @@ def _level_boundary_panel(result, labels, schema):
         _matching_lengths(time, state)
         distances = []
         constraints = []
-        for state_index, name, _unit, low, high in level_states:
+        for state_index, name, _unit, low, high, scale in selected_states:
             distances.extend(
                 (
-                    state[:, state_index] - low,
-                    high - state[:, state_index],
+                    (state[:, state_index] - low) * scale,
+                    (high - state[:, state_index]) * scale,
                 )
             )
             tank = _level_state_label(name)
@@ -503,7 +824,7 @@ def _level_boundary_panel(result, labels, schema):
                 "text": (
                     f"{label}: {constraints[constraint_index]}, "
                     f"{_number(closest[time_index])} {unit} @ "
-                    f"{_number(time[time_index])} s"
+                    f"{_number(time[time_index])} {time_unit}"
                 ),
             }
         )
@@ -515,7 +836,7 @@ def _level_boundary_panel(result, labels, schema):
         else _plot_range(all_closest, include_zero=True)
     )
     return {
-        "title": f"Closest level-boundary distance [{unit}]",
+        "title": title,
         "series": series,
         "reference": None,
         "horizontal": 0.0,
@@ -595,6 +916,7 @@ def _draw_series_panel(panel, top, panel_index, *, left, right):
     else:
         y_min, y_max = panel["y_limits"]
     clip_id = f"panel-clip-{panel_index}"
+    time_unit = str(panel["time_unit"])
 
     parts = [
         f'<text class="panel-title" x="{left}" y="{top + 20}">{html.escape(panel["title"])}</text>',
@@ -624,7 +946,7 @@ def _draw_series_panel(panel, top, panel_index, *, left, right):
         [
             f'<line class="axis" x1="{left}" y1="{bottom}" x2="{right}" y2="{bottom}"/>',
             f'<line class="axis" x1="{left}" y1="{chart_top}" x2="{left}" y2="{bottom}"/>',
-            f'<text class="tick" text-anchor="middle" x="{(left + right) / 2:.2f}" y="{bottom + 34}">time [s]</text>',
+            f'<text class="tick" text-anchor="middle" x="{(left + right) / 2:.2f}" y="{bottom + 34}">time [{html.escape(time_unit)}]</text>',
             f'<g clip-path="url(#{clip_id})">',
         ]
     )
@@ -676,7 +998,7 @@ def _draw_series_panel(panel, top, panel_index, *, left, right):
                 f'fill="{color}" stroke="#ffffff" stroke-width="1.5">'
                 f'<title>{html.escape(series["label"])}: '
                 f'{html.escape(marker["label"])}, {_number(marker["value"])} '
-                f'@ {_number(marker["time"])} s</title></circle>'
+                f'@ {_number(marker["time"])} {html.escape(time_unit)}</title></circle>'
             )
     parts.append("</g>")
     annotations = panel["annotations"]

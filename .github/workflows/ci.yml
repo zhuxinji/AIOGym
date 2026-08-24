@@ -155,9 +155,10 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
       - run: python -m pip install -e ".[rl,test]"
-      - name: Supported algorithms, behavior cloning, and end-to-end workflow smoke
+      - name: Supported algorithms, behavior cloning, RLPD, and end-to-end workflow smoke
         run: >-
           python -m pytest -q
           tests/workflows/test_train.py
           tests/workflows/test_behavior_cloning.py
+          tests/workflows/test_rlpd.py
           tests/e2e/test_workflow_paths.py

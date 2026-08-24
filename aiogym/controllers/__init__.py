@@ -6,14 +6,13 @@ from .mpc import (
     SuccessiveLinearizationMPC,
 )
 from .pid import PIDPolicy
-from .policies import HoldPolicy, RandomPolicy, SB3CheckpointPolicy
+from .policies import HoldPolicy, RandomPolicy
 
 __all__ = [
     "HoldPolicy",
     "FixedSetpointMPCPolicy",
     "PIDPolicy",
     "RandomPolicy",
-    "SB3CheckpointPolicy",
     "SuccessiveLinearizationMPC",
     "make_controller",
 ]

@@ -1,4 +1,5 @@
-"""Small public API for AIO-Gym 0.8."""
+"""Small public API for AIO-Gym 0.15."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -6,11 +7,10 @@ from pathlib import Path
 from typing import Any
 
 
-__version__ = "0.8.0"
+__version__ = "0.15.0"
 
-from .workflows.algorithms import AlgorithmBackend, TrainingStep
-from .workflows._sb3_runtime import SB3AlgorithmBackend
 from .core.contracts import Policy
+from .rl import AlgorithmBackend, SB3AlgorithmBackend, TrainingStep
 from .workflows.dataset import DatasetReader
 
 
@@ -47,13 +47,13 @@ def list_parameters(scenario: str):
 
 
 def list_algorithms():
-    from .workflows.algorithms import list_algorithms as implementation
+    from .rl.algorithms import list_algorithms as implementation
 
     return implementation()
 
 
 def register_algorithm(backend: AlgorithmBackend) -> None:
-    from .workflows.algorithms import register_algorithm as implementation
+    from .rl.algorithms import register_algorithm as implementation
 
     implementation(backend)
 
@@ -64,7 +64,7 @@ def register_sb3_algorithm(
     *,
     behavior_cloning=None,
 ) -> None:
-    from .workflows.algorithms import register_sb3_algorithm as implementation
+    from .rl.algorithms import register_sb3_algorithm as implementation
 
     implementation(
         algorithm,
@@ -154,16 +154,17 @@ def train(
     algorithm: str,
     steps: int,
     output: str | Path,
-    seed: int = 0,
+    seed: int | None = None,
     algorithm_kwargs: Mapping[str, Any] | None = None,
     record_every: int = 500,
     evaluation_env=None,
     evaluate_every: int | None = None,
     evaluation_seed: int = 0,
-    demonstrations: str | Path | None = None,
+    dataset: str | Path | None = None,
     behavior_cloning_epochs: int | None = None,
     behavior_cloning_batch_size: int = 256,
     behavior_cloning_learning_rate: float = 3e-4,
+    resume_from: str | Path | None = None,
 ):
     from .workflows import train as implementation
 
@@ -178,10 +179,11 @@ def train(
         evaluation_env=evaluation_env,
         evaluate_every=evaluate_every,
         evaluation_seed=evaluation_seed,
-        demonstrations=demonstrations,
+        dataset=dataset,
         behavior_cloning_epochs=behavior_cloning_epochs,
         behavior_cloning_batch_size=behavior_cloning_batch_size,
         behavior_cloning_learning_rate=behavior_cloning_learning_rate,
+        resume_from=resume_from,
     )
 
 

@@ -106,7 +106,7 @@ def _parser(command):
             help="new or empty Dataset directory",
         )
     elif command == "train":
-        from aiogym.workflows.algorithms import list_algorithms
+        from aiogym.rl.algorithms import list_algorithms
 
         parser.add_argument(
             "algorithm", choices=list_algorithms(), help="registered algorithm id"
@@ -114,7 +114,17 @@ def _parser(command):
         parser.add_argument(
             "--steps", required=True, type=int, help="positive environment-step budget"
         )
-        parser.add_argument("--seed", type=int, default=0, help="training seed")
+        parser.add_argument(
+            "--seed",
+            type=int,
+            help="training seed; continued training uses the checkpoint seed",
+        )
+        parser.add_argument(
+            "--resume-from",
+            type=Path,
+            metavar="MODEL_ZIP",
+            help="complete checkpoint whose optimization state will be continued",
+        )
         parser.add_argument(
             "--algorithm-kwargs",
             type=Path,
@@ -128,16 +138,16 @@ def _parser(command):
             help="training-curve aggregation interval in environment steps",
         )
         parser.add_argument(
-            "--demonstrations",
+            "--dataset",
             type=Path,
             metavar="DATASET",
-            help="Dataset v2 used for behavior-cloning pretraining",
+            help="Dataset v2 used by behavior cloning or offline-to-online learning",
         )
         parser.add_argument(
             "--behavior-cloning-epochs",
             type=int,
             metavar="N",
-            help="positive supervised epochs; required with --demonstrations",
+            help="positive supervised epochs; required for Dataset-based BC",
         )
         parser.add_argument(
             "--behavior-cloning-batch-size",
@@ -231,7 +241,7 @@ def _parser(command):
             type=Path,
             help=(
                 "empty output directory; optional Benchmark comparisons use "
-                "runs/<scenario>/<benchmark>"
+                "runs/<scenario>/benchmarks/<benchmark>"
             ),
         )
     return parser
@@ -283,7 +293,14 @@ def _comparison_output(args, env):
         return str(args.output.resolve())
     base_env = env.unwrapped
     scenario = base_env.scenario.id.replace("_", "-")
-    return str((Path("runs") / scenario / base_env.benchmark.id).resolve())
+    return str(
+        (
+            Path("runs")
+            / scenario
+            / "benchmarks"
+            / base_env.benchmark.id
+        ).resolve()
+    )
 
 
 def _success_summary(command, args, result, env):
@@ -299,7 +316,10 @@ def _success_summary(command, args, result, env):
             "schema_version": result["schema_version"],
             "output": result["path"],
             "algorithm": result["algorithm"],
+            "initial_steps": result["initial_steps"],
+            "added_steps": result["added_steps"],
             "actual_steps": result["actual_steps"],
+            "resume_from": result["resume_from"],
             "checkpoint": result["checkpoint"],
             "best_checkpoint": result["best_checkpoint"],
             "training_curve": result["training_curve"],
@@ -385,12 +405,13 @@ def main(command, argv=None):
                 evaluation_env=evaluation_env,
                 evaluate_every=args.evaluate_every,
                 evaluation_seed=args.evaluation_seed,
-                demonstrations=args.demonstrations,
+                dataset=args.dataset,
                 behavior_cloning_epochs=args.behavior_cloning_epochs,
                 behavior_cloning_batch_size=args.behavior_cloning_batch_size,
                 behavior_cloning_learning_rate=(
                     args.behavior_cloning_learning_rate
                 ),
+                resume_from=args.resume_from,
                 output=args.output,
             )
         elif command == "evaluate":

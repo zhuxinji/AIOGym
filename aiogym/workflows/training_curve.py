@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 
 
-TRAINING_CURVE_SCHEMA_VERSION = "aiogym.training_curve.v1"
+TRAINING_CURVE_SCHEMA_VERSION = "aiogym.training_curve.v2"
 
 
 def plot_training_curve(
@@ -124,15 +124,20 @@ def _validate_curve(curve: Mapping[str, Any]) -> None:
             f"{TRAINING_CURVE_SCHEMA_VERSION!r}"
         )
     record_every = curve.get("record_every")
+    initial_steps = curve.get("initial_steps")
     actual_steps = curve.get("actual_steps")
     if isinstance(record_every, bool) or not isinstance(record_every, int):
         raise TypeError("training curve record_every must be a positive integer")
     if record_every <= 0:
         raise ValueError("training curve record_every must be a positive integer")
+    if isinstance(initial_steps, bool) or not isinstance(initial_steps, int):
+        raise TypeError("training curve initial_steps must be a non-negative integer")
+    if initial_steps < 0:
+        raise ValueError("training curve initial_steps must be a non-negative integer")
     if isinstance(actual_steps, bool) or not isinstance(actual_steps, int):
         raise TypeError("training curve actual_steps must be a positive integer")
-    if actual_steps <= 0:
-        raise ValueError("training curve actual_steps must be a positive integer")
+    if actual_steps <= initial_steps:
+        raise ValueError("training curve actual_steps must exceed initial_steps")
     records = curve.get("records")
     episodes = curve.get("episodes")
     if not isinstance(records, Sequence) or isinstance(records, (str, bytes)):
@@ -141,7 +146,7 @@ def _validate_curve(curve: Mapping[str, Any]) -> None:
         raise ValueError("training curve records must not be empty")
     if not isinstance(episodes, Sequence) or isinstance(episodes, (str, bytes)):
         raise TypeError("training curve episodes must be a sequence")
-    previous_end = 0
+    previous_end = initial_steps
     for row in records:
         if not isinstance(row, Mapping):
             raise TypeError("training curve record must be a mapping")
@@ -171,7 +176,7 @@ def _validate_curve(curve: Mapping[str, Any]) -> None:
         previous_end = end
     if previous_end != actual_steps:
         raise ValueError("training curve records must end at actual_steps")
-    previous_episode_end = 0
+    previous_episode_end = initial_steps
     for row in episodes:
         if not isinstance(row, Mapping):
             raise TypeError("training curve episode must be a mapping")

@@ -1,8 +1,8 @@
 {
-  "condition": {
+  "episode": {
     "control_dt": 1.0,
     "horizon": 5,
-    "id": "phase0-no-schedule",
+    "id": "equilibrium-no-schedule",
     "initial_state": [
       12.2629675195507,
       12.783158403008972,
@@ -23,7 +23,7 @@
     0.6131483912467957,
     0.6391578912734985
   ],
-  "schema_version": "aiogym.quadruple_phase0_golden.v1",
+  "schema_version": "aiogym.quadruple_equilibrium_golden.v1",
   "seed": 123,
   "steps": [
     {

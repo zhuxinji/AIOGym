@@ -27,7 +27,7 @@ def make_controller(
     else:
         defaults = {}
     defaults.update({} if config is None else dict(config))
-    defaults = _compile_named_profile(defaults, base_env)
+    defaults = _compile_controller_config(defaults, base_env)
     if key == "pid":
         from .pid import PIDPolicy
 
@@ -53,8 +53,8 @@ def make_controller(
     raise ValueError(f"unsupported core controller {controller_id!r}")
 
 
-def _compile_named_profile(profile, env):
-    resolved = dict(profile)
+def _compile_controller_config(config, env):
+    resolved = dict(config)
     if "matrix_terms" not in resolved:
         return resolved
     action_names = [row["name"] for row in env.model.action_schema()]

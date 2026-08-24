@@ -1,5 +1,8 @@
 """Shared numerical helpers for the built-in physics models."""
+
 from __future__ import annotations
+
+import math
 
 
 # Volumetric heat capacity of liquid water, J/(m3*K).
@@ -13,6 +16,7 @@ def _copy_value(v):
 class PhysicsModelBase:
     """Shared vector, schema, disturbance, and numerical operations."""
 
+    time_unit = "s"
     state_names = ()
     state_units = {}
     state_bounds = {}
@@ -25,15 +29,29 @@ class PhysicsModelBase:
     output_bounds = {}
     input_disturbances = ()
     event_disturbances = (
-        {"name": "setpoint_move", "event": "setpoint_move", "kind": "setpoint", "description": "controlled-variable setpoint move"},
+        {
+            "name": "setpoint_move",
+            "event": "setpoint_move",
+            "kind": "setpoint",
+            "description": "controlled-variable setpoint move",
+        },
     )
 
     def _schema_row(self, name, units, bounds):
-        return {"name": name, "unit": units[name], "bounds": bounds[name]}
+        low, high = bounds[name]
+        return {
+            "name": name,
+            "unit": units[name],
+            "low": -math.inf if low is None else float(low),
+            "high": math.inf if high is None else float(high),
+        }
 
     def state_schema(self):
         names = self._vector_names(self.state_names, "x", len(self.initial_state()))
-        return [self._schema_row(name, self.state_units, self.state_bounds) for name in names]
+        return [
+            self._schema_row(name, self.state_units, self.state_bounds)
+            for name in names
+        ]
 
     def action_schema(self):
         names = self._action_names()
@@ -42,14 +60,17 @@ class PhysicsModelBase:
         for i, name in enumerate(names):
             kind = self.action_kinds[name]
             counters.setdefault(kind, 0)
-            rows.append({
-                "name": name,
-                "kind": kind,
-                "index": i,
-                "kind_index": counters[kind],
-                "unit": self.action_units[name],
-                "bounds": self.action_bounds[name],
-            })
+            rows.append(
+                {
+                    "name": name,
+                    "kind": kind,
+                    "index": i,
+                    "kind_index": counters[kind],
+                    "unit": self.action_units[name],
+                    "low": float(self.action_bounds[name][0]),
+                    "high": float(self.action_bounds[name][1]),
+                }
+            )
             counters[kind] += 1
         return rows
 
@@ -71,7 +92,9 @@ class PhysicsModelBase:
             raise ValueError(f"{self.scenario} action must be a numeric vector") from ex
         expected = self.action_dim()
         if len(values) != expected:
-            raise ValueError(f"{self.scenario} expected {expected} action values, got {len(values)}")
+            raise ValueError(
+                f"{self.scenario} expected {expected} action values, got {len(values)}"
+            )
         return values
 
     def default_action(self):
@@ -95,24 +118,9 @@ class PhysicsModelBase:
         return self._dynamics(self.state_vector(x), self.action_vector(u), context)
 
     def outputs(self, x):
-        """Semantic outputs derived from x.
+        """Return the controlled-output vector derived from state ``x``."""
 
-        ``y`` is the generic controlled-output vector used for calculations.
-        ``levels``/``temps`` are optional physical display channels for built-in
-        process scenarios.
-        """
-        state = self.state_vector(x)
-        display = self.display_outputs(state)
-        out = {
-            "x": state,
-            "levels": list(display["levels"]),
-            "temps": list(display["temps"]),
-        }
-        for key, value in display.items():
-            if key not in out:
-                out[key] = value
-        out["y"] = self.controlled_output(state)
-        return out
+        return self.state_vector(x)
 
     def measurement(self, x, env=None):
         """Measured state dict exposed to controllers.
@@ -120,37 +128,35 @@ class PhysicsModelBase:
         Controllers should use x/y generically; scenario-specific consumers can
         also inspect levels, temps, conc, and disturbance names.
         """
+        state = self.state_vector(x)
+        display = self.display_outputs(state)
+        measured = {
+            "x": state,
+            "levels": list(display["levels"]),
+            "temps": list(display["temps"]),
+            "y": list(self.outputs(state)),
+        }
+        for key, value in display.items():
+            if key not in measured:
+                measured[key] = value
         context = {} if env is None else dict(env)
-        return {**self.outputs(x), **context}
+        return {**measured, **context}
 
-    def controlled_output(self, x):
-        return self.state_vector(x)
-
-    def setpoint_vector(self, y_sp=None):
-        return list(y_sp) if y_sp is not None else self.default_setpoint_vector()
-
-    def controlled_output_schema(self):
-        y0 = list(self.controlled_output(self.initial_state()))
+    def output_schema(self):
+        y0 = list(self.outputs(self.initial_state()))
         names = self._vector_names(self.output_names, "y", len(y0))
-        rows = []
-        for name in names:
-            rows.append({
-                "name": name,
-                "unit": self.output_units[name],
-                "bounds": self.output_bounds[name],
-            })
-        return rows
+        return [
+            self._schema_row(name, self.output_units, self.output_bounds)
+            for name in names
+        ]
 
-    def controlled_output_scales(self):
+    def output_scales(self):
         scales = []
-        for row in self.controlled_output_schema():
-            bounds = row.get("bounds")
-            scale = None
-            if isinstance(bounds, (tuple, list)) and len(bounds) == 2:
-                lo, hi = bounds
-                if lo is not None and hi is not None and float(hi) > float(lo):
-                    scale = float(hi) - float(lo)
-            scales.append(max(float(scale if scale is not None else 1.0), 1e-12))
+        for row in self.output_schema():
+            low = float(row["low"])
+            high = float(row["high"])
+            scale = high - low if math.isfinite(low) and math.isfinite(high) else 1.0
+            scales.append(max(float(scale), 1e-12))
         return scales
 
     def energy_kw(self, u):
@@ -164,28 +170,25 @@ class PhysicsModelBase:
     def display_outputs(self, x):
         return {"levels": [], "temps": list(x)}
 
-    def disturbance_schema(self):
-        rows = []
+    def default_disturbances(self):
+        defaults = {}
         for row in self.input_disturbances + self.event_disturbances:
             out = dict(row)
             if "name" not in out:
                 raise ValueError("disturbance schema rows require a name")
-            out["dynamic"] = "event" in out
+            if out.get("kind") == "setpoint":
+                continue
             if "default" not in out and out["name"] in self.p:
                 out["default"] = _copy_value(self.p[out["name"]])
-            rows.append(out)
-        return rows
-
-    def disturbance_defaults(self):
-        defaults = {}
-        for row in self.disturbance_schema():
-            if "kind" in row and row["kind"] == "setpoint":
-                continue
-            defaults[row["name"]] = _copy_value(row["default"])
+            if "default" not in out:
+                raise ValueError(
+                    f"disturbance {out['name']!r} requires an explicit default"
+                )
+            defaults[out["name"]] = _copy_value(out["default"])
         return defaults
 
-    def runtime_env(self, disturbance_values):
-        env = self.disturbance_defaults()
+    def _resolve_disturbances(self, disturbance_values):
+        env = self.default_disturbances()
         env.update(
             {
                 name: _copy_value(value)

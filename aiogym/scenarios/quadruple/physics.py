@@ -1,4 +1,5 @@
 """Johansson's nonlinear quadruple-tank laboratory process."""
+
 from __future__ import annotations
 
 import math
@@ -80,9 +81,6 @@ class _QuadruplePhysicsKernel(PhysicsModelBase):
         maximum = float(self.p["max_voltage"])
         return [float(value) / maximum for value in self.p["nominal_voltage"]]
 
-    def mpc_init(self):
-        return self.default_action()
-
     def equilibrium_state(self, voltage=None):
         """Return the exact nonlinear equilibrium for a physical voltage pair."""
 
@@ -120,10 +118,7 @@ class _QuadruplePhysicsKernel(PhysicsModelBase):
         k1, k2 = (float(value) for value in self.p["pump_gain"])
         gamma1, gamma2 = (float(value) for value in self.p["gamma"])
         g = float(self.p["gravity"])
-        required = [
-            float(a[i]) * math.sqrt(2.0 * g * target[i])
-            for i in range(2)
-        ]
+        required = [float(a[i]) * math.sqrt(2.0 * g * target[i]) for i in range(2)]
         matrix = (
             (gamma1 * k1, (1.0 - gamma2) * k2),
             ((1.0 - gamma1) * k1, gamma2 * k2),
@@ -142,7 +137,7 @@ class _QuadruplePhysicsKernel(PhysicsModelBase):
         return self.equilibrium_state()
 
     def default_setpoint_vector(self):
-        return list(self.controlled_output(self.initial_state()))
+        return list(self.outputs(self.initial_state()))
 
     def _dynamics(self, x, u, env):
         A = self.p["tank_area"]
@@ -155,8 +150,7 @@ class _QuadruplePhysicsKernel(PhysicsModelBase):
         outlet_factor = env["outlet_area_factor"]
         voltage = [u[i] * vmax for i in range(2)]
         outlet = [
-            outlet_factor * a[i] * math.sqrt(2.0 * g * max(x[i], 0.0))
-            for i in range(4)
+            outlet_factor * a[i] * math.sqrt(2.0 * g * max(x[i], 0.0)) for i in range(4)
         ]
         pump = [pump_factor * k[i] * voltage[i] for i in range(2)]
         return [
@@ -169,7 +163,7 @@ class _QuadruplePhysicsKernel(PhysicsModelBase):
     def display_outputs(self, x):
         return {"levels": [max(float(x[i]), 0.0) for i in range(4)], "temps": []}
 
-    def controlled_output(self, x):
+    def outputs(self, x):
         return [max(float(x[0]), 0.0), max(float(x[1]), 0.0)]
 
     def clamp_state(self, x):
@@ -181,7 +175,6 @@ class _QuadruplePhysicsKernel(PhysicsModelBase):
             "pump_flow_factor": env["pump_flow_factor"],
             "outlet_area_factor": env["outlet_area_factor"],
         }
-
 
 
 __all__ = []

@@ -44,32 +44,34 @@ def test_hardware_api_is_only_exported_from_experimental_package():
     assert callable(hardware.validate_real_step_record)
 
 
-def test_hardware_sample_requires_reservoir_temperature():
-    with pytest.raises(ValueError, match="reservoir_temperature_degC"):
-        HardwareSample(
-            measurement=(0.225, 22.0, 0.225, 22.0, 0.225, 22.0),
-            flow_measurement=(0.0, 0.0, 0.0),
-            source_monotonic_time_s=0.0,
-            received_monotonic_time_s=0.1,
-            wall_time_utc="2026-08-08T00:00:00Z",
-        )
+def test_hardware_sample_uses_only_three_level_measurements():
+    sample = HardwareSample(
+        measurement=(0.225, 0.225, 0.225),
+        flow_measurement=(0.0, 0.0, 0.0),
+        source_monotonic_time_s=0.0,
+        received_monotonic_time_s=0.1,
+        wall_time_utc="2026-08-08T00:00:00Z",
+        interlocks={
+            "watchdog_healthy": True,
+            "emergency_stop": False,
+            "reservoir_available": True,
+        },
+    )
+    assert sample.measurement == pytest.approx((0.225, 0.225, 0.225))
+    assert sample.boundary == {}
 
 
 def _sample(index=0, *, applied=None, interlocks=None, measurement=None):
     return HardwareSample(
         measurement=tuple(
-            measurement or [0.225, 22.0, 0.225, 22.0, 0.225, 22.0]
+            measurement or [0.225, 0.225, 0.225]
         ),
         flow_measurement=tuple([3.0 / 60000.0] * 3),
         source_monotonic_time_s=float(index),
         received_monotonic_time_s=float(index) + 0.1,
         wall_time_utc="2026-08-08T00:00:00Z",
         applied_action=None if applied is None else tuple(applied),
-        boundary={
-            "reservoir_temperature_degC": 20.0,
-            "t_makeup": 20.0,
-            "t_amb": 20.0,
-        },
+        boundary={},
         interlocks=interlocks
         or {
             "watchdog_healthy": True,
@@ -93,12 +95,12 @@ def test_hardware_sample_requires_every_safety_interlock(missing):
     del interlocks[missing]
     with pytest.raises(ValueError, match="missing required fields"):
         HardwareSample(
-            measurement=(0.225, 22.0, 0.225, 22.0, 0.225, 22.0),
+            measurement=(0.225, 0.225, 0.225),
             flow_measurement=(0.0, 0.0, 0.0),
             source_monotonic_time_s=0.0,
             received_monotonic_time_s=0.1,
             wall_time_utc="2026-08-08T00:00:00Z",
-            boundary={"reservoir_temperature_degC": 20.0},
+            boundary={},
             interlocks=interlocks,
         )
 
@@ -123,8 +125,8 @@ class FakeTransport:
 def test_shadow_mode_never_writes_recommended_action():
     transport = FakeTransport(
         [
-            _sample(0, applied=[0.45, 0.24, 0.24, 0.24, 0.5]),
-            _sample(1, applied=[0.45, 0.24, 0.24, 0.24, 0.5]),
+            _sample(0, applied=[0.45, 0.24, 0.24, 0.24]),
+            _sample(1, applied=[0.45, 0.24, 0.24, 0.24]),
         ]
     )
     env = ThreeTankHardwareEnv(
@@ -134,15 +136,15 @@ def test_shadow_mode_never_writes_recommended_action():
     )
     try:
         observation, info = env.reset(seed=0)
-        assert observation.shape == (13,)
+        assert observation.shape == (6,)
         assert info["backend_kind"] == "real"
-        _, reward, terminated, truncated, next_info = env.step([0.0] * 5)
+        _, reward, terminated, truncated, next_info = env.step([0.0] * 4)
         assert np.isfinite(reward)
         assert not terminated
         assert not truncated
         assert transport.actions == [None]
         assert next_info["hardware_mode"] == "shadow"
-        assert next_info["resolved_action"].shape == (5,)
+        assert next_info["resolved_action"].shape == (4,)
     finally:
         env.close()
     assert transport.closed
@@ -151,8 +153,8 @@ def test_shadow_mode_never_writes_recommended_action():
 def test_hardware_environment_writes_self_identifying_rows(tmp_path):
     transport = FakeTransport(
         [
-            _sample(0, applied=[0.45, 0.24, 0.24, 0.24, 0.5]),
-            _sample(1, applied=[0.45, 0.24, 0.24, 0.24, 0.5]),
+            _sample(0, applied=[0.45, 0.24, 0.24, 0.24]),
+            _sample(1, applied=[0.45, 0.24, 0.24, 0.24]),
         ]
     )
     path = tmp_path / "real.jsonl"
@@ -164,14 +166,14 @@ def test_hardware_environment_writes_self_identifying_rows(tmp_path):
     )
     try:
         env.reset()
-        _, _, _, _, info = env.step([0.5, 0.4, 0.3, 0.2, 0.1])
+        _, _, _, _, info = env.step([0.5, 0.4, 0.3, 0.2])
     finally:
         env.close()
     row = json.loads(path.read_text(encoding="utf-8"))
     assert hardware.validate_real_step_record(row) == row
-    assert row["schema_version"].endswith(".v6")
-    assert row["measurement"][-1] == pytest.approx(20.0)
-    assert row["commanded_action"] == pytest.approx([0.5, 0.4, 0.3, 0.2, 0.1])
+    assert row["schema_version"].endswith(".v8")
+    assert row["measurement"] == pytest.approx([0.225, 0.225, 0.225])
+    assert row["commanded_action"] == pytest.approx([0.5, 0.4, 0.3, 0.2])
     assert row["hardware_mode"] == "shadow"
     assert row["scenario_id"] == info["scenario_id"] == "three_tank"
     assert row["benchmark_id"] == info["benchmark_id"] == "tracking"
@@ -196,20 +198,9 @@ def test_closed_loop_requires_arming_and_measured_calibration():
             calibration=_calibration(measured=False),
         )
 
-
-def test_hardware_environment_has_no_condition_selector():
-    with pytest.raises(TypeError, match="unexpected keyword argument"):
-        ThreeTankHardwareEnv(
-            FakeTransport([_sample()]),
-            condition="thermal-startup",
-            mode="shadow",
-            calibration=_calibration(measured=False),
-        )
-
-
 def test_guardian_is_fail_closed_and_interlocks_bypass_slew_limits():
     guardian = SafetyGuardian(
-        SafetyConfig(maximum_action_step=(0.01, 0.01, 0.01, 0.01, 0.01))
+        SafetyConfig(maximum_action_step=(0.01, 0.01, 0.01, 0.01))
     )
     unhealthy = _sample(
         interlocks={
@@ -219,26 +210,25 @@ def test_guardian_is_fail_closed_and_interlocks_bypass_slew_limits():
         }
     )
     decision = guardian.apply(
-        [1.0] * 5,
+        [1.0] * 4,
         sample=unhealthy,
-        previous_action=[0.5] * 5,
+        previous_action=[0.5] * 4,
     )
     assert decision.emergency
     assert decision.applied_action == guardian.config.emergency_action
 
-    process_trip = _sample(measurement=[0.42, 65.0, 0.225, 22.0, 0.225, 22.0])
+    process_trip = _sample(measurement=[0.42, 0.225, 0.225])
     decision = guardian.apply(
-        [1.0] * 5,
+        [1.0] * 4,
         sample=process_trip,
-        previous_action=[0.5] * 5,
+        previous_action=[0.5] * 4,
     )
     assert not decision.emergency
     assert decision.applied_action[0] == 0.0
-    assert decision.applied_action[4] == 0.0
 
 
 def test_default_hardware_guardian_keeps_its_independent_slew_limit():
-    assert SafetyConfig().maximum_action_step == (0.05, 0.08, 0.08, 0.08, 0.05)
+    assert SafetyConfig().maximum_action_step == (0.05, 0.08, 0.08, 0.08)
 
 
 def test_closed_loop_emergency_is_written_and_terminates():
@@ -249,8 +239,8 @@ def test_closed_loop_emergency_is_written_and_terminates():
     }
     transport = FakeTransport(
         [
-            _sample(0, applied=[0.4] * 5, interlocks=unhealthy),
-            _sample(1, applied=[0.0, 0.0, 0.0, 1.0, 0.0], interlocks=unhealthy),
+            _sample(0, applied=[0.4] * 4, interlocks=unhealthy),
+            _sample(1, applied=[0.0, 0.0, 0.0, 1.0], interlocks=unhealthy),
         ]
     )
     env = ThreeTankHardwareEnv(
@@ -261,7 +251,7 @@ def test_closed_loop_emergency_is_written_and_terminates():
     )
     try:
         env.reset()
-        _, _, terminated, _, info = env.step([0.0] * 5)
+        _, _, terminated, _, info = env.step([0.0] * 4)
         assert terminated
         assert transport.actions[0] == env.guardian.config.emergency_action
         assert info["safety"]["emergency"]
@@ -269,11 +259,11 @@ def test_closed_loop_emergency_is_written_and_terminates():
         env.close()
 
 
-def test_hardware_policy_command_is_a_direct_five_actuator_action():
+def test_hardware_policy_command_is_a_direct_four_actuator_action():
     transport = FakeTransport(
         [
-            _sample(0, applied=[0.45, 0.24, 0.24, 0.24, 0.5]),
-            _sample(1, applied=[0.45, 0.24, 0.24, 0.24, 0.5]),
+            _sample(0, applied=[0.45, 0.24, 0.24, 0.24]),
+            _sample(1, applied=[0.45, 0.24, 0.24, 0.24]),
         ]
     )
     env = ThreeTankHardwareEnv(
@@ -283,11 +273,11 @@ def test_hardware_policy_command_is_a_direct_five_actuator_action():
     )
     try:
         env.reset()
-        command = np.asarray([0.5, 0.4, 0.3, 0.2, 0.1], dtype=np.float32)
+        command = np.asarray([0.5, 0.4, 0.3, 0.2], dtype=np.float32)
         _, _, _, _, info = env.step(command)
     finally:
         env.close()
-    assert env.action_space.shape == (5,)
+    assert env.action_space.shape == (4,)
     assert info["commanded_action"] == pytest.approx(command)
     assert info["resolved_action"] == pytest.approx(command)
 
@@ -295,11 +285,11 @@ def test_hardware_policy_command_is_a_direct_five_actuator_action():
 def test_hardware_episode_terminates_on_a_measured_hard_process_limit():
     transport = FakeTransport(
         [
-            _sample(0, applied=[0.4] * 5),
+            _sample(0, applied=[0.4] * 4),
             _sample(
                 1,
-                applied=[0.4] * 5,
-                measurement=[0.51, 22.0, 0.225, 22.0, 0.225, 22.0],
+                applied=[0.4] * 4,
+                measurement=[0.51, 0.225, 0.225],
             ),
         ]
     )
@@ -310,7 +300,7 @@ def test_hardware_episode_terminates_on_a_measured_hard_process_limit():
     )
     try:
         env.reset()
-        _, _, terminated, _, info = env.step([0.0] * 5)
+        _, _, terminated, _, info = env.step([0.0] * 4)
         assert terminated
         assert info["constraint_costs"] == {"tank_overflow_limit": 1.0}
         assert transport.actions == [None]
@@ -321,8 +311,8 @@ def test_hardware_episode_terminates_on_a_measured_hard_process_limit():
 def test_hardware_rejects_an_infeasible_reference_before_writing_an_action():
     transport = FakeTransport(
         [
-            _sample(0, applied=[0.4] * 5),
-            _sample(1, applied=[0.0, 0.0, 0.0, 1.0, 0.0]),
+            _sample(0, applied=[0.4] * 4),
+            _sample(1, applied=[0.0, 0.0, 0.0, 1.0]),
         ]
     )
     env = ThreeTankHardwareEnv(
@@ -334,7 +324,7 @@ def test_hardware_rejects_an_infeasible_reference_before_writing_an_action():
     try:
         env.reset()
         env._reference_state[1] = 80.0
-        _, _, terminated, _, info = env.step([1.0] * 5)
+        _, _, terminated, _, info = env.step([1.0] * 4)
         assert terminated
         assert transport.actions == [env.guardian.config.emergency_action]
         assert info["safety"]["reasons"] == ["infeasible_reference"]

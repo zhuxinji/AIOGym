@@ -1,4 +1,5 @@
 """Public quadruple-tank process model."""
+
 from __future__ import annotations
 
 import math
@@ -10,19 +11,6 @@ from typing import Any
 import numpy as np
 
 from .physics import _QuadruplePhysicsKernel
-
-
-def _schema(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    converted = []
-    for index, raw in enumerate(rows):
-        row = dict(raw)
-        low, high = row.pop("bounds")
-        if "name" not in row:
-            raise ValueError(f"schema row {index} has no name")
-        row["low"] = -np.inf if low is None else float(low)
-        row["high"] = np.inf if high is None else float(high)
-        converted.append(row)
-    return converted
 
 
 class QuadrupleModel(_QuadruplePhysicsKernel):
@@ -61,20 +49,8 @@ class QuadrupleModel(_QuadruplePhysicsKernel):
         except KeyError as error:
             raise KeyError(f"unknown quadruple parameter {name!r}") from error
 
-    def outputs(self, state):
-        return self.controlled_output(state)
-
-    def action_schema(self):
-        return _schema(super().action_schema())
-
-    def state_schema(self):
-        return _schema(super().state_schema())
-
-    def output_schema(self):
-        return _schema(super().controlled_output_schema())
-
     def default_disturbances(self):
-        return dict(self.disturbance_defaults())
+        return dict(super().default_disturbances())
 
     def action_slew_limits(self):
         return None
@@ -83,10 +59,7 @@ class QuadrupleModel(_QuadruplePhysicsKernel):
         state = self.state_schema()
         reference = self.output_schema()
         return [
-            *(
-                {**row, "kind": "measurement", "low": 0.0, "high": 1.0}
-                for row in state
-            ),
+            *({**row, "kind": "measurement", "low": 0.0, "high": 1.0} for row in state),
             *(
                 {
                     **row,
@@ -101,28 +74,30 @@ class QuadrupleModel(_QuadruplePhysicsKernel):
 
     def observation(self, state, reference, previous_action, disturbances):
         del previous_action, disturbances
-        state_rows = super().state_schema()
+        state_rows = self.state_schema()
         normalized_state = [
-            (float(value) - float(row["bounds"][0]))
-            / (float(row["bounds"][1]) - float(row["bounds"][0]))
+            (float(value) - float(row["low"]))
+            / (float(row["high"]) - float(row["low"]))
             for value, row in zip(state, state_rows)
         ]
-        reference_rows = super().controlled_output_schema()
+        reference_rows = self.output_schema()
         normalized_reference = [
-            (float(value) - float(row["bounds"][0]))
-            / (float(row["bounds"][1]) - float(row["bounds"][0]))
+            (float(value) - float(row["low"]))
+            / (float(row["high"]) - float(row["low"]))
             for value, row in zip(reference, reference_rows)
         ]
         return [*normalized_state, *normalized_reference]
 
     def measurement(self, state, disturbances=None):
-        context = self.runtime_env({} if disturbances is None else disturbances)
+        context = self._resolve_disturbances(
+            {} if disturbances is None else disturbances
+        )
         display = self.display_outputs(state)
         return {
             "x": list(state),
             "levels": list(display["levels"]),
             "temps": list(display["temps"]),
-            "y": list(self.controlled_output(state)),
+            "y": list(self.outputs(state)),
             **context,
         }
 
@@ -152,7 +127,9 @@ class QuadrupleModel(_QuadruplePhysicsKernel):
         return self.equilibrium_state([value * maximum for value in action])
 
     def constraint_costs(self, state, disturbances=None):
-        context = self.runtime_env({} if disturbances is None else disturbances)
+        context = self._resolve_disturbances(
+            {} if disturbances is None else disturbances
+        )
         display = self.display_outputs(state)
         reasons = self.hard_termination_reasons(
             state,
@@ -188,7 +165,9 @@ class QuadrupleModel(_QuadruplePhysicsKernel):
         }
 
     def step_info(self, state, action, disturbances=None):
-        context = self.runtime_env({} if disturbances is None else disturbances)
+        context = self._resolve_disturbances(
+            {} if disturbances is None else disturbances
+        )
         display = self.display_outputs(state)
         applied = self.default_action() if action is None else action
         info = self.process_info(
@@ -197,7 +176,7 @@ class QuadrupleModel(_QuadruplePhysicsKernel):
             display["temps"],
             context,
         )
-        info["y"] = list(self.controlled_output(state))
+        info["y"] = list(self.outputs(state))
         info["energy_kw"] = self.action_energy_kw(applied, state, context)
         return info
 

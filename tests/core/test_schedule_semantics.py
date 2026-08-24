@@ -57,7 +57,7 @@ class ScheduleModel:
     def default_setpoint_vector(self):
         return [0.1]
 
-    def controlled_output_scales(self):
+    def output_scales(self):
         return [1.0]
 
     def default_disturbances(self):
@@ -83,6 +83,7 @@ class ScheduleModel:
     def step_info(self, state, action, disturbances):
         del action, disturbances
         return {"y": self.outputs(state), "energy_kw": 0.0}
+
 
 class RecordingPolicy:
     env = None
@@ -211,7 +212,9 @@ def test_events_are_visible_before_corresponding_actions(schedule_scenario):
         1,
         2,
     ]
-    assert [row.info["transition_reference"].tolist() for row in episode.transitions] == [
+    assert [
+        row.info["transition_reference"].tolist() for row in episode.transitions
+    ] == [
         [0.2],
         [0.4],
         [0.6],
@@ -221,7 +224,9 @@ def test_events_are_visible_before_corresponding_actions(schedule_scenario):
         [0.6],
         [0.6],
     ]
-    assert [row.info["transition_disturbance"]["gain"] for row in episode.transitions] == [
+    assert [
+        row.info["transition_disturbance"]["gain"] for row in episode.transitions
+    ] == [
         4.0,
         5.0,
         6.0,
@@ -238,9 +243,7 @@ def test_events_are_visible_before_corresponding_actions(schedule_scenario):
     ]
 
 
-def test_dataset_records_both_transition_and_next_contexts(
-    schedule_scenario, tmp_path
-):
+def test_dataset_records_both_transition_and_next_contexts(schedule_scenario, tmp_path):
     env = make_env("schedule-toy")
     try:
         result = collect(
@@ -255,9 +258,7 @@ def test_dataset_records_both_transition_and_next_contexts(
     reader = DatasetReader(result["path"])
     episode = reader.load_episode(0)
     assert reader.metadata["schema_version"] == "aiogym.dataset.v2"
-    assert np.allclose(
-        episode.array("transition_reference"), [[0.2], [0.4], [0.6]]
-    )
+    assert np.allclose(episode.array("transition_reference"), [[0.2], [0.4], [0.6]])
     assert np.allclose(episode.array("reference"), [[0.4], [0.6], [0.6]])
     assert episode.array("transition_disturbance").tolist() == [
         [4.0],
@@ -281,28 +282,22 @@ def test_evaluation_metrics_use_the_same_transition_reference_as_reward(
     finally:
         env.close()
     assert result["schema_version"] == "aiogym.evaluation.v3"
-    assert result["episodes"][0]["metrics"]["tracking_iae"] == pytest.approx(
-        8.8
-    )
+    assert result["episodes"][0]["metrics"]["tracking_iae"] == pytest.approx(8.8)
 
 
-def test_quadruple_schedule_changes_context_at_declared_physical_time():
-    env = make_env("quadruple", benchmark="tracking")
+def test_quadruple_default_target_is_active_from_reset():
+    env = make_env("quadruple")
     action = np.asarray(env.unwrapped.model.default_action(), dtype=np.float32)
     try:
         _, info = env.reset(seed=0)
-        initial_reference = info["reference"].copy()
-        scheduled_reference = env.unwrapped.episode.reference_schedule[120]
-        for _ in range(120):
-            _, _, terminated, truncated, info = env.step(action)
-            assert not terminated
-            assert not truncated
-        assert info["step_index"] == 120
-        assert info["physical_time"] == 120.0
-        assert info["transition_reference"] == pytest.approx(initial_reference)
-        assert info["reference"] == pytest.approx(scheduled_reference)
-        _, _, _, _, next_info = env.step(action)
-        assert next_info["transition_reference"] == pytest.approx(info["reference"])
-        assert next_info["transition_step_index"] == 120
+        target = info["reference"].copy()
+        assert target == pytest.approx((8.0, 18.0))
+        assert not env.unwrapped.episode.reference_schedule
+        _, _, terminated, truncated, next_info = env.step(action)
+        assert not terminated
+        assert not truncated
+        assert next_info["transition_reference"] == pytest.approx(target)
+        assert next_info["transition_step_index"] == 0
+        assert next_info["physical_time"] == 1.0
     finally:
         env.close()

@@ -1,7 +1,5 @@
-"""Small baseline and learned-policy adapters."""
+"""Small non-learning baseline policies."""
 from __future__ import annotations
-
-from pathlib import Path
 
 import numpy as np
 
@@ -53,35 +51,4 @@ class RandomPolicy:
         }
 
 
-class SB3CheckpointPolicy:
-    def __init__(
-        self,
-        model,
-        *,
-        algorithm: str,
-        checkpoint: str | Path,
-    ):
-        self.env = None
-        self.model = model
-        self.algorithm = algorithm.lower()
-        self.checkpoint = str(checkpoint)
-
-    def reset(self, seed=None):
-        del seed
-
-    def act(self, observation, context):
-        del context
-        predicted = self.model.predict(observation, deterministic=True)
-        action = predicted[0] if isinstance(predicted, tuple) else predicted
-        return np.asarray(action, dtype=np.float32)
-
-    def metadata(self):
-        return {
-            "id": "sb3_checkpoint",
-            "kind": "learned_policy",
-            "algorithm": self.algorithm,
-            "checkpoint": self.checkpoint,
-        }
-
-
-__all__ = ["HoldPolicy", "RandomPolicy", "SB3CheckpointPolicy"]
+__all__ = ["HoldPolicy", "RandomPolicy"]

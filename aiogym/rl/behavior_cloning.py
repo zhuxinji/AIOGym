@@ -2,38 +2,18 @@
 from __future__ import annotations
 
 import math
-from pathlib import Path
-
 import numpy as np
 
-from ._metadata import environment_metadata
-from .dataset import DatasetReader
+from .datasets import training_dataset_metadata
 
 
 BEHAVIOR_CLONING_SCHEMA_VERSION = "aiogym.behavior_cloning.v1"
 BEHAVIOR_CLONING_ALGORITHMS = ("ddpg", "sac", "td3")
 
 
-def load_demonstrations(dataset: str | Path, *, env):
-    """Load policy observations and commanded actions for one compatible env."""
+def load_demonstrations(reader, *, env):
+    """Load policy observations and commanded actions from a validated Dataset."""
 
-    reader = DatasetReader(dataset)
-    source_environment = reader.metadata["environment"]
-    target_environment = environment_metadata(env)
-    for field in (
-        "scenario",
-        "reward",
-        "parameters",
-        "control_dt",
-        "observation_shape",
-        "action_shape",
-    ):
-        if source_environment[field] != target_environment[field]:
-            raise ValueError(
-                f"demonstration dataset {field} does not match training environment"
-            )
-    if len(reader) == 0:
-        raise ValueError("demonstration dataset must contain at least one episode")
     episodes = tuple(reader.iter_episodes())
     observations = np.concatenate(
         [episode.array("observation") for episode in episodes], axis=0
@@ -62,12 +42,13 @@ def load_demonstrations(dataset: str | Path, *, env):
         actions > env.action_space.high
     ):
         raise ValueError("demonstration commanded actions must belong to action_space")
+    metadata = training_dataset_metadata(reader)
     source = {
-        "dataset": str(reader.path.resolve()),
-        "dataset_schema": reader.metadata["schema_version"],
-        "policy": dict(reader.metadata["policy"]),
-        "episode_count": len(reader),
-        "transition_count": reader.transition_count,
+        "dataset": metadata["path"],
+        "dataset_schema": metadata["schema_version"],
+        "policy": metadata["policy"],
+        "episode_count": metadata["episode_count"],
+        "transition_count": metadata["transition_count"],
         "observation_field": "observation",
         "action_field": "commanded_action",
     }

@@ -11,7 +11,8 @@ from aiogym.experimental.three_tank_hardware.calibration import (
 def test_calibration_template_is_explicitly_unmeasured_and_hashed():
     record = calibration_template(rig_id="lab-three-tank")
     assert record["status"] == "unmeasured"
-    assert record["parameters"]["ua_reservoir"]["unit"] == "W/K"
+    assert record["parameters"]["pump_flow_max"]["unit"] == "m3/s"
+    assert "heater_efficiency" not in record["parameters"]
     assert len(record["calibration_hash"]) == 64
     assert validate_calibration(record) == record
     with pytest.raises(ValueError, match="not measured"):
@@ -20,7 +21,7 @@ def test_calibration_template_is_explicitly_unmeasured_and_hashed():
 
 def test_calibration_hash_rejects_silent_edits():
     record = calibration_template(rig_id="lab-three-tank")
-    record["parameters"]["ua_1"]["estimate"] = 40.0
+    record["parameters"]["area_1"]["estimate"] = 0.09
     with pytest.raises(ValueError, match="calibration_hash"):
         validate_calibration(record)
 
@@ -29,8 +30,6 @@ def test_calibration_hash_rejects_silent_edits():
     ("name", "estimate", "message"),
     [
         ("area_1", 0.0, "positive"),
-        ("ua_1", -0.1, "non-negative"),
-        ("heater_efficiency", 1.1, r"\(0, 1\]"),
         ("sensor_delay", -0.1, "non-negative"),
     ],
 )
@@ -49,7 +48,7 @@ def test_measured_calibration_requires_disjoint_evidence_and_metrics():
         status="validated",
         fit_dataset_ids=["fit-1"],
         validation_dataset_ids=["fit-1"],
-        validation_metrics={"temperature_rmse": 0.1},
+        validation_metrics={"level_rmse": 0.1},
     )
     record.pop("calibration_hash")
     for row in record["parameters"].values():

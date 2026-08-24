@@ -220,12 +220,20 @@ def _trajectory_schema(base_env, episodes) -> dict[str, Any]:
         }
     )
     return {
+        "time_unit": _time_unit(model),
         "state": _named_schema(model.state_schema()),
         "output": _named_schema(model.output_schema()),
         "action": _named_schema(model.action_schema()),
         "disturbance_names": disturbance_names,
         "constraint_cost_names": constraint_names,
     }
+
+
+def _time_unit(model) -> str:
+    unit = getattr(model, "time_unit", "s")
+    if not isinstance(unit, str) or not unit.strip():
+        raise ValueError("model time_unit must be a non-empty string")
+    return unit
 
 
 def _named_schema(rows) -> list[dict[str, Any]]:

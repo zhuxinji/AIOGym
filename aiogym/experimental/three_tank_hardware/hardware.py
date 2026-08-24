@@ -15,8 +15,8 @@ from .calibration import validate_calibration
 from .real_log import RealLogWriter, build_real_step_record
 
 
-HARDWARE_BACKEND_VERSION = "aiogym.three_tank.hardware.v6"
-DEFAULT_HARDWARE_MAXIMUM_ACTION_STEP = (0.05, 0.08, 0.08, 0.08, 0.05)
+HARDWARE_BACKEND_VERSION = "aiogym.three_tank.hardware.v8"
+DEFAULT_HARDWARE_MAXIMUM_ACTION_STEP = (0.05, 0.08, 0.08, 0.08)
 
 
 @dataclass(frozen=True)
@@ -34,7 +34,7 @@ class HardwareSample:
     raw_channels: Mapping[str, Any] | None = None
 
     def __post_init__(self):
-        measurement = _finite_vector("measurement", self.measurement, 6)
+        measurement = _finite_vector("measurement", self.measurement, 3)
         flow_measurement = _finite_vector(
             "flow_measurement", self.flow_measurement, 3
         )
@@ -43,7 +43,7 @@ class HardwareSample:
         applied = (
             None
             if self.applied_action is None
-            else _finite_vector("applied_action", self.applied_action, 5)
+            else _finite_vector("applied_action", self.applied_action, 4)
         )
         timestamp_values = {
             "source_monotonic_time_s": self.source_monotonic_time_s,
@@ -59,19 +59,14 @@ class HardwareSample:
         object.__setattr__(self, "measurement", measurement)
         object.__setattr__(self, "flow_measurement", flow_measurement)
         object.__setattr__(self, "applied_action", applied)
-        boundary = {} if self.boundary is None else dict(self.boundary)
-        if "reservoir_temperature_degC" not in boundary:
-            raise ValueError(
-                "boundary must contain reservoir_temperature_degC"
-            )
-        reservoir_temperature = float(
-            boundary["reservoir_temperature_degC"]
-        )
-        if not math.isfinite(reservoir_temperature):
-            raise ValueError(
-                "boundary reservoir_temperature_degC must be finite"
-            )
-        boundary["reservoir_temperature_degC"] = reservoir_temperature
+        boundary = {
+            str(name): float(value)
+            for name, value in ({} if self.boundary is None else self.boundary).items()
+        }
+        if any(not name for name in boundary) or not all(
+            math.isfinite(value) for value in boundary.values()
+        ):
+            raise ValueError("boundary must contain finite named values")
         object.__setattr__(self, "boundary", boundary)
         interlocks = {} if self.interlocks is None else dict(self.interlocks)
         required_interlocks = {
@@ -107,18 +102,14 @@ class HardwareTransport(Protocol):
 
 @dataclass(frozen=True)
 class SafetyConfig:
-    low_heater_level_m: float = 0.11
     high_pump_level_m: float = 0.415
-    high_heater_temperature_degC: float = 60.0
     maximum_sample_age_s: float = 2.0
     maximum_action_step: tuple[float, ...] = DEFAULT_HARDWARE_MAXIMUM_ACTION_STEP
-    emergency_action: tuple[float, ...] = (0.0, 0.0, 0.0, 1.0, 0.0)
+    emergency_action: tuple[float, ...] = (0.0, 0.0, 0.0, 1.0)
 
     def __post_init__(self):
         limits = {
-            "low_heater_level_m": self.low_heater_level_m,
             "high_pump_level_m": self.high_pump_level_m,
-            "high_heater_temperature_degC": self.high_heater_temperature_degC,
             "maximum_sample_age_s": self.maximum_sample_age_s,
         }
         for name, raw_value in limits.items():
@@ -127,9 +118,9 @@ class SafetyConfig:
                 raise ValueError(f"{name} must be finite and non-negative")
             object.__setattr__(self, name, value)
         maximum_step = _finite_vector(
-            "maximum_action_step", self.maximum_action_step, 5
+            "maximum_action_step", self.maximum_action_step, 4
         )
-        emergency = _finite_vector("emergency_action", self.emergency_action, 5)
+        emergency = _finite_vector("emergency_action", self.emergency_action, 4)
         if any(value < 0.0 for value in maximum_step):
             raise ValueError("maximum_action_step must be non-negative")
         if any(value < 0.0 or value > 1.0 for value in emergency):
@@ -162,12 +153,12 @@ class SafetyGuardian:
 
     def apply(self, requested, *, sample: HardwareSample, previous_action):
         requested_action = np.clip(
-            np.asarray(_finite_vector("requested_action", requested, 5)),
+            np.asarray(_finite_vector("requested_action", requested, 4)),
             0.0,
             1.0,
         )
         previous = np.asarray(
-            _finite_vector("previous_action", previous_action, 5), dtype=float
+            _finite_vector("previous_action", previous_action, 4), dtype=float
         )
         age = sample.received_monotonic_time_s - sample.source_monotonic_time_s
         interlocks = sample.interlocks
@@ -189,17 +180,10 @@ class SafetyGuardian:
         maximum_step = np.asarray(self.config.maximum_action_step, dtype=float)
         applied = np.clip(requested_action, previous - maximum_step, previous + maximum_step)
         reasons = []
-        levels = np.asarray(sample.measurement[0::2], dtype=float)
-        temperatures = np.asarray(sample.measurement[1::2], dtype=float)
+        levels = np.asarray(sample.measurement, dtype=float)
         if np.any(levels >= self.config.high_pump_level_m):
             applied[0] = 0.0
             reasons.append("high_level_pump_inhibit")
-        if (
-            levels[0] <= self.config.low_heater_level_m
-            or temperatures[0] >= self.config.high_heater_temperature_degC
-        ):
-            applied[4] = 0.0
-            reasons.append("heater_inhibit")
         if not bool(interlocks["reservoir_available"]):
             applied[0] = 0.0
             reasons.append("reservoir_pump_inhibit")
@@ -282,10 +266,7 @@ class ThreeTankHardwareEnv(gym.Env):
     def state(self):
         if self._sample is None:
             raise RuntimeError("hardware environment has not been reset")
-        return _measurement_to_state(
-            self._sample.measurement,
-            self._sample.boundary,
-        )
+        return np.asarray(self._sample.measurement, dtype=float)
 
     @property
     def y_sp(self):
@@ -436,16 +417,29 @@ class ThreeTankHardwareEnv(gym.Env):
             self._reference_state if reference is None else reference, dtype=float
         )
         maximum_action = 0.95
+        schema = self.model.output_schema()
+        reference_valid = bool(
+            target.shape == (len(schema),)
+            and np.all(np.isfinite(target))
+            and all(
+                float(row["low"]) <= float(value) <= float(row["high"])
+                for row, value in zip(schema, target)
+            )
+        )
         action = self.model.tracking_steady_state_action(
             target,
             self.disturbances,
-        )
+        ) if reference_valid else None
         equilibrium_maximum = math.inf if action is None else float(max(action))
         accepted = bool(action is not None and equilibrium_maximum <= maximum_action)
         reasons = (
             []
             if action is not None
-            else ["reference has no feasible steady action"]
+            else [
+                "reference is outside the controlled-output bounds"
+                if not reference_valid
+                else "reference has no feasible steady action"
+            ]
         )
         if action is not None and equilibrium_maximum > maximum_action:
             reasons.append("equilibrium action exceeds the hardware limit")
@@ -477,6 +471,9 @@ class ThreeTankHardwareEnv(gym.Env):
                 for name, value in sample.boundary.items()
                 if name in known
             }
+        )
+        self.disturbances["reservoir_available"] = float(
+            bool(sample.interlocks["reservoir_available"])
         )
 
     def _info(
@@ -600,16 +597,6 @@ class ThreeTankHardwareEnv(gym.Env):
 
     def close(self):
         self.transport.close()
-
-
-def _measurement_to_state(measurement, boundary):
-    return np.asarray(
-        (
-            *map(float, measurement),
-            float(boundary["reservoir_temperature_degC"]),
-        ),
-        dtype=float,
-    )
 
 
 def _finite_vector(name, values, length):

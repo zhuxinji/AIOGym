@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Scenario-oriented AIO-Gym 0.8 command-line interface."""
+"""Scenario-oriented AIO-Gym 0.15 command-line interface."""
+
 from __future__ import annotations
 
 import argparse
@@ -67,9 +68,7 @@ def _list(args):
                     str(benchmark.make_episode(model, 0).horizon),
                     benchmark.reward_id,
                     "scenario-defaults",
-                    ",".join(
-                        name for name, _direction in benchmark.ranking_metrics
-                    ),
+                    ",".join(name for name, _direction in benchmark.ranking_metrics),
                 )
             )
         headings = (
@@ -83,21 +82,24 @@ def _list(args):
             max(len(headings[index]), *(len(row[index]) for row in rows))
             for index in range(len(headings))
         ]
-        print("  ".join(value.ljust(widths[index]) for index, value in enumerate(headings)))
+        print(
+            "  ".join(
+                value.ljust(widths[index]) for index, value in enumerate(headings)
+            )
+        )
         for row in rows:
-            print("  ".join(value.ljust(widths[index]) for index, value in enumerate(row)))
+            print(
+                "  ".join(value.ljust(widths[index]) for index, value in enumerate(row))
+            )
         return 0
     elif args.resource == "parameters":
         if not args.scenario:
             raise ValueError("--scenario is required for parameters")
         rows = aiogym.list_parameters(args.scenario)
         rendered = [
-            (row["name"], json.dumps(row["default"]), row["unit"])
-            for row in rows
+            (row["name"], json.dumps(row["default"]), row["unit"]) for row in rows
         ]
-        name_width = max(
-            (len(name) for name, _, _ in rendered), default=len("NAME")
-        )
+        name_width = max((len(name) for name, _, _ in rendered), default=len("NAME"))
         default_width = max(
             (len(default) for _, default, _ in rendered), default=len("DEFAULT")
         )

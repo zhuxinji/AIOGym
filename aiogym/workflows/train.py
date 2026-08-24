@@ -11,21 +11,21 @@ from pathlib import Path
 import numpy as np
 
 from aiogym.core.io import jsonable, write_json
-
-from ._metadata import environment_metadata, validate_environment_compatibility
-from .algorithms import (
+from aiogym.rl.algorithms import (
     TrainingStep,
     get_algorithm,
     resolve_algorithm_kwargs,
 )
-from .behavior_cloning import (
-    load_demonstrations,
-)
+from aiogym.rl.behavior_cloning import load_demonstrations
+from aiogym.rl.datasets import load_training_dataset, training_dataset_metadata
+
+from ._metadata import environment_metadata, validate_environment_compatibility
 from .compare import render_trajectory_svg
 from ._checkpoint import (
     CHECKPOINT_SCHEMA_VERSION,
     backend_runtime_metadata,
     load_checkpoint,
+    load_training_checkpoint,
     save_checkpoint,
 )
 from .evaluate import evaluate
@@ -35,7 +35,7 @@ from .training_curve import (
 )
 
 
-TRAINING_SCHEMA_VERSION = "aiogym.training.v8"
+TRAINING_SCHEMA_VERSION = "aiogym.training.v10"
 TRAINING_EVALUATION_SCHEMA_VERSION = "aiogym.training_evaluation.v1"
 
 
@@ -45,25 +45,25 @@ def train(
     algorithm: str,
     steps: int,
     output: str | Path,
-    seed: int = 0,
+    seed: int | None = None,
     algorithm_kwargs: Mapping | None = None,
     record_every: int = 500,
     evaluation_env=None,
     evaluate_every: int | None = None,
     evaluation_seed: int = 0,
-    demonstrations: str | Path | None = None,
+    dataset: str | Path | None = None,
     behavior_cloning_epochs: int | None = None,
     behavior_cloning_batch_size: int = 256,
     behavior_cloning_learning_rate: float = 3e-4,
+    resume_from: str | Path | None = None,
 ):
-    """Train one registered algorithm without taking ownership of ``env``."""
+    """Train or continue one algorithm without taking ownership of ``env``."""
 
     if env.unwrapped.benchmark is not None:
         raise ValueError("train does not accept a benchmark environment")
     backend = get_algorithm(algorithm)
     key = backend.id
     resolved_steps = _positive_integer("steps", steps)
-    resolved_seed = _nonnegative_integer("seed", seed)
     resolved_record_every = _positive_integer("record_every", record_every)
     resolved_evaluate_every = (
         None
@@ -74,18 +74,6 @@ def train(
         "evaluation_seed", evaluation_seed
     )
     _validate_evaluation_env(env, evaluation_env, resolved_evaluate_every)
-    cloning = _behavior_cloning_inputs(
-        backend=backend,
-        demonstrations=demonstrations,
-        epochs=behavior_cloning_epochs,
-        batch_size=behavior_cloning_batch_size,
-        learning_rate=behavior_cloning_learning_rate,
-    )
-    demonstration_data = (
-        None
-        if cloning is None
-        else load_demonstrations(cloning["dataset"], env=env)
-    )
     requested_kwargs = copy.deepcopy(
         {} if algorithm_kwargs is None else dict(algorithm_kwargs)
     )
@@ -94,6 +82,81 @@ def train(
     serialized_kwargs = jsonable(requested_kwargs)
     if not isinstance(serialized_kwargs, dict):
         raise TypeError("algorithm_kwargs must be a mapping")
+
+    resume_path = None if resume_from is None else Path(resume_from)
+    initial_steps = 0
+    resumed_model = None
+    checkpoint_training = None
+    if resume_path is not None:
+        if behavior_cloning_epochs is not None:
+            raise ValueError("continued training does not accept behavior cloning")
+        if dataset is not None and not backend.requires_dataset:
+            raise ValueError(
+                f"continued {key} training does not accept a Dataset"
+            )
+        (
+            resume_path,
+            loaded_backend,
+            resumed_model,
+            checkpoint_training,
+        ) = load_training_checkpoint(resume_path, env=env, algorithm=key)
+        backend = loaded_backend
+        initial_steps = checkpoint_training["completed_steps"]
+        checkpoint_seed = checkpoint_training["seed"]
+        if seed is not None:
+            requested_seed = _nonnegative_integer("seed", seed)
+            if requested_seed != checkpoint_seed:
+                raise ValueError(
+                    "continued training seed must match checkpoint seed "
+                    f"{checkpoint_seed}"
+                )
+        resolved_seed = checkpoint_seed
+        resolved_kwargs = dict(checkpoint_training["algorithm_kwargs"])
+        if algorithm_kwargs is not None:
+            requested_resolved_kwargs = resolve_algorithm_kwargs(
+                backend,
+                steps=resolved_steps,
+                values=serialized_kwargs,
+            )
+            if requested_resolved_kwargs != resolved_kwargs:
+                raise ValueError(
+                    "continued training algorithm_kwargs must match the checkpoint"
+                )
+    else:
+        resolved_seed = _nonnegative_integer("seed", 0 if seed is None else seed)
+        resolved_kwargs = resolve_algorithm_kwargs(
+            backend,
+            steps=resolved_steps,
+            values=serialized_kwargs,
+        )
+
+    dataset_path, cloning = _dataset_inputs(
+        backend=backend,
+        dataset=dataset,
+        epochs=behavior_cloning_epochs,
+        batch_size=behavior_cloning_batch_size,
+        learning_rate=behavior_cloning_learning_rate,
+    )
+    training_dataset = (
+        None
+        if dataset_path is None
+        else load_training_dataset(dataset_path, env=env)
+    )
+    dataset_metadata = (
+        None
+        if training_dataset is None
+        else training_dataset_metadata(training_dataset)
+    )
+    if resume_path is not None and backend.requires_dataset:
+        if dataset_metadata != checkpoint_training["dataset"]:
+            raise ValueError(
+                "continued training Dataset must match the checkpoint Dataset"
+            )
+    demonstration_data = (
+        None
+        if cloning is None
+        else load_demonstrations(training_dataset, env=env)
+    )
 
     directory = Path(output)
     if directory.exists() and not directory.is_dir():
@@ -104,15 +167,14 @@ def train(
         )
     directory.mkdir(parents=True, exist_ok=True)
 
-    resolved_kwargs = resolve_algorithm_kwargs(
-        backend,
-        steps=resolved_steps,
-        values=serialized_kwargs,
-    )
-    model = backend.create(
-        env=env,
-        seed=resolved_seed,
-        algorithm_kwargs=copy.deepcopy(resolved_kwargs),
+    model = (
+        resumed_model
+        if resumed_model is not None
+        else backend.create(
+            env=env,
+            seed=resolved_seed,
+            algorithm_kwargs=copy.deepcopy(resolved_kwargs),
+        )
     )
     behavior_cloning_report = None
     if cloning is not None:
@@ -129,7 +191,20 @@ def train(
         )
         if not isinstance(behavior_cloning_report, Mapping):
             raise TypeError("algorithm backend behavior_clone must return a mapping")
-    curve_recorder = _TrainingCurveRecorder(resolved_record_every)
+    curve_recorder = _TrainingCurveRecorder(
+        resolved_record_every,
+        initial_steps=initial_steps,
+    )
+    checkpoint_dataset = dataset_metadata if backend.requires_dataset else None
+
+    def checkpoint_state(completed_steps):
+        return {
+            "completed_steps": int(completed_steps),
+            "seed": resolved_seed,
+            "algorithm_kwargs": resolved_kwargs,
+            "dataset": checkpoint_dataset,
+        }
+
     evaluation_recorder = None
     if resolved_evaluate_every is not None:
         evaluation_recorder = _TrainingEvaluationRecorder(
@@ -140,26 +215,42 @@ def train(
             evaluate_every=resolved_evaluate_every,
             seed=resolved_evaluation_seed,
             best_checkpoint=directory / "best" / "model.zip",
+            initial_steps=initial_steps,
+            checkpoint_state=checkpoint_state,
         )
         evaluation_recorder.start()
 
     def record_step(step: TrainingStep) -> None:
-        curve_recorder.on_step(step)
+        cumulative = TrainingStep(
+            step=initial_steps + step.step,
+            reward=step.reward,
+            terminated=step.terminated,
+            truncated=step.truncated,
+        )
+        curve_recorder.on_step(cumulative)
         if evaluation_recorder is not None:
-            evaluation_recorder.on_step(step)
+            evaluation_recorder.on_step(cumulative)
 
     actual_steps = backend.learn(
         model,
         steps=resolved_steps,
+        dataset=training_dataset,
         on_step=record_step,
     )
-    resolved_actual_steps = _positive_integer("backend actual_steps", actual_steps)
-    curve_recorder.finish(resolved_actual_steps)
+    added_steps = _positive_integer("backend actual_steps", actual_steps)
+    total_steps = initial_steps + added_steps
+    curve_recorder.finish(total_steps)
     if evaluation_recorder is not None:
-        evaluation_recorder.finish(resolved_actual_steps)
+        evaluation_recorder.finish(total_steps)
     curve = curve_recorder.payload()
     checkpoint = directory / "model.zip"
-    save_checkpoint(backend, model, checkpoint, env=env)
+    save_checkpoint(
+        backend,
+        model,
+        checkpoint,
+        env=env,
+        training=checkpoint_state(total_steps),
+    )
 
     git_executable = shutil.which("git")
     git_commit = None
@@ -228,11 +319,17 @@ def train(
         "checkpoint_schema": CHECKPOINT_SCHEMA_VERSION,
         "algorithm": key,
         "steps": resolved_steps,
+        "initial_steps": initial_steps,
+        "added_steps": added_steps,
         "actual_steps": curve["actual_steps"],
+        "resume_from": (
+            None if resume_path is None else str(resume_path.resolve())
+        ),
         "seed": resolved_seed,
         "record_every": resolved_record_every,
         "algorithm_kwargs": resolved_kwargs,
         "environment": environment_metadata(env),
+        "dataset": dataset_metadata,
         "behavior_cloning": (
             None
             if behavior_cloning_report is None
@@ -290,21 +387,26 @@ def train(
     }
 
 
-def _behavior_cloning_inputs(
-    *, backend, demonstrations, epochs, batch_size, learning_rate
-):
-    if demonstrations is None:
+def _dataset_inputs(*, backend, dataset, epochs, batch_size, learning_rate):
+    if dataset is None:
+        if backend.requires_dataset:
+            raise ValueError(f"algorithm backend {backend.id} requires dataset")
         if epochs is not None:
-            raise ValueError("behavior_cloning_epochs requires demonstrations")
-        return None
+            raise ValueError("behavior_cloning_epochs requires dataset")
+        return None, None
+    if backend.behavior_cloning is None and not backend.requires_dataset:
+        raise ValueError(
+            f"algorithm backend {backend.id} does not consume a training Dataset"
+        )
+    if epochs is None and backend.behavior_cloning is not None:
+        raise ValueError("dataset requires behavior_cloning_epochs for this algorithm")
+    if epochs is None:
+        return Path(dataset), None
     if backend.behavior_cloning is None:
         raise ValueError(
             f"algorithm backend {backend.id} does not support behavior cloning"
         )
-    if epochs is None:
-        raise ValueError("demonstrations requires behavior_cloning_epochs")
-    return {
-        "dataset": Path(demonstrations),
+    return Path(dataset), {
         "epochs": _positive_integer("behavior_cloning_epochs", epochs),
         "batch_size": _positive_integer(
             "behavior_cloning_batch_size", batch_size
@@ -388,6 +490,8 @@ class _TrainingEvaluationRecorder:
         evaluate_every,
         seed,
         best_checkpoint,
+        initial_steps,
+        checkpoint_state,
     ):
         self._backend = backend
         self._model = model
@@ -396,6 +500,8 @@ class _TrainingEvaluationRecorder:
         self._evaluate_every = evaluate_every
         self._seed = seed
         self._best_checkpoint = best_checkpoint
+        self._initial_steps = initial_steps
+        self._checkpoint_state = checkpoint_state
         self._records = []
         self._best_step = None
         self._best_value = None
@@ -404,7 +510,7 @@ class _TrainingEvaluationRecorder:
         self._direction = None
 
     def start(self):
-        self._evaluate(0)
+        self._evaluate(self._initial_steps)
 
     def on_step(self, event: TrainingStep):
         if event.step % self._evaluate_every == 0:
@@ -452,6 +558,7 @@ class _TrainingEvaluationRecorder:
                 self._model,
                 self._best_checkpoint,
                 env=self._checkpoint_env,
+                training=self._checkpoint_state(step),
                 overwrite=True,
             )
             self._best_step = int(step)
@@ -500,9 +607,10 @@ def _is_better_training_evaluation(candidate, best, metric_direction):
 
 
 class _TrainingCurveRecorder:
-    def __init__(self, record_every):
+    def __init__(self, record_every, *, initial_steps=0):
         self._record_every = record_every
-        self._window_start = 0
+        self._initial_steps = initial_steps
+        self._window_start = initial_steps
         self._window_rewards = []
         self._window_completed = 0
         self._window_terminated = 0
@@ -511,7 +619,7 @@ class _TrainingCurveRecorder:
         self._episode_length = 0
         self._records = []
         self._episodes = []
-        self._last_step = 0
+        self._last_step = initial_steps
         self._actual_steps = None
 
     def on_step(self, event: TrainingStep):
@@ -594,6 +702,7 @@ class _TrainingCurveRecorder:
         return {
             "schema_version": TRAINING_CURVE_SCHEMA_VERSION,
             "record_every": int(self._record_every),
+            "initial_steps": int(self._initial_steps),
             "actual_steps": int(self._actual_steps),
             "records": list(self._records),
             "episodes": list(self._episodes),

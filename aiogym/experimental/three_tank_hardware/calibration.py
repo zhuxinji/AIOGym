@@ -9,7 +9,7 @@ from typing import Any
 from ._integrity import content_digest
 
 
-CALIBRATION_SCHEMA_VERSION = "aiogym.three_tank.calibration.v2"
+CALIBRATION_SCHEMA_VERSION = "aiogym.three_tank.calibration.v3"
 CALIBRATION_PARAMETER_UNITS = {
     "area_1": "m2",
     "area_2": "m2",
@@ -17,11 +17,6 @@ CALIBRATION_PARAMETER_UNITS = {
     "cv_V12": "m2.5/s",
     "cv_V23": "m2.5/s",
     "cv_V34": "m2.5/s",
-    "ua_1": "W/K",
-    "ua_2": "W/K",
-    "ua_3": "W/K",
-    "ua_reservoir": "W/K",
-    "heater_efficiency": "fraction",
     "pump_flow_max": "m3/s",
     "sensor_delay": "s",
     "actuator_delay": "s",
@@ -35,14 +30,7 @@ _POSITIVE_PARAMETERS = {
     "cv_V34",
     "pump_flow_max",
 }
-_NONNEGATIVE_PARAMETERS = {
-    "ua_1",
-    "ua_2",
-    "ua_3",
-    "ua_reservoir",
-    "sensor_delay",
-    "actuator_delay",
-}
+_NONNEGATIVE_PARAMETERS = {"sensor_delay", "actuator_delay"}
 
 
 def calibration_template(*, rig_id: str) -> dict[str, Any]:
@@ -130,10 +118,6 @@ def validate_calibration(
             if name in _NONNEGATIVE_PARAMETERS and estimate < 0.0:
                 raise ValueError(
                     f"calibration parameter {name} must be non-negative"
-                )
-            if name == "heater_efficiency" and not 0.0 < estimate <= 1.0:
-                raise ValueError(
-                    "calibration parameter heater_efficiency must belong to (0, 1]"
                 )
         if uncertainty is not None and (
             not math.isfinite(float(uncertainty)) or float(uncertainty) < 0.0

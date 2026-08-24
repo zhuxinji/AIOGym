@@ -1,4 +1,5 @@
 """Successive-linearization fixed-setpoint MPC baseline."""
+
 from __future__ import annotations
 
 import math
@@ -57,7 +58,7 @@ class SuccessiveLinearizationMPC:
         self.m = model
         self.nu = model.action_dim()
         self.nx = len(model.initial_state())
-        self.ncv = len(model.controlled_output(model.initial_state()))
+        self.ncv = len(model.outputs(model.initial_state()))
         self.Ts = positive_float("Ts", Ts)
         self.P = positive_int("P", P)
         self._move_supp, self.move_supp = nonnegative_weights(
@@ -66,9 +67,7 @@ class SuccessiveLinearizationMPC:
         self._steady_input_weight, self.steady_input_weight = nonnegative_weights(
             "steady_input_weight", steady_input_weight, self.nu
         )
-        self.reseed_on_feedforward_change = bool(
-            reseed_on_feedforward_change
-        )
+        self.reseed_on_feedforward_change = bool(reseed_on_feedforward_change)
         self.cv_scale = self._resolve_cv_scale(cv_scale)
         self.q_y = self._resolve_q_y(q_y)
         self.reset()
@@ -80,9 +79,11 @@ class SuccessiveLinearizationMPC:
             if len(values) == 1:
                 values *= self.ncv
         else:
-            values = [float(value) for value in self.m.controlled_output_scales()]
+            values = [float(value) for value in self.m.output_scales()]
         if len(values) != self.ncv:
-            raise ValueError(f"cv_scale must contain 1 or {self.ncv} values, got {len(values)}")
+            raise ValueError(
+                f"cv_scale must contain 1 or {self.ncv} values, got {len(values)}"
+            )
         if any(not math.isfinite(value) or value <= 0 for value in values):
             raise ValueError("cv_scale values must be finite and positive")
         return values
@@ -99,24 +100,28 @@ class SuccessiveLinearizationMPC:
         return values
 
     def metadata(self):
-        return {"class": self.__class__.__name__,
-                "kind": "successive_linearization_mpc", "scenario": self.m.scenario,
-                "Ts": self.Ts, "horizon": self.P,
-                "move_supp": self.move_supp,
-                "steady_input_weight": self.steady_input_weight,
-                "initialization": "tracking_steady_state_action",
-                "initialization_status": self._initialization_status,
-                "feedforward_reseed": (
-                    "setpoint_or_feedforward_change"
-                    if self.reseed_on_feedforward_change
-                    else "setpoint_change"
-                ),
-                "cv_scale": self.cv_scale,
-                "q_y": self.q_y}
+        return {
+            "class": self.__class__.__name__,
+            "kind": "successive_linearization_mpc",
+            "scenario": self.m.scenario,
+            "Ts": self.Ts,
+            "horizon": self.P,
+            "move_supp": self.move_supp,
+            "steady_input_weight": self.steady_input_weight,
+            "initialization": "tracking_steady_state_action",
+            "initialization_status": self._initialization_status,
+            "feedforward_reseed": (
+                "setpoint_or_feedforward_change"
+                if self.reseed_on_feedforward_change
+                else "setpoint_change"
+            ),
+            "cv_scale": self.cv_scale,
+            "q_y": self.q_y,
+        }
 
     def reset(self, seed=None):
         del seed
-        initial_action = self.m.mpc_init()
+        initial_action = self.m.default_action()
         self.u = np.asarray(self.m.action_vector(initial_action), dtype=np.float64)
         self._last_target = None
         self._target_u = None
@@ -130,13 +135,16 @@ class SuccessiveLinearizationMPC:
         return np.asarray(meas["x"], dtype=np.float64)
 
     def _cv(self, x):
-        return np.asarray(self.m.controlled_output(list(x)), dtype=np.float64)
+        return np.asarray(self.m.outputs(list(x)), dtype=np.float64)
 
     def _wcv(self):
-        return np.array([
-            float(weight) / max(float(scale), 1e-12) ** 2
-            for weight, scale in zip(self.q_y, self.cv_scale)
-        ], dtype=np.float64)
+        return np.array(
+            [
+                float(weight) / max(float(scale), 1e-12) ** 2
+                for weight, scale in zip(self.q_y, self.cv_scale)
+            ],
+            dtype=np.float64,
+        )
 
     def compute(self, meas, sp, dt):
         self._clock += dt
@@ -147,13 +155,15 @@ class SuccessiveLinearizationMPC:
 
     def _solve(self, meas, sp):
         m, nx, nu, P, Ts = self.m, self.nx, self.nu, self.P, self.Ts
-        env = {k: v for k, v in meas.items()
-               if k not in ("x", "y", "levels", "temps", "conc")}
+        env = {
+            k: v
+            for k, v in meas.items()
+            if k not in ("x", "y", "levels", "temps", "conc")
+        }
         x0 = self._toX(meas)
-        target = np.asarray(m.setpoint_vector(sp["y_sp"]), dtype=np.float64)
-        target_changed = (
-            self._last_target is None
-            or not np.array_equal(target, self._last_target)
+        target = np.asarray(sp["y_sp"], dtype=np.float64)
+        target_changed = self._last_target is None or not np.array_equal(
+            target, self._last_target
         )
         steady_input = m.tracking_steady_state_action(target, env)
         previous_target_u = self._target_u
@@ -162,14 +172,11 @@ class SuccessiveLinearizationMPC:
             candidate = np.asarray(steady_input, dtype=np.float64).reshape(-1)
             if len(candidate) == nu and np.all(np.isfinite(candidate)):
                 self._target_u = np.clip(candidate, 0.0, 1.0)
-                feedforward_changed = (
-                    previous_target_u is None
-                    or not np.allclose(
-                        self._target_u,
-                        previous_target_u,
-                        rtol=0.0,
-                        atol=1e-12,
-                    )
+                feedforward_changed = previous_target_u is None or not np.allclose(
+                    self._target_u,
+                    previous_target_u,
+                    rtol=0.0,
+                    atol=1e-12,
                 )
                 if target_changed or (
                     self.reseed_on_feedforward_change and feedforward_changed
@@ -185,12 +192,16 @@ class SuccessiveLinearizationMPC:
         Ad = np.eye(nx)
         Bd = np.zeros((nx, nu))
         for j in range(nx):
-            xp = x0.copy(); xp[j] += eps
-            xm = x0.copy(); xm[j] -= eps
+            xp = x0.copy()
+            xp[j] += eps
+            xm = x0.copy()
+            xm[j] -= eps
             Ad[:, j] += (f(xp) - f(xm)) / (2 * eps) * Ts
         for j in range(nu):
-            up = u0.copy(); up[j] += eps
-            um = u0.copy(); um[j] -= eps
+            up = u0.copy()
+            up[j] += eps
+            um = u0.copy()
+            um[j] -= eps
             fp = np.asarray(m.dynamics(list(x0), up, env), dtype=np.float64)
             fm = np.asarray(m.dynamics(list(x0), um, env), dtype=np.float64)
             Bd[:, j] = (fp - fm) / (2 * eps) * Ts
@@ -198,7 +209,8 @@ class SuccessiveLinearizationMPC:
         nCV = len(cv0)
         C = np.zeros((nCV, nx))
         for j in range(nx):
-            xp = x0.copy(); xp[j] += eps
+            xp = x0.copy()
+            xp[j] += eps
             C[:, j] = (self._cv(xp) - cv0) / eps
         Wcv = self._wcv()
         c0 = (x0 + f0 * Ts) - Ad @ x0 - Bd @ u0

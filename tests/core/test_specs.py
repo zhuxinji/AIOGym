@@ -103,7 +103,7 @@ def test_reward_is_runtime_function_metric_metadata_and_safety_penalty():
 
 def test_reward_rejects_invalid_configuration():
     with pytest.raises(ValueError, match="local name"):
-        Reward(id="scenario/reward", function=_reward)
+        Reward(id="not/local", function=_reward)
     with pytest.raises(TypeError, match="callable"):
         Reward(id="reward", function=1)
     with pytest.raises(ValueError, match="episode_metric_function"):

@@ -9,29 +9,32 @@ from aiogym.experimental.three_tank_hardware.real_log import (
     build_real_step_record,
     validate_real_step_record,
 )
+from aiogym.experimental.three_tank_hardware.hardware import (
+    HARDWARE_BACKEND_VERSION,
+)
 
 
 def _record(sequence=0):
     return build_real_step_record(
-        run_id="thermal-startup-001",
+        run_id="run-001",
         episode_id="episode-001",
         sequence=sequence,
         source_monotonic_time_s=float(sequence),
         received_monotonic_time_s=float(sequence) + 0.1,
         wall_time_utc="2026-08-08T00:00:00Z",
-        measurement=[0.18, 22.0, 0.18, 22.0, 0.18, 22.0, 20.5],
+        measurement=[0.18, 0.18, 0.18],
         flow_measurement=[3.0 / 60000.0] * 3,
-        reference=[0.18, 22.0, 0.18, 22.0, 0.18, 22.0],
-        transition_disturbance={"t_makeup": 20.0},
-        disturbance={"t_makeup": 20.1},
-        commanded_action=[0.0, 0.0, 0.0, 0.0, 0.0],
-        applied_action=[0.5, 0.5, 0.5, 0.5, 0.2],
+        reference=[0.18, 0.18, 0.18],
+        transition_disturbance={"pump_flow_factor": 1.0},
+        disturbance={"pump_flow_factor": 0.9},
+        commanded_action=[0.0, 0.0, 0.0, 0.0],
+        applied_action=[0.5, 0.5, 0.5, 0.5],
         calibration_id="calibration-001",
         calibration_hash="calibration-hash",
         scenario_id="three_tank",
         benchmark_id="tracking",
         reward_id="regulation",
-        backend_version="hardware-v2",
+        backend_version=HARDWARE_BACKEND_VERSION,
         hardware_mode="shadow",
         safety={"mode": "shadow", "interlock": False},
         raw_channels={"LT301": 1234},
@@ -40,7 +43,7 @@ def _record(sequence=0):
 
 def test_real_step_record_round_trips_and_rejects_tampering():
     record = _record()
-    assert record["schema_version"].endswith(".v6")
+    assert record["schema_version"].endswith(".v8")
     assert record["reward_id"] == "regulation"
     assert validate_real_step_record(record) == record
     record["measurement"][2] = 0.3

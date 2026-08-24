@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pytest
 
@@ -9,14 +11,25 @@ from aiogym import (
     list_rewards,
     list_scenarios,
 )
+from aiogym.core.contracts import ProcessModel
 
 
-def test_only_quadruple_and_three_tank_are_registered():
-    assert set(list_scenarios()) == {"quadruple", "three_tank"}
-    assert set(list_rewards("three_tank")) == {
-        "regulation",
-        "thermal_regulation",
+def test_builtin_scenarios_are_registered():
+    assert set(list_scenarios()) == {
+        "cstr",
+        "crystallization",
+        "extraction",
+        "heater",
+        "hvac",
+        "quadruple",
+        "three_tank",
     }
+    assert set(list_rewards("cstr")) == {"regulation"}
+    assert set(list_rewards("crystallization")) == {"regulation"}
+    assert set(list_rewards("extraction")) == {"regulation"}
+    assert set(list_rewards("heater")) == {"regulation"}
+    assert set(list_rewards("hvac")) == {"regulation"}
+    assert set(list_rewards("three_tank")) == {"regulation"}
     assert set(list_rewards("quadruple")) == {"regulation"}
     assert set(list_benchmarks("three_tank")) == {
         "tracking",
@@ -28,11 +41,65 @@ def test_only_quadruple_and_three_tank_are_registered():
         "disturbance-rejection",
         "boundary-safety",
     }
-    with pytest.raises(KeyError, match="unknown reward 'economic'"):
-        make_env("three_tank", reward="economic")
+    assert set(list_benchmarks("hvac")) == {
+        "tracking",
+        "disturbance-rejection",
+        "boundary-safety",
+    }
+    assert set(list_benchmarks("cstr")) == {
+        "tracking",
+        "disturbance-rejection",
+        "boundary-safety",
+    }
+    assert set(list_benchmarks("crystallization")) == {
+        "tracking",
+        "disturbance-rejection",
+        "boundary-safety",
+    }
+    assert set(list_benchmarks("extraction")) == {
+        "tracking",
+        "disturbance-rejection",
+        "boundary-safety",
+    }
+    assert set(list_benchmarks("heater")) == {
+        "tracking",
+        "disturbance-rejection",
+        "boundary-safety",
+    }
+@pytest.mark.parametrize("scenario", list_scenarios())
+def test_builtin_models_use_one_process_model_interface(scenario):
+    env = make_env(scenario)
+    try:
+        model = env.unwrapped.model
+        assert isinstance(model, ProcessModel)
+        assert len(model.outputs(model.initial_state())) == len(model.output_schema())
+        assert all(
+            {"name", "unit", "low", "high"} <= row.keys()
+            for row in model.state_schema()
+        )
+        assert all(
+            {"name", "unit", "low", "high"} <= row.keys()
+            for row in model.action_schema()
+        )
+        assert all(
+            {"name", "unit", "low", "high"} <= row.keys()
+            for row in model.output_schema()
+        )
+    finally:
+        env.close()
+
+
 @pytest.mark.parametrize(
     ("scenario", "expected_observation", "expected_action"),
-    [("quadruple", (6,), (2,)), ("three_tank", (13,), (5,))],
+    [
+        ("cstr", (4,), (2,)),
+        ("crystallization", (7,), (1,)),
+        ("extraction", (11,), (2,)),
+        ("heater", (5,), (2,)),
+        ("hvac", (4,), (2,)),
+        ("quadruple", (6,), (2,)),
+        ("three_tank", (6,), (4,)),
+    ],
 )
 def test_all_benchmarks_keep_one_scenario_interface(
     scenario,
@@ -52,32 +119,180 @@ def test_all_benchmarks_keep_one_scenario_interface(
             env.close()
 
 
-def test_quadruple_default_training_episode_starts_with_large_feasible_error():
+@pytest.mark.parametrize("scenario", list_scenarios())
+@pytest.mark.parametrize(
+    "benchmark",
+    ("tracking", "disturbance-rejection", "boundary-safety"),
+)
+def test_every_formal_benchmark_resolves_twenty_distinct_reproducible_cases(
+    scenario,
+    benchmark,
+):
+    env = make_env(scenario, benchmark=benchmark)
+    try:
+        base_env = env.unwrapped
+        episodes = [
+            base_env.benchmark.make_episode(base_env.model, seed) for seed in range(20)
+        ]
+        serialized = {
+            json.dumps(episode.as_dict(), sort_keys=True) for episode in episodes
+        }
+
+        assert len(serialized) == 20
+        assert base_env.benchmark.make_episode(base_env.model, 0) == episodes[0]
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize(
+    ("scenario", "horizon"),
+    (
+        ("crystallization", 50),
+        ("cstr", 225),
+        ("extraction", 100),
+        ("heater", 300),
+        ("hvac", 60),
+        ("quadruple", 180),
+        ("three_tank", 600),
+    ),
+)
+def test_tracking_benchmarks_start_one_target_at_reset(scenario, horizon):
+    env = make_env(scenario, benchmark="tracking")
+    try:
+        env.reset(seed=0)
+        episode = env.unwrapped.episode
+        initial_output = env.unwrapped.model.outputs(episode.initial_state)
+
+        assert episode.horizon == horizon
+        assert not episode.reference_schedule
+        assert not np.allclose(initial_output, episode.reference)
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize(
+    ("scenario", "benchmark", "horizon"),
+    (
+        ("crystallization", "disturbance-rejection", 100),
+        ("crystallization", "boundary-safety", 100),
+        ("cstr", "disturbance-rejection", 400),
+        ("cstr", "boundary-safety", 100),
+        ("extraction", "disturbance-rejection", 580),
+        ("extraction", "boundary-safety", 100),
+        ("heater", "disturbance-rejection", 700),
+        ("heater", "boundary-safety", 450),
+        ("hvac", "disturbance-rejection", 210),
+        ("hvac", "boundary-safety", 60),
+        ("quadruple", "disturbance-rejection", 500),
+        ("quadruple", "boundary-safety", 180),
+        ("three_tank", "disturbance-rejection", 1800),
+        ("three_tank", "boundary-safety", 600),
+    ),
+)
+def test_safety_benchmark_horizons_and_events(scenario, benchmark, horizon):
+    env = make_env(scenario, benchmark=benchmark)
+    try:
+        for seed in range(20):
+            _, info = env.reset(seed=seed)
+            spec = info["episode_spec"]
+            assert spec["horizon"] == horizon
+            assert all(
+                int(step) < horizon
+                for step in spec["disturbance_schedule"]
+            )
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize(
+    ("scenario", "horizon"),
+    (
+        ("crystallization", 50),
+        ("cstr", 225),
+        ("extraction", 100),
+        ("heater", 300),
+        ("hvac", 60),
+        ("quadruple", 180),
+        ("three_tank", 600),
+    ),
+)
+def test_default_and_randomized_training_match_tracking_timing(scenario, horizon):
+    for randomize, seeds in ((False, (0,)), (True, range(20))):
+        env = make_env(scenario, randomize=randomize)
+        try:
+            for seed in seeds:
+                _, info = env.reset(seed=seed)
+                spec = info["episode_spec"]
+                assert spec["horizon"] == horizon
+                assert not spec["reference_schedule"]
+                initial_output = env.unwrapped.model.outputs(spec["initial_state"])
+                assert not np.allclose(initial_output, spec["reference"])
+        finally:
+            env.close()
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    (
+        "crystallization",
+        "cstr",
+        "extraction",
+        "heater",
+        "hvac",
+        "quadruple",
+        "three_tank",
+    ),
+)
+def test_training_disturbance_events_fit_unified_tracking_horizon(scenario):
+    env = make_env(scenario, randomize=True, disturbance=True)
+    try:
+        for seed in range(20):
+            _, info = env.reset(seed=seed)
+            spec = info["episode_spec"]
+            schedule = spec["disturbance_schedule"]
+            assert schedule
+            assert max(int(step) for step in schedule) < spec["horizon"]
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize(
+    ("scenario", "time_unit"),
+    (
+        ("crystallization", "s"),
+        ("cstr", "s"),
+        ("extraction", "h"),
+        ("heater", "s"),
+        ("hvac", "s"),
+        ("quadruple", "s"),
+        ("three_tank", "s"),
+    ),
+)
+def test_scenario_models_declare_equation_time_unit(scenario, time_unit):
+    env = make_env(scenario)
+    try:
+        assert env.unwrapped.model.time_unit == time_unit
+    finally:
+        env.close()
+
+
+def test_quadruple_default_training_episode_tracks_one_feasible_target_at_reset():
     env = make_env("quadruple")
     try:
         base_env = env.unwrapped
         episode = base_env.default_episode
-        target = episode.reference_schedule[300]
         initial_output = np.asarray(base_env.model.outputs(episode.initial_state))
-        initial_reference = np.asarray(episode.reference)
+        target = np.asarray(episode.reference)
 
         assert base_env.benchmark is None
         assert base_env.episode_family == "default"
-        assert episode.horizon == 600
-        assert episode.reference == pytest.approx((18.0, 8.0))
-        assert dict(episode.reference_schedule) == pytest.approx(
-            {300: (8.0, 18.0)}
-        )
-        assert np.all(np.abs(initial_reference - initial_output) >= 4.0)
+        assert episode.horizon == 180
+        assert episode.reference == pytest.approx((8.0, 18.0))
+        assert not episode.reference_schedule
+        assert np.all(np.abs(target - initial_output) >= 4.0)
 
-        initial_action = base_env.model.tracking_steady_state_action(
-            initial_reference
-        )
         target_action = base_env.model.tracking_steady_state_action(target)
-        assert initial_action is not None
         assert target_action is not None
-        assert np.all(np.asarray(initial_action) > 0.0)
-        assert np.all(np.asarray(initial_action) < 1.0)
         assert np.all(np.asarray(target_action) > 0.0)
         assert np.all(np.asarray(target_action) < 1.0)
     finally:
@@ -92,47 +307,41 @@ def test_quadruple_observation_contains_normalized_setpoint_not_error():
         assert observation[-2:] == pytest.approx(initial_reference / 20.0)
 
         action = np.asarray(env.unwrapped.model.default_action(), dtype=np.float32)
-        for _ in range(300):
-            observation, _, terminated, truncated, _ = env.step(action)
-            assert not terminated
-            assert not truncated
-        assert observation[-2:] == pytest.approx(np.asarray((8.0, 18.0)) / 20.0)
+        observation, _, terminated, truncated, _ = env.step(action)
+        assert not terminated
+        assert not truncated
+        assert observation[-2:] == pytest.approx(initial_reference / 20.0)
     finally:
         env.close()
 
 
-def test_three_tank_default_training_episode_has_staged_feasible_targets():
+def test_three_tank_default_training_episode_tracks_benchmark_seed_zero_at_reset():
     env = make_env("three_tank")
+    benchmark_env = make_env("three_tank", benchmark="tracking")
     try:
         base_env = env.unwrapped
         episode = base_env.default_episode
-        level_target = episode.reference_schedule[600]
+        _, benchmark_info = benchmark_env.reset(seed=0)
+        initial_output = np.asarray(base_env.model.outputs(episode.initial_state))
 
         assert base_env.benchmark is None
         assert base_env.episode_family == "default"
-        assert episode.horizon == 2400
-        assert tuple(episode.reference_schedule) == (600,)
-        assert episode.reference == pytest.approx(
-            base_env.model.outputs(episode.initial_state)
-        )
-        assert episode.reference == pytest.approx(
-            (0.225, 24.0, 0.225, 23.3582029683, 0.225, 22.8193817941)
-        )
-        assert level_target[0::2] == pytest.approx((0.225, 0.225, 0.375))
-        assert level_target[1::2] == pytest.approx(episode.reference[1::2])
+        assert episode.horizon == 600
+        assert not episode.reference_schedule
+        assert episode == benchmark_env.unwrapped.episode
+        assert benchmark_info["episode_parameters"] == {"case_seed": 0}
 
-        start_action = base_env.model.tracking_steady_state_action(
-            episode.reference
-        )
-        level_action = base_env.model.tracking_steady_state_action(level_target)
+        start_action = base_env.model.tracking_steady_state_action(initial_output)
+        target_action = base_env.model.tracking_steady_state_action(episode.reference)
         assert start_action is not None
-        assert level_action is not None
-        for action in (start_action, level_action):
+        assert target_action is not None
+        for action in (start_action, target_action):
             assert np.all(np.asarray(action) > 0.0)
             assert np.all(np.asarray(action) < 1.0)
-        assert level_action[4] == pytest.approx(start_action[4])
+        assert np.all(np.abs(np.asarray(episode.reference) - initial_output) >= 0.05)
     finally:
         env.close()
+        benchmark_env.close()
 
 
 def test_three_tank_regulation_tracks_only_levels():
@@ -146,11 +355,9 @@ def test_three_tank_regulation_tracks_only_levels():
         assert not terminated
         assert not truncated
         assert reward == pytest.approx(sum(info["reward_terms"].values()))
-        assert abs(reward) < 1e-6
+        assert info["reward_terms"]["tracking_error"] < 0.0
 
         equilibrium_state = np.asarray(env.unwrapped.default_episode.initial_state)
-        heated_state = equilibrium_state.copy()
-        heated_state[5] += 3.0
         reference = np.asarray(env.unwrapped.default_episode.reference)
         target_action = np.asarray(model.tracking_steady_state_action(reference))
         context = {
@@ -162,16 +369,11 @@ def test_three_tank_regulation_tracks_only_levels():
             "step_index": 0,
             "constraint_costs": {},
         }
-        one_channel_error, _ = env.unwrapped.reward.function(
-            equilibrium_state,
-            target_action,
-            heated_state,
-            context,
+        target_state = np.asarray(
+            model.tracking_steady_state_state(reference), dtype=float
         )
-        assert one_channel_error == pytest.approx(0.0)
-
-        raised_level_state = equilibrium_state.copy()
-        raised_level_state[4] += 0.1
+        raised_level_state = target_state.copy()
+        raised_level_state[2] += 0.1
         one_level_error, _ = env.unwrapped.reward.function(
             equilibrium_state,
             target_action,
@@ -185,7 +387,7 @@ def test_three_tank_regulation_tracks_only_levels():
         action_penalty, terms = env.unwrapped.reward.function(
             equilibrium_state,
             shifted_action,
-            equilibrium_state,
+            target_state,
             context,
         )
         assert terms["tracking_error"] == pytest.approx(0.0)
@@ -195,69 +397,37 @@ def test_three_tank_regulation_tracks_only_levels():
 
         unsafe_context = {
             **context,
-            "step_index": 670,
+            "step_index": 70,
             "constraint_costs": {"negative_level": 1.0},
         }
         unsafe_reward, unsafe_terms = env.unwrapped.reward.function(
             equilibrium_state,
             target_action,
-            equilibrium_state,
+            target_state,
             unsafe_context,
         )
-        assert unsafe_terms["early_termination"] == pytest.approx(-3458.0)
-        assert unsafe_reward == pytest.approx(-3458.0)
+        assert unsafe_terms["early_termination"] == pytest.approx(-1058.0)
+        assert unsafe_reward == pytest.approx(-1058.0)
     finally:
         env.close()
 
 
-def test_three_tank_thermal_regulation_still_tracks_temperature():
-    env = make_env("three_tank", reward="thermal_regulation")
-    try:
-        env.reset(seed=0)
-        base_env = env.unwrapped
-        equilibrium_state = np.asarray(base_env.default_episode.initial_state)
-        heated_state = equilibrium_state.copy()
-        heated_state[5] += 3.0
-        reference = np.asarray(base_env.default_episode.reference)
-        context = {
-            "model": base_env.model,
-            "reference": reference,
-            "control_dt": 1.0,
-            "episode": base_env.default_episode,
-            "step_index": 0,
-            "constraint_costs": {},
-        }
-        reward, _ = base_env.reward.function(
-            equilibrium_state,
-            base_env.model.default_action(),
-            heated_state,
-            context,
-        )
-        assert reward == pytest.approx(-1.0 / 6.0)
-    finally:
-        env.close()
-
-
-def test_quadruple_tracking_case_seeds_resolve_feasible_staged_equilibria():
+def test_quadruple_tracking_cases_start_tracking_one_feasible_target():
     env = make_env("quadruple", benchmark="tracking")
     specs = []
     try:
-        for seed in range(10):
+        for seed in range(20):
             _, info = env.reset(seed=seed)
             episode = env.unwrapped.episode
             specs.append(info["episode_spec"])
-            references = (
-                episode.reference,
-                episode.reference_schedule[120],
-                episode.reference_schedule[360],
-            )
+            start_reference = env.unwrapped.model.outputs(episode.initial_state)
+            references = (start_reference, episode.reference)
             reference_array = np.asarray(references)
 
-            assert episode.horizon == 600
-            assert tuple(episode.reference_schedule) == (120, 360)
+            assert episode.horizon == 180
+            assert not episode.reference_schedule
             assert np.all((7.0 <= reference_array) & (reference_array <= 16.0))
             assert np.all(np.abs(reference_array[1] - reference_array[0]) >= 3.0)
-            assert np.all(np.abs(reference_array[2] - reference_array[1]) >= 3.0)
 
             actions = [
                 env.unwrapped.model.tracking_steady_state_action(reference)
@@ -291,32 +461,34 @@ def test_quadruple_tracking_case_seeds_resolve_feasible_staged_equilibria():
     assert len({repr(spec) for spec in specs}) == len(specs)
 
 
-def test_three_tank_tracking_case_seeds_resolve_feasible_staged_equilibria():
+def test_three_tank_tracking_cases_start_tracking_one_feasible_target():
     env = make_env("three_tank", benchmark="tracking")
     specs = []
+    moves = []
     try:
-        for seed in range(10):
+        for seed in range(20):
             _, info = env.reset(seed=seed)
             episode = env.unwrapped.episode
             specs.append(info["episode_spec"])
-            level_target = episode.reference_schedule[600]
-            start_levels = np.asarray(episode.reference[0::2])
-            target_levels = np.asarray(level_target[0::2])
+            start_reference = env.unwrapped.model.outputs(episode.initial_state)
+            references = [start_reference, episode.reference]
+            level_sets = [np.asarray(reference) for reference in references]
 
-            assert episode.horizon == 2400
-            assert tuple(episode.reference_schedule) == (600,)
-            assert np.all((0.125 <= start_levels) & (start_levels <= 0.4))
-            assert np.all((0.125 <= target_levels) & (target_levels <= 0.4))
-            assert np.all(np.abs(target_levels - start_levels) >= 0.05)
-            assert level_target[1::2] == pytest.approx(episode.reference[1::2])
-            assert 20.5 <= episode.reference[5] <= 26.0
+            assert episode.horizon == 600
+            assert not episode.reference_schedule
+            assert all(
+                np.all((0.125 <= levels) & (levels <= 0.4))
+                for levels in level_sets
+            )
+            move = np.abs(level_sets[1] - level_sets[0])
+            assert np.all(move >= 0.05)
+            moves.extend(move.tolist())
 
             actions = [
                 env.unwrapped.model.tracking_steady_state_action(reference)
-                for reference in (episode.reference, level_target)
+                for reference in references
             ]
             assert all(action is not None for action in actions)
-            assert episode.initial_action == pytest.approx(actions[0])
             assert all(
                 np.all((0.02 <= np.asarray(action)) & (np.asarray(action) <= 0.85))
                 for action in actions
@@ -340,6 +512,7 @@ def test_three_tank_tracking_case_seeds_resolve_feasible_staged_equilibria():
     finally:
         env.close()
     assert len({repr(spec) for spec in specs}) == len(specs)
+    assert max(moves) > 0.12
 
 
 def test_three_tank_benchmarks_rank_safety_before_return():
@@ -385,7 +558,11 @@ def test_benchmarks_use_fixed_parameters_and_declared_reward(scenario):
     ("scenario", "parameters", "action"),
     (
         ("quadruple", {"pump_gain": [3.0, 3.1]}, [0.8, 0.2]),
-        ("three_tank", {"heater_power": 1800.0}, [0.5, 0.5, 0.5, 0.5, 1.0]),
+        (
+            "three_tank",
+            {"pump_flow_max": 20.0 / 60000.0},
+            [0.5, 0.5, 0.5, 0.5],
+        ),
     ),
 )
 def test_parameter_override_is_applied_before_dynamics_without_changing_interface(
@@ -418,7 +595,7 @@ def test_parameter_override_rejects_unknown_and_nonfinite_values(scenario):
     with pytest.raises(ValueError, match="unknown .* parameters"):
         make_env(scenario, parameters={"not_a_parameter": 1.0})
     with pytest.raises(ValueError, match="finite"):
-        name = "gravity" if scenario == "quadruple" else "heater_power"
+        name = "gravity" if scenario == "quadruple" else "pump_flow_max"
         make_env(scenario, parameters={name: float("nan")})
 
 
@@ -427,12 +604,3 @@ def test_parameter_override_rejects_physically_invalid_values():
         make_env("quadruple", parameters={"gamma": [1.2, 0.6]})
     with pytest.raises(ValueError, match="level parameters"):
         make_env("three_tank", parameters={"height_max": [0.3, 0.3, 0.3]})
-
-
-@pytest.mark.parametrize(
-    "legacy",
-    ("cascade/regulation", "cascade/economic", "cascade_recirculating/regulation"),
-)
-def test_removed_legacy_scenario_aliases_are_not_registered(legacy):
-    with pytest.raises(KeyError, match="unknown scenario"):
-        make_env(legacy)

@@ -8,9 +8,10 @@ import pytest
 
 import aiogym.scenarios  # noqa: F401
 from aiogym.controllers.base import make_controller
-from aiogym.controllers.policies import SB3CheckpointPolicy
 from aiogym.core.env import make_env
 from aiogym.core.rollout import rollout
+from aiogym.core.specs import EpisodeSpec
+from aiogym.rl.sb3 import SB3CheckpointPolicy
 
 
 @pytest.mark.parametrize("controller_id", ("pid", "mpc"))
@@ -60,13 +61,13 @@ def test_tank3_tracking_pid_and_mpc_use_the_physical_interface(controller_id):
         )
         assert len(result.transitions) == 120
         assert not result.transitions[-1].terminated
-        assert result.transitions[0].action.shape == (5,)
-        assert result.transitions[0].info["applied_action"].shape == (5,)
+        assert result.transitions[0].action.shape == (4,)
+        assert result.transitions[0].info["applied_action"].shape == (4,)
     finally:
         env.close()
 
 
-def test_three_tank_controller_config_routes_on_declared_reward():
+def test_three_tank_controller_config_is_shared_by_all_benchmarks():
     metadata = []
     for benchmark in (
         "tracking",
@@ -83,26 +84,20 @@ def test_three_tank_controller_config_routes_on_declared_reward():
             )
         finally:
             env.close()
-    assert metadata[1] == metadata[2]
-    level_pid, level_mpc = metadata[0]
-    thermal_pid, thermal_mpc = metadata[1]
-    assert max(abs(value) for row in level_pid["kp"] for value in row) == 32.0
-    assert level_pid["kp"][-1] == [0.0] * 6
-    assert level_pid["ki"][-1] == [0.0] * 6
-    assert level_mpc["q_y"] == [1.0, 0.0, 1.0, 0.0, 1.0, 0.0]
-    assert max(abs(value) for row in thermal_pid["kp"] for value in row) == 32.0
-    assert max(
-        abs(value) for row in thermal_pid["ki"][:4] for value in row
-    ) == pytest.approx(
-        0.04
+    assert metadata[0] == metadata[1] == metadata[2]
+    pid, mpc = metadata[0]
+    assert max(abs(value) for row in pid["kp"] for value in row) == 32.0
+    assert pid["kp"][-1] == pytest.approx([0.0, 0.0, -24.0])
+    assert pid["ki"][-1] == pytest.approx([0.0, 0.0, -0.06])
+    assert max(abs(value) for row in pid["ki"][:4] for value in row) == pytest.approx(
+        0.08
     )
-    assert thermal_mpc["q_y"] == [1.0] * 6
-    assert "feedforward" not in level_pid
-    assert level_mpc["feedforward_reseed"] == "setpoint_or_feedforward_change"
-    assert level_mpc["horizon"] == 60
-    assert level_mpc["move_supp"][:3] == [50.0] * 3
-    assert level_mpc["steady_input_weight"][:4] == [40.0] * 4
-    assert level_mpc["steady_input_weight"][-1] == pytest.approx(3.0)
+    assert mpc["q_y"] == [1.0] * 3
+    assert "feedforward" not in pid
+    assert mpc["feedforward_reseed"] == "setpoint_or_feedforward_change"
+    assert mpc["horizon"] == 60
+    assert mpc["move_supp"] == [50.0] * 4
+    assert mpc["steady_input_weight"] == [5.0] * 4
 
 
 def test_name_bound_pid_rejects_unknown_actuator_before_rollout():
@@ -131,6 +126,15 @@ def test_name_bound_pid_rejects_unknown_actuator_before_rollout():
 def test_mpc_can_reseed_when_disturbance_changes_steady_feedforward():
     env = make_env("three_tank", reward="regulation")
     try:
+        model = env.unwrapped.model
+        reference = tuple(model.default_setpoint_vector())
+        equilibrium_episode = EpisodeSpec(
+            initial_state=tuple(model.tracking_steady_state_state(reference)),
+            initial_action=tuple(model.tracking_steady_state_action(reference)),
+            reference=reference,
+            horizon=env.unwrapped.default_episode.horizon,
+            disturbances=model.default_disturbances(),
+        )
         policy = make_controller(
             "mpc",
             env=env,
@@ -141,7 +145,7 @@ def test_mpc_can_reseed_when_disturbance_changes_steady_feedforward():
                 "reseed_on_feedforward_change": True,
             },
         )
-        observation, info = env.reset(seed=0)
+        observation, info = env.reset(seed=0, options={"episode": equilibrium_episode})
         first = policy.act(observation, {"info": info})
         env.set_disturbances({"pump_flow_factor": 0.85})
         changed_info = {
@@ -164,8 +168,8 @@ def test_mpc_accepts_per_actuator_regularization_weights():
             "mpc",
             env=env,
             config={
-                "move_supp": [1.0, 1.0, 1.0, 1.0, 0.01],
-                "steady_input_weight": [0.1, 0.1, 0.1, 0.1, 0.0],
+                "move_supp": [1.0, 1.0, 1.0, 0.01],
+                "steady_input_weight": [0.1, 0.1, 0.1, 0.0],
             },
         )
         result = rollout(env, policy, seed=0, max_steps=2)
@@ -215,7 +219,7 @@ def test_pid_is_deterministic_for_a_repeated_benchmark_case_seed():
 
 def test_sb3_adapter_uses_predict_without_importing_sb3_at_module_import():
     code = (
-        "import sys; import aiogym.controllers.policies; "
+        "import sys; import aiogym.rl.sb3; "
         "assert 'stable_baselines3' not in sys.modules"
     )
     subprocess.run([sys.executable, "-c", code], check=True)
@@ -225,9 +229,7 @@ def test_sb3_adapter_uses_predict_without_importing_sb3_at_module_import():
             assert deterministic
             return np.asarray([0.25, 0.75], dtype=np.float32), None
 
-    policy = SB3CheckpointPolicy(
-        FakeModel(), algorithm="sac", checkpoint="fake.zip"
-    )
+    policy = SB3CheckpointPolicy(FakeModel(), algorithm="sac", checkpoint="fake.zip")
     action = policy.act(np.zeros(3), {})
     assert action.tolist() == pytest.approx([0.25, 0.75])
     assert policy.metadata()["algorithm"] == "sac"

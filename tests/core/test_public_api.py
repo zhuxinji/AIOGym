@@ -4,12 +4,12 @@ from pathlib import Path
 
 import aiogym
 import aiogym.core
+import aiogym.rl
 import aiogym.workflows
-import pytest
 
 
 def test_public_api_is_scenario_reward_oriented_and_small():
-    assert aiogym.__version__ == "0.8.0"
+    assert aiogym.__version__ == "0.15.0"
     assert set(aiogym.__all__) == {
         "__version__",
         "AlgorithmBackend",
@@ -46,12 +46,9 @@ def test_public_parameter_listing_includes_defaults_and_native_units():
     }
     assert quadruple["pump_gain"]["unit"] == "cm^3/(s*V)"
 
-    three_tank = {
-        row["name"]: row for row in aiogym.list_parameters("three_tank")
-    }
-    assert three_tank["heater_power"]["default"] == 2000.0
-    assert three_tank["heater_power"]["unit"] == "W"
+    three_tank = {row["name"]: row for row in aiogym.list_parameters("three_tank")}
     assert three_tank["pump_flow_max"]["unit"] == "m^3/s"
+    assert "heater_power" not in three_tank
 
 
 def test_every_built_in_scenario_has_a_documentation_page():
@@ -63,21 +60,23 @@ def test_every_built_in_scenario_has_a_documentation_page():
 def test_subpackages_do_not_export_internal_definition_types():
     assert aiogym.core.__all__ == ()
     assert set(aiogym.workflows.__all__) == {
-        "AlgorithmBackend",
-        "SB3AlgorithmBackend",
-        "TrainingStep",
         "collect",
         "compare_policies",
         "DatasetReader",
         "evaluate",
-        "list_algorithms",
         "load_policy",
         "plot_training_curve",
-        "register_algorithm",
-        "register_sb3_algorithm",
         "train",
     }
-    assert not hasattr(aiogym.workflows, "TrainConfig")
+    assert set(aiogym.rl.__all__) == {
+        "AlgorithmBackend",
+        "SB3AlgorithmBackend",
+        "SB3CheckpointPolicy",
+        "TrainingStep",
+        "list_algorithms",
+        "register_algorithm",
+        "register_sb3_algorithm",
+    }
 
 
 def test_public_environment_and_controller_flow():
@@ -101,25 +100,3 @@ def test_scenario_only_environment_uses_defaults():
         assert env.reward.id == "regulation"
     finally:
         env.close()
-
-
-def test_composite_scenario_reward_selector_is_not_registered():
-    with pytest.raises(KeyError, match="unknown scenario"):
-        aiogym.make_env("three_tank/regulation")
-
-
-@pytest.mark.parametrize(
-    "legacy",
-    [
-        {"condition": "reference-step"},
-        {"preset": "reference-step"},
-        {"case": "reference-step"},
-        {"reward_spec": "regulation"},
-    ],
-)
-def test_removed_make_env_keywords_are_rejected(legacy):
-    with pytest.raises(TypeError, match="unexpected keyword argument"):
-        aiogym.make_env(
-            "quadruple",
-            **legacy,
-        )

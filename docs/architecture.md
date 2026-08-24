@@ -36,11 +36,26 @@ resolved model + default/benchmark/training episode
 
 Every mode of one Scenario keeps the same observation and physical action
 meaning. `quadruple` uses a 6-dimensional observation and two pump actions.
-`three_tank` uses a 13-dimensional observation (six process-tank measurements,
-the dynamic reservoir temperature, and six controlled-output references) and
-five physical actions. Its controlled output remains the six process-tank
-level/temperature values in state order; reservoir temperature is a measured
-internal state without a setpoint.
+`three_tank` uses a 6-dimensional observation (three level measurements and
+three level references) and four physical actions. Its state and controlled
+output are both `[h1, h2, h3]`; temperature is absent from the model contract.
+Three-Tank exposes one `regulation`
+Reward, with the same `0.1 m` scale applied to all three levels in default
+training, randomized training, and every Benchmark.
+Its sampled tracking transitions preserve broad operating-point coverage. Each
+interior level move is at least `0.05 m`, with no additional move cap inside the
+declared `0.125--0.4 m` operating range; these Episode limits do not change
+observation or action meaning.
+Every Scenario's default training, randomized training, and fixed tracking
+Benchmark use one target from reset and the same Scenario-owned tracking
+horizon. Continuous-process tracking starts from a feasible operating point and
+immediately exposes a different target. Crystallization follows the same
+time-zero convention with a reachable finite-batch endpoint. Training and
+tracking therefore have no in-episode reference event; they remain distinct
+only in deterministic default-case selection, randomized training sampling,
+and fixed Benchmark case-seed ownership. Three-Tank intentionally resolves its
+deterministic default to the tracking Benchmark's seed-0 Episode while keeping
+the training environment itself non-Benchmark.
 
 Policy actions pass through optional action delay and loss-of-effectiveness.
 The base environment then applies an actuator slew limit only when the Scenario
@@ -94,32 +109,60 @@ Artifacts are deliberately small:
   `evaluation_history.json`, `best/model.zip`, and `best/tracking.svg`;
   behavior-cloning pretraining additionally writes `behavior_cloning.json`;
 - evaluation: one JSON file with raw per-seed trajectories and summaries;
-- comparison: `comparison.json` and `comparison.svg`; benchmark comparisons
-  default to `runs/<scenario>/<benchmark>/` and replace those two managed files.
+- comparison: compact `comparison.json`, `comparison.svg`, and compressed
+  `trajectories.npz`; benchmark comparisons default to
+  `runs/<scenario>/benchmarks/<benchmark>/` and replace those three managed
+  files.
+
+Physics models declare the time unit used by their numerical integration.
+Crystallization, CSTR, Heater, HVAC, Quadruple-Tank, and Three-Tank use seconds;
+Extraction uses hours. Evaluation carries this unit in its trajectory schema
+and comparison plots label every time axis from that schema.
+
+Local run artifacts are grouped first by Scenario and then by artifact type:
+training outputs use `runs/<scenario>/training/<run-name>/seed-<seed>/`, while
+formal comparisons use `runs/<scenario>/benchmarks/<benchmark>/`.
 
 There is one evaluation path. Without `benchmark=`, metrics come from Reward.
 With `benchmark=`, metrics and lexicographic ranking come from Benchmark.
 Comparison reuses those evaluation results, ranks metric medians, and overlays
 the complete trajectory from the first ordered seed. Its return panel retains
-one point for every evaluated seed plus the median, while the JSON keeps all
-trajectories and per-step summaries. Evaluation seeds are Benchmark case seeds;
-policy randomness is held at seed zero so a case seed does not simultaneously
-change both the plant case and controller random stream. Fixed episode factories
-may intentionally resolve several case seeds to the same episode.
+one point for every evaluated seed plus the median. The compact JSON retains all
+per-seed Episodes and metrics but only the plotted seed's trajectory; the NPZ
+archive holds every numeric trajectory as `float64` arrays. Its keys combine the
+entry id recorded in `trajectory_archive.entries` with a field name using
+`<entry-id>__<field>`, while `trajectory_archive.columns` defines vector and
+mapping columns. Evaluation seeds are Benchmark case seeds; policy randomness
+is held at seed zero so a case seed does not simultaneously change both the
+plant case and controller random stream. The built-in formal artifact protocol
+uses seeds `0--19`; every built-in Benchmark factory resolves those seeds to 20
+distinct physical Episodes.
 
+All trainable-algorithm contracts, SB3 integration, learned-policy adaptation,
+behavior cloning, and shipped RL configurations live under `aiogym.rl`.
 Training has one algorithm-backend boundary. A backend constructs and advances
 its model, reports one `TrainingStep` per environment transition, saves and
-loads its checkpoint payload, and exposes the live or loaded model as the
-existing public `Policy`. AIO-Gym wraps that payload in one `model.zip` format
+loads its trainable checkpoint payload, and exposes the live or loaded model as
+the existing public `Policy`. The payload retains model parameters, optimizer
+state, and algorithm-owned replay state. AIO-Gym wraps that payload in one
+`model.zip` format
 containing `manifest.json` and `payload.zip`; the manifest identifies the
-algorithm and training environment. Loading requires the target environment and
-validates its Scenario, Reward, parameters, control interval, and interface
-shapes before the backend payload is extracted. AIO-Gym remains responsible for
-the training curve, periodic
+algorithm, training environment, completed environment steps, seed, resolved
+algorithm configuration, and required Dataset identity. Loading requires the
+target environment and validates its Scenario, Reward, parameters, control
+interval, and interface shapes before the backend payload is extracted.
+
+`train(..., resume_from=...)` uses that same boundary to add the requested
+number of environment steps. It requires the checkpoint's algorithm,
+environment, seed, and resolved configuration, and writes a new empty output
+directory. The new training curve and periodic-evaluation history cover that
+invocation and use cumulative step coordinates beginning at the checkpoint's
+completed step. AIO-Gym remains responsible for the training curve, periodic
 evaluation, best-checkpoint selection, artifacts, evaluation, and comparison.
-The built-in DDPG/PPO/SAC/TD3 implementations use this same public contract as
-external backends. Any additional SB3 `BaseAlgorithm` subclass can use the
-shared adapter through `register_sb3_algorithm()`.
+The built-in DDPG/PPO/RLPD/SAC/TD3 implementations use this same public
+contract as external backends. RLPD is the native PyTorch backend; the other
+four use the shared SB3 adapter. Any additional SB3 `BaseAlgorithm` subclass
+can use `register_sb3_algorithm()`.
 
 Behavior cloning is an optional backend capability inside that same training
 path. It validates a Dataset against the target environment before invoking the
@@ -127,10 +170,16 @@ backend hook. The built-in DDPG/SAC/TD3 hook supervises
 `observation -> commanded_action` and then hands the same model to online
 learning. It does not define a second checkpoint or policy loader.
 
+RLPD declares that a Dataset is required and receives the validated
+`DatasetReader` in `AlgorithmBackend.learn()`. It uses observation, commanded
+action, reward, next observation, and termination semantics on every update,
+mixing fixed prior and growing online replay according to `offline_ratio`
+(`0.5` by default). Dataset compatibility is validated once by the training
+workflow.
+
 ## Experimental hardware
 
 Hardware transport, calibration, and real-log code lives under
 `aiogym.experimental.three_tank_hardware`. The hardware environment uses the
-Three-Tank tracking benchmark protocol, including its six-output steady
-references and measured reservoir temperature, and is not imported by the
-default package.
+Three-Tank tracking benchmark protocol, including its three level references,
+and is not imported by the default package.

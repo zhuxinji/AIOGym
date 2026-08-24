@@ -21,7 +21,6 @@ venv/
 .env
 runs/
 /datasets/
-/rl/checkpoints/
 *.log
 
 # Node / OS

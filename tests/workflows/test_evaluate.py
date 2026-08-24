@@ -64,6 +64,7 @@ def test_evaluate_preserves_seed_order_and_aggregates_metrics():
     assert len(result["episodes"][0]["trajectory"]["true_state"]) == 4
     assert result["trajectory_summary"]["output"]["samples"] == [2, 2, 2, 2]
     assert result["trajectory_schema"]["output"][0]["name"] == "lower_tank_1_level"
+    assert result["trajectory_schema"]["time_unit"] == "s"
     assert result["trajectory_schema"]["output"][0]["low"] == 0.0
     assert result["trajectory_schema"]["output"][0]["high"] == 20.0
 
@@ -164,7 +165,30 @@ def test_compare_matches_individual_evaluation_and_return_ordering(tmp_path):
     finally:
         env.close()
     assert comparison["seeds"] == [3, 4]
-    assert comparison["evaluations"]["pid"] == single
+    compact_pid = comparison["evaluations"]["pid"]
+    assert compact_pid["aggregate"] == single["aggregate"]
+    assert compact_pid["policy"] == single["policy"]
+    assert compact_pid["episodes"][0]["trajectory"] == single["episodes"][0][
+        "trajectory"
+    ]
+    assert "trajectory" not in compact_pid["episodes"][1]
+    assert "trajectory_summary" not in compact_pid
+    archive = comparison["trajectory_archive"]
+    archived_seed_4 = next(
+        entry
+        for entry in archive["entries"]
+        if entry["policy"] == "pid" and entry["seed"] == 4
+    )
+    with np.load(tmp_path / "comparison" / archive["file"], allow_pickle=False) as data:
+        prefix = archived_seed_4["id"]
+        np.testing.assert_allclose(
+            data[f"{prefix}__true_state"],
+            single["episodes"][1]["trajectory"]["true_state"],
+        )
+        np.testing.assert_allclose(
+            data[f"{prefix}__reward"],
+            single["episodes"][1]["trajectory"]["reward"],
+        )
     medians = {
         label: result["aggregate"]["return"]["median"]
         for label, result in comparison["evaluations"].items()
@@ -250,7 +274,7 @@ def test_quadruple_pid_safely_completes_tracking_benchmark():
         env.close()
 
     assert all(not episode["terminated"] for episode in result["episodes"])
-    assert result["aggregate"]["episode_length"]["mean"] == 600.0
+    assert result["aggregate"]["episode_length"]["mean"] == 180.0
     assert result["aggregate"]["tracking_iae"]["mean"] < 20.0
 
 
@@ -274,7 +298,13 @@ def test_compare_uses_reward_direction_and_writes_json_and_svg(tmp_path):
     assert result["ranking_metrics"] == [
         {"name": "return", "direction": "maximize"}
     ]
+    assert result["schema_version"] == "aiogym.comparison.v4"
     assert result["trajectory_seed"] == 0
+    assert result["trajectory_archive"]["schema_version"] == (
+        "aiogym.trajectory-archive.v1"
+    )
+    assert result["trajectory_archive"]["file"] == "trajectories.npz"
+    assert len(result["trajectory_archive"]["entries"]) == 4
     assert result["ordering"] == sorted(
         medians, key=lambda label: (-medians[label], label)
     )
@@ -313,22 +343,6 @@ def test_compare_uses_reward_direction_and_writes_json_and_svg(tmp_path):
         first_level,
     )
     assert level_ticks == ["0", "0.167", "0.333", "0.5"]
-    temperature_ticks = []
-    for tank in (1, 2, 3):
-        panel = svg.split(
-            f">Output: tank_{tank}_temperature [degC]</text>",
-            1,
-        )[1]
-        panel = panel.split('<text class="panel-title"', 1)[0]
-        temperature_ticks.append(
-            re.findall(
-                r'<text class="tick" text-anchor="end" x="68\.0" '
-                r'y="[^"]+">([^<]+)</text>',
-                panel,
-            )
-        )
-    assert len(temperature_ticks[0]) == 4
-    assert temperature_ticks[1:] == temperature_ticks[:1] * 2
     first_action = svg.split(">Applied action: pump_P101 [fraction]</text>", 1)[1]
     first_action = first_action.split('<text class="panel-title"', 1)[0]
     action_ticks = re.findall(
@@ -339,6 +353,7 @@ def test_compare_uses_reward_direction_and_writes_json_and_svg(tmp_path):
     assert sorted(path.name for path in output.iterdir()) == [
         "comparison.json",
         "comparison.svg",
+        "trajectories.npz",
     ]
 
     env = make_env("three_tank")
@@ -359,11 +374,14 @@ def test_compare_places_changing_disturbances_above_balanced_main_columns(tmp_pa
     output = tmp_path / "disturbance-comparison"
     env = make_env("three_tank", benchmark="disturbance-rejection")
     try:
+        disturbance_start = min(
+            env.unwrapped.default_episode.disturbance_schedule
+        )
         compare_policies(
             env=env,
             policies={"pid": "pid", "hold": "hold"},
             seeds=(0,),
-            max_steps=701,
+            max_steps=disturbance_start + 1,
             output=output,
         )
     finally:
@@ -384,9 +402,90 @@ def test_compare_places_changing_disturbances_above_balanced_main_columns(tmp_pa
         "Output: tank_1_level [m]"
     ) in svg
     assert (
-        '<text class="panel-title" x="76.0" y="795">'
+        '<text class="panel-title" x="76.0" y="570">'
         "Applied action: pump_P101 [fraction]"
     ) in svg
+
+
+@pytest.mark.parametrize("benchmark", ("tracking", "boundary-safety"))
+def test_three_tank_hydraulic_benchmarks_use_compact_plot_layout(
+    tmp_path,
+    benchmark,
+):
+    output = tmp_path / benchmark
+    env = make_env("three_tank", benchmark=benchmark)
+    try:
+        compare_policies(
+            env=env,
+            policies={"pid": "pid", "hold": "hold"},
+            seeds=(0,),
+            max_steps=2,
+            output=output,
+        )
+    finally:
+        env.close()
+    svg = (output / "comparison.svg").read_text(encoding="utf-8")
+    assert 'width="1440" height="1060"' in svg
+    titles = re.findall(
+        r'<text class="panel-title" x="[^"]+" y="([^"]+)">([^<]+)</text>',
+        svg,
+    )
+    assert [title for y, title in titles if y == "120"] == [
+        "Output: tank_1_level [m]",
+        "Output: tank_2_level [m]",
+        "Output: tank_3_level [m]",
+    ]
+    assert [title for y, title in titles if y == "345"] == [
+        "Applied action: pump_P101 [fraction]",
+        "Applied action: valve_V12 [fraction]",
+        "Applied action: valve_V23 [fraction]",
+        "Applied action: valve_V34 [fraction]",
+    ]
+    assert [title for y, title in titles if y == "570"] == [
+        "Closest level-boundary distance [m]"
+    ]
+    assert [title for y, title in titles if y == "797"] == [
+        "Cumulative return by policy"
+    ]
+
+
+def test_extraction_tracking_uses_model_time_and_balanced_plot_layout(tmp_path):
+    output = tmp_path / "extraction-tracking"
+    env = make_env("extraction", benchmark="tracking")
+    try:
+        result = compare_policies(
+            env=env,
+            policies={"pid": "pid", "mpc": "mpc"},
+            seeds=(0,),
+            max_steps=2,
+            output=output,
+        )
+    finally:
+        env.close()
+
+    assert result["trajectory_schema"]["time_unit"] == "h"
+    svg = (output / "comparison.svg").read_text(encoding="utf-8")
+    ET.parse(output / "comparison.svg")
+    assert 'width="1440" height="1060"' in svg
+    assert ">time [h]</text>" in svg
+    assert ">time [s]</text>" not in svg
+    titles = re.findall(
+        r'<text class="panel-title" x="([^"]+)" y="([^"]+)">([^<]+)</text>',
+        svg,
+    )
+    assert [title for _x, y, title in titles if y == "120"] == [
+        "Output: stage_5_liquid_concentration [fraction]"
+    ]
+    assert [title for _x, y, title in titles if y == "345"] == [
+        "Applied action: liquid_feed_flow [normalized_flow]",
+        "Applied action: gas_feed_flow [normalized_flow]",
+    ]
+    assert [title for _x, y, title in titles if y == "570"] == [
+        "Closest state-boundary distance [fraction]"
+    ]
+    assert [title for _x, y, title in titles if y == "797"] == [
+        "Cumulative return by policy"
+    ]
 
 
 def test_compare_uses_benchmark_declared_lexicographic_ranking(
@@ -409,7 +508,13 @@ def test_compare_uses_benchmark_declared_lexicographic_ranking(
         {"name": "return", "direction": "maximize"},
     ]
     assert "return" in result["evaluations"]["pid"]["aggregate"]
-    output = tmp_path / "runs" / "quadruple" / "disturbance-rejection"
+    output = (
+        tmp_path
+        / "runs"
+        / "quadruple"
+        / "benchmarks"
+        / "disturbance-rejection"
+    )
     assert json.loads((output / "comparison.json").read_text(encoding="utf-8")) == result
     ET.parse(output / "comparison.svg")
     svg = (output / "comparison.svg").read_text(encoding="utf-8")
@@ -430,12 +535,15 @@ def test_compare_uses_benchmark_declared_lexicographic_ranking(
     assert sorted(path.name for path in output.iterdir()) == [
         "comparison.json",
         "comparison.svg",
+        "trajectories.npz",
     ]
 
 
 def test_compare_default_output_preserves_unmanaged_entries(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    output = tmp_path / "runs" / "three-tank" / "tracking"
+    output = (
+        tmp_path / "runs" / "three-tank" / "benchmarks" / "tracking"
+    )
     output.mkdir(parents=True)
     (output / "notes.txt").write_text("keep", encoding="utf-8")
     env = make_env("three_tank", benchmark="tracking")
@@ -451,6 +559,7 @@ def test_compare_default_output_preserves_unmanaged_entries(tmp_path, monkeypatc
     assert (output / "notes.txt").read_text(encoding="utf-8") == "keep"
     assert (output / "comparison.json").is_file()
     assert (output / "comparison.svg").is_file()
+    assert (output / "trajectories.npz").is_file()
 
 
 def test_compare_requires_explicit_output_without_benchmark():

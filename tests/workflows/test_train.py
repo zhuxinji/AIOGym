@@ -14,15 +14,17 @@ pytestmark = pytest.mark.rl
 
 import aiogym
 from aiogym import load_policy, make_env, plot_training_curve, train
-from aiogym.workflows import algorithms as algorithm_registry
-from aiogym.workflows.algorithms import get_algorithm
+from aiogym.rl import algorithms as algorithm_registry
+from aiogym.rl.algorithms import get_algorithm
+from aiogym.workflows._checkpoint import load_training_checkpoint
 from aiogym.workflows.train import _is_better_training_evaluation
 
 
 SMALL_POLICY = {"policy_kwargs": {"net_arch": [8, 8]}}
-THREE_TANK_SAC_PROFILE = json.loads(
+THREE_TANK_SAC_CONFIG = json.loads(
     (
         Path(__file__).resolve().parents[2]
+        / "aiogym"
         / "rl"
         / "configs"
         / "three-tank-sac-nstep10.json"
@@ -51,11 +53,14 @@ def test_off_policy_training_saves_loads_and_predicts(tmp_path):
     finally:
         env.close()
 
-    assert result["schema_version"] == "aiogym.training.v8"
+    assert result["schema_version"] == "aiogym.training.v10"
     assert result["checkpoint_schema"] == "aiogym.checkpoint.v2"
     assert result["algorithm"] == "sac"
     assert result["steps"] == 2
+    assert result["initial_steps"] == 0
+    assert result["added_steps"] == 2
     assert result["actual_steps"] == 2
+    assert result["resume_from"] is None
     assert result["seed"] == 4
     assert result["record_every"] == 500
     assert result["evaluation"] is None
@@ -85,7 +90,8 @@ def test_off_policy_training_saves_loads_and_predicts(tmp_path):
     curve = json.loads(
         (output / "training_curve.json").read_text(encoding="utf-8")
     )
-    assert curve["schema_version"] == "aiogym.training_curve.v1"
+    assert curve["schema_version"] == "aiogym.training_curve.v2"
+    assert curve["initial_steps"] == 0
     assert [row["end_step"] for row in curve["records"]] == [2]
     assert [row["transition_count"] for row in curve["records"]] == [2]
     with zipfile.ZipFile(output / "model.zip") as checkpoint:
@@ -95,7 +101,129 @@ def test_off_policy_training_saves_loads_and_predicts(tmp_path):
     assert manifest["algorithm"] == "sac"
     assert manifest["environment"] == metadata["environment"]
     assert manifest["runtime"]["model_class"] == "stable_baselines3.sac.sac:SAC"
+    assert manifest["policy"]["training"] == {
+        "completed_steps": 2,
+        "seed": 4,
+        "algorithm_kwargs": result["algorithm_kwargs"],
+        "dataset": None,
+    }
     ET.parse(output / "training_curve.svg")
+
+
+def test_sac_training_continues_optimizer_and_replay_state(tmp_path):
+    env = make_env("quadruple")
+    config = {
+        **SMALL_POLICY,
+        "batch_size": 2,
+        "buffer_size": 32,
+        "learning_starts": 0,
+    }
+    first_output = tmp_path / "first"
+    continued_output = tmp_path / "continued"
+    try:
+        first = train(
+            env=env,
+            algorithm="sac",
+            steps=3,
+            seed=6,
+            algorithm_kwargs=config,
+            record_every=2,
+            output=first_output,
+        )
+        _, _, first_model, first_state = load_training_checkpoint(
+            first["checkpoint"], env=env, algorithm="sac"
+        )
+        first_parameters = [
+            value.detach().cpu().clone()
+            for value in first_model.actor.parameters()
+        ]
+
+        continued = train(
+            env=env,
+            algorithm="sac",
+            steps=2,
+            resume_from=first["checkpoint"],
+            record_every=1,
+            output=continued_output,
+        )
+        _, _, continued_model, continued_state = load_training_checkpoint(
+            continued["checkpoint"], env=env, algorithm="sac"
+        )
+    finally:
+        env.close()
+
+    curve = json.loads(
+        (continued_output / "training_curve.json").read_text(encoding="utf-8")
+    )
+    assert first_state["completed_steps"] == 3
+    assert continued["initial_steps"] == 3
+    assert continued["added_steps"] == 2
+    assert continued["actual_steps"] == 5
+    assert continued["resume_from"] == str(
+        (first_output / "model.zip").resolve()
+    )
+    assert continued["algorithm_kwargs"] == first["algorithm_kwargs"]
+    assert continued_state["completed_steps"] == 5
+    assert continued_model.num_timesteps == 5
+    assert continued_model.replay_buffer.size() == 5
+    assert curve["initial_steps"] == 3
+    assert [row["start_step"] for row in curve["records"]] == [3, 4]
+    assert [row["end_step"] for row in curve["records"]] == [4, 5]
+    assert any(
+        not np.array_equal(before.numpy(), after.detach().cpu().numpy())
+        for before, after in zip(first_parameters, continued_model.actor.parameters())
+    )
+
+
+def test_continued_training_rejects_changed_seed_or_configuration(tmp_path):
+    env = make_env("quadruple")
+    randomized_env = make_env("quadruple", randomize=True)
+    try:
+        result = train(
+            env=env,
+            algorithm="sac",
+            steps=1,
+            seed=3,
+            algorithm_kwargs=SMALL_POLICY,
+            output=tmp_path / "first",
+        )
+        with pytest.raises(ValueError, match="seed must match"):
+            train(
+                env=env,
+                algorithm="sac",
+                steps=1,
+                seed=4,
+                resume_from=result["checkpoint"],
+                output=tmp_path / "seed-mismatch",
+            )
+        with pytest.raises(ValueError, match="algorithm_kwargs must match"):
+            train(
+                env=env,
+                algorithm="sac",
+                steps=1,
+                algorithm_kwargs={"policy_kwargs": {"net_arch": [4, 4]}},
+                resume_from=result["checkpoint"],
+                output=tmp_path / "config-mismatch",
+            )
+        with pytest.raises(ValueError, match="checkpoint algorithm"):
+            train(
+                env=env,
+                algorithm="td3",
+                steps=1,
+                resume_from=result["checkpoint"],
+                output=tmp_path / "algorithm-mismatch",
+            )
+        with pytest.raises(ValueError, match="checkpoint randomize"):
+            train(
+                env=randomized_env,
+                algorithm="sac",
+                steps=1,
+                resume_from=result["checkpoint"],
+                output=tmp_path / "environment-mismatch",
+            )
+    finally:
+        randomized_env.close()
+        env.close()
 
 
 def test_checkpoint_rejects_incompatible_model_parameters(tmp_path):
@@ -169,6 +297,20 @@ def test_training_periodically_evaluates_and_saves_best_checkpoint(tmp_path):
     assert result["best_tracking_figure"] == str(tracking_figure.resolve())
     assert result["evaluation"]["seed"] == 7
     assert result["evaluation"]["tracking_figure"] == "best/tracking.svg"
+
+    continuation_env = make_env("quadruple")
+    try:
+        continued = train(
+            env=continuation_env,
+            algorithm="sac",
+            steps=1,
+            resume_from=result["best_checkpoint"],
+            output=tmp_path / "continued-best",
+        )
+    finally:
+        continuation_env.close()
+    assert continued["initial_steps"] == result["evaluation"]["best_step"]
+    assert continued["actual_steps"] == continued["initial_steps"] + 1
 
 
 def test_training_evaluation_never_prefers_short_unsafe_episode():
@@ -248,8 +390,8 @@ def test_ddpg_training_accepts_ornstein_uhlenbeck_noise(tmp_path):
     )
 
 
-def test_three_tank_sac_profile_matches_experimental_training_configuration():
-    assert THREE_TANK_SAC_PROFILE == {
+def test_three_tank_sac_config_matches_experimental_training_configuration():
+    assert THREE_TANK_SAC_CONFIG == {
         "batch_size": 256,
         "buffer_size": 100000,
         "gamma": 0.9995,

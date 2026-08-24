@@ -1,0 +1,227 @@
+"""Episode factories and formal benchmarks for the two-input CSTR."""
+from __future__ import annotations
+
+import numpy as np
+
+from aiogym.core.specs import Benchmark, EpisodeSpec
+from aiogym.scenarios._metrics import regulation_episode_metrics
+
+
+_TRACKING_CONCENTRATION_RANGE = (0.02, 0.20)
+_TRACKING_TEMPERATURE_RANGE_C = (50.0, 82.0)
+_MINIMUM_TRACKING_MOVE = np.asarray([0.02, 5.0], dtype=float)
+_BOUNDARY_CONCENTRATION_RANGE = (0.02, 0.04)
+_BOUNDARY_TEMPERATURE_RANGE_C = (86.0, 90.0)
+_TRACKING_ACTION_RANGE = (0.05, 0.95)
+_BOUNDARY_INITIAL_PROBABILITY = 0.20
+_MAXIMUM_SAMPLING_ATTEMPTS = 100
+_TRACKING_HORIZON = 225
+
+
+def make_default_episode(model) -> EpisodeSpec:
+    target_reference = (0.075, 72.0)
+    return EpisodeSpec(
+        initial_state=tuple(model.initial_state()),
+        initial_action=tuple(model.default_action()),
+        reference=target_reference,
+        horizon=_TRACKING_HORIZON,
+        disturbances=model.default_disturbances(),
+    )
+
+
+def _tracking_episode(model, rng) -> EpisodeSpec:
+    start = _sample_tracking_equilibrium(model, rng)
+    target = _sample_tracking_equilibrium(
+        model,
+        rng,
+        previous_reference=start["reference"],
+    )
+    return EpisodeSpec(
+        initial_state=start["state"],
+        initial_action=start["action"],
+        reference=target["reference"],
+        horizon=_TRACKING_HORIZON,
+        disturbances=model.default_disturbances(),
+    )
+
+
+def _sample_tracking_equilibrium(model, rng, *, previous_reference=None):
+    for _attempt in range(_MAXIMUM_SAMPLING_ATTEMPTS):
+        reference = np.asarray(
+            [
+                rng.uniform(*_TRACKING_CONCENTRATION_RANGE),
+                rng.uniform(*_TRACKING_TEMPERATURE_RANGE_C),
+            ],
+            dtype=float,
+        )
+        if previous_reference is not None and np.any(
+            np.abs(reference - previous_reference) < _MINIMUM_TRACKING_MOVE
+        ):
+            continue
+        action = model.tracking_steady_state_action(reference)
+        state = model.tracking_steady_state_state(reference)
+        if action is None or state is None:
+            continue
+        action_values = np.asarray(action, dtype=float)
+        state_values = np.asarray(state, dtype=float)
+        lower, upper = _TRACKING_ACTION_RANGE
+        derivative = np.asarray(
+            model.dynamics(state, action, model.default_disturbances()),
+            dtype=float,
+        )
+        if (
+            np.any(action_values < lower)
+            or np.any(action_values > upper)
+            or np.any(state_values < np.asarray([0.0, 0.0]))
+            or np.any(state_values > np.asarray([1.5, 200.0]))
+            or not np.allclose(model.outputs(state), reference, rtol=0.0, atol=1e-12)
+            or not np.allclose(derivative, 0.0, rtol=0.0, atol=1e-12)
+        ):
+            continue
+        return {
+            "state": tuple(float(value) for value in state),
+            "action": tuple(float(value) for value in action),
+            "reference": tuple(float(value) for value in reference),
+        }
+    raise ValueError(
+        "could not sample a feasible CSTR tracking equilibrium within "
+        f"{_MAXIMUM_SAMPLING_ATTEMPTS} attempts"
+    )
+
+
+def _disturbance_episode(model, rng) -> EpisodeSpec:
+    defaults = model.default_disturbances()
+    start = int(rng.integers(100, 181))
+    duration = int(rng.integers(100, 181))
+    return EpisodeSpec(
+        initial_state=tuple(model.initial_state()),
+        initial_action=tuple(model.default_action()),
+        reference=tuple(model.default_setpoint_vector()),
+        horizon=400,
+        disturbances=defaults,
+        disturbance_schedule={
+            start: {
+                "feed_temperature": float(rng.uniform(12.0, 32.0)),
+                "feed_concentration": float(rng.uniform(0.75, 1.30)),
+                "coolant_temperature": float(rng.uniform(5.0, 20.0)),
+            },
+            start + duration: defaults,
+        },
+    )
+
+
+def _boundary_episode(model, rng) -> EpisodeSpec:
+    boundary = _sample_boundary_equilibrium(model, rng)
+    return EpisodeSpec(
+        initial_state=boundary["state"],
+        initial_action=boundary["action"],
+        reference=tuple(model.default_setpoint_vector()),
+        horizon=100,
+        disturbances=model.default_disturbances(),
+    )
+
+
+def sample_training_episode(model, rng, reward_id) -> tuple[EpisodeSpec, str]:
+    if reward_id != "regulation":
+        raise ValueError(f"unsupported CSTR training reward {reward_id!r}")
+    target = _sample_tracking_equilibrium(model, rng)
+    if rng.random() < _BOUNDARY_INITIAL_PROBABILITY:
+        boundary = _sample_boundary_equilibrium(model, rng)
+        episode = EpisodeSpec(
+            initial_state=boundary["state"],
+            initial_action=boundary["action"],
+            reference=target["reference"],
+            horizon=_TRACKING_HORIZON,
+            disturbances=model.default_disturbances(),
+        )
+    else:
+        start = _sample_tracking_equilibrium(
+            model,
+            rng,
+            previous_reference=target["reference"],
+        )
+        episode = EpisodeSpec(
+            initial_state=start["state"],
+            initial_action=start["action"],
+            reference=target["reference"],
+            horizon=_TRACKING_HORIZON,
+            disturbances=model.default_disturbances(),
+        )
+    return episode, "tracking"
+
+
+def _sample_boundary_equilibrium(model, rng):
+    for _attempt in range(_MAXIMUM_SAMPLING_ATTEMPTS):
+        reference = (
+            float(rng.uniform(*_BOUNDARY_CONCENTRATION_RANGE)),
+            float(rng.uniform(*_BOUNDARY_TEMPERATURE_RANGE_C)),
+        )
+        action = model.tracking_steady_state_action(reference)
+        state = model.tracking_steady_state_state(reference)
+        if action is None or state is None:
+            continue
+        return {
+            "state": tuple(float(value) for value in state),
+            "action": tuple(float(value) for value in action),
+            "reference": reference,
+        }
+    raise ValueError(
+        "could not sample a feasible CSTR boundary equilibrium within "
+        f"{_MAXIMUM_SAMPLING_ATTEMPTS} attempts"
+    )
+
+
+def sample_training_disturbance(model, rng):
+    defaults = model.default_disturbances()
+    start = int(rng.integers(50, 91))
+    duration = int(rng.integers(50, 91))
+    return {
+        start: {
+            "feed_temperature": float(rng.uniform(12.0, 32.0)),
+            "feed_concentration": float(rng.uniform(0.75, 1.30)),
+            "coolant_temperature": float(rng.uniform(5.0, 20.0)),
+        },
+        start + duration: defaults,
+    }
+
+
+BENCHMARKS = {
+    "tracking": Benchmark(
+        id="tracking",
+        reward_id="regulation",
+        episode_factory=_tracking_episode,
+        metric_function=regulation_episode_metrics,
+        ranking_metrics=(
+            ("unsafe_rate", "minimize"),
+            ("return", "maximize"),
+        ),
+    ),
+    "disturbance-rejection": Benchmark(
+        id="disturbance-rejection",
+        reward_id="regulation",
+        episode_factory=_disturbance_episode,
+        metric_function=regulation_episode_metrics,
+        ranking_metrics=(
+            ("unsafe_rate", "minimize"),
+            ("return", "maximize"),
+        ),
+    ),
+    "boundary-safety": Benchmark(
+        id="boundary-safety",
+        reward_id="regulation",
+        episode_factory=_boundary_episode,
+        metric_function=regulation_episode_metrics,
+        ranking_metrics=(
+            ("unsafe_rate", "minimize"),
+            ("return", "maximize"),
+        ),
+    ),
+}
+
+
+__all__ = [
+    "BENCHMARKS",
+    "make_default_episode",
+    "sample_training_disturbance",
+    "sample_training_episode",
+]

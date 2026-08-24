@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aiogym"
-version = "0.8.0"
+version = "0.15.0"
 description = "Scenario-oriented process-control models, rewards, datasets, and workflows."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -65,3 +65,6 @@ aiogym = "aiogym.cli.main:main"
 [tool.setuptools.packages.find]
 include = ["aiogym*"]
 exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+"aiogym.rl" = ["configs/*.json"]
