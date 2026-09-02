@@ -1,0 +1,213 @@
+{
+  "generated_at": "2026-09-02T03:04:08.274769+00:00",
+  "protocol": {
+    "benchmarks": [
+      "tracking",
+      "boundary-safety",
+      "disturbance-rejection"
+    ],
+    "classical_policies": [
+      "pid",
+      "mpc"
+    ],
+    "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19
+    ],
+    "three_tank_additional_policies": [
+      "ddpg",
+      "ppo",
+      "rlpd",
+      "sac",
+      "td3"
+    ]
+  },
+  "release": {
+    "assets": [
+      {
+        "bytes": 171835,
+        "name": "aiogym-0.30.0-py3-none-any.whl",
+        "sha256": "c7757e26e30e0eb1be73df1a429c3b7736b7b853bcfa37d61a8130c9372625a1"
+      },
+      {
+        "bytes": 164291,
+        "name": "aiogym-0.30.0.tar.gz",
+        "sha256": "0a555541ffada1887d085ce7df93d6d221f878a033d9f2fcb2b4e406f35b573c"
+      },
+      {
+        "bytes": 46630482,
+        "name": "aiogym-v0.30.0-benchmarks.tar.gz",
+        "sha256": "8d7f164dbe2814ecc6e764399a5b977416dcf840e2518618b6a0e7f9c2e5d769"
+      },
+      {
+        "bytes": 51828116,
+        "name": "aiogym-v0.30.0-three-tank-checkpoints.tar.gz",
+        "sha256": "b6ba567836ba3192570580cbcb77e00c287e491064ab39059766dffee164add7"
+      },
+      {
+        "bytes": 7352898,
+        "name": "aiogym-v0.30.0-three-tank-rlpd-dataset.tar.gz",
+        "sha256": "8160cca385c6d9bb8f7ba4b60e405c39eb1c88827aab1944121a82b385fc42ba"
+      }
+    ],
+    "tag": "v0.30.0",
+    "url": "https://github.com/zhuxinji/AIO-gym/releases/tag/v0.30.0"
+  },
+  "repository_files": [
+    {
+      "bytes": 3998,
+      "path": "README.md",
+      "sha256": "14ed87dec3f5897383ccf0278b54d46a9889cd1d9cedf544296f4eabe785996d"
+    },
+    {
+      "bytes": 328693,
+      "path": "figures/cascade/boundary-safety.svg",
+      "sha256": "deb3b9ec3b63c855db5297688a6f083c837652f7da1daf40cbb8eef23183d04b"
+    },
+    {
+      "bytes": 578878,
+      "path": "figures/cascade/disturbance-rejection.svg",
+      "sha256": "a78671f6d3a2afa3587226d5e46890b846a3445501ee84b770b79f7b28538fb0"
+    },
+    {
+      "bytes": 1061115,
+      "path": "figures/cascade/tracking.svg",
+      "sha256": "a388476f1c8f942ff954cf1a6ff857c2f8a364977ac6af53735709d51b77c67c"
+    },
+    {
+      "bytes": 29831,
+      "path": "figures/crystallization/boundary-safety.svg",
+      "sha256": "6fae917454895e2084d58bc812c73f53d4c8dfc5be3c05561102130d54342dc6"
+    },
+    {
+      "bytes": 39939,
+      "path": "figures/crystallization/disturbance-rejection.svg",
+      "sha256": "05a963a89b0dd013a77688ade5bf81835dfa32ca33d2f897ad68194078c6af06"
+    },
+    {
+      "bytes": 22719,
+      "path": "figures/crystallization/tracking.svg",
+      "sha256": "0a240801a525c0fc8edfd68dbafd18da8424b78da333b2bd41cf1b9e508a7a7d"
+    },
+    {
+      "bytes": 34612,
+      "path": "figures/cstr/boundary-safety.svg",
+      "sha256": "54eeee009dd1af5f6339e5cb8fc8880831862501290ad04325cdfaae75daa866"
+    },
+    {
+      "bytes": 109577,
+      "path": "figures/cstr/disturbance-rejection.svg",
+      "sha256": "e02768cb822b1752f4a3fa5f4367a44c88a0319778b4e8ef802ec0ddb99016b8"
+    },
+    {
+      "bytes": 56126,
+      "path": "figures/cstr/tracking.svg",
+      "sha256": "24ef923d87facc37475afc8bb06e9a08ae62b9423473abe1046b46e5d83901d8"
+    },
+    {
+      "bytes": 28501,
+      "path": "figures/extraction/boundary-safety.svg",
+      "sha256": "de090b4c3eed6a7ac0f682cbdf0b7884f45264b29de407a8dcd7396b91cade0f"
+    },
+    {
+      "bytes": 121476,
+      "path": "figures/extraction/disturbance-rejection.svg",
+      "sha256": "7377e98a74b8ac78dd972f193ef7bdb604a8d4dbd7065ee7bc151765ea1d123f"
+    },
+    {
+      "bytes": 28549,
+      "path": "figures/extraction/tracking.svg",
+      "sha256": "c3a3b73fc372b6f5a42548017b3015f5bd231eadbd25ed75f5c2fe68f61b88df"
+    },
+    {
+      "bytes": 94626,
+      "path": "figures/heater/boundary-safety.svg",
+      "sha256": "34cd278c28daec3275f507f781bdf5bed3d735eaf6bdd23af56e60613824a432"
+    },
+    {
+      "bytes": 185413,
+      "path": "figures/heater/disturbance-rejection.svg",
+      "sha256": "2d08a1d9e35e3e7afc77ffe46f745be2a4a4881afd9baa750bf06a4a1fb0d426"
+    },
+    {
+      "bytes": 68878,
+      "path": "figures/heater/tracking.svg",
+      "sha256": "11eeeaea0d00e5876e6ac8634e1e3262b2ad3adf3415a45988644da56a0cca85"
+    },
+    {
+      "bytes": 27677,
+      "path": "figures/hvac/boundary-safety.svg",
+      "sha256": "c573aef3b4ebd81206e489cc4f85f81ea0c68502fcd74157931f51d950f9a947"
+    },
+    {
+      "bytes": 73603,
+      "path": "figures/hvac/disturbance-rejection.svg",
+      "sha256": "86dc0ba2f88c37f33c0ea8757bc1d572354d332b3df571033bf28cac2eda596f"
+    },
+    {
+      "bytes": 27731,
+      "path": "figures/hvac/tracking.svg",
+      "sha256": "6373d316fb1db24aece51ab8e6ab7501584efd918b27760e558566edb48ae9c3"
+    },
+    {
+      "bytes": 48287,
+      "path": "figures/quadruple/boundary-safety.svg",
+      "sha256": "c84c25bf971dd7dfeb9e10467e1754f956a92f82fa4e017599c2169dea0badb7"
+    },
+    {
+      "bytes": 112696,
+      "path": "figures/quadruple/disturbance-rejection.svg",
+      "sha256": "d3849b66be3674d1567c93d253f483a6c1af3706e629425ceb01fadc9e4b7f01"
+    },
+    {
+      "bytes": 48281,
+      "path": "figures/quadruple/tracking.svg",
+      "sha256": "21d5151bb464de4e572828fd8893c85871c99d3d138624cb6813e5b47ffbdade"
+    },
+    {
+      "bytes": 546571,
+      "path": "figures/three-tank/boundary-safety.svg",
+      "sha256": "de3c02c97b4725d658979cc41a8222f6f20aab8d41a5405b949af022040bce2e"
+    },
+    {
+      "bytes": 555528,
+      "path": "figures/three-tank/disturbance-rejection.svg",
+      "sha256": "90376a94ee963c3682e97e14793e09ab8f9ee3df608ba83a37ca625602be9bc6"
+    },
+    {
+      "bytes": 546557,
+      "path": "figures/three-tank/tracking.svg",
+      "sha256": "a3d0f28b424f0195169cd191de18f4b1ec1b3ccde7ad64bce1d3c91826de878c"
+    },
+    {
+      "bytes": 145869,
+      "path": "summary.json",
+      "sha256": "37acb1d801bd528867a8dfc4bc2309fe1d92a78c9ed0c9cf0dd057d7d8613381"
+    }
+  ],
+  "schema_version": "aiogym.benchmark-publication-manifest.v1",
+  "source": {
+    "git_commit": "bb176a327907e42f2349836a7d613e84129c1668",
+    "git_dirty": false,
+    "package": "aiogym",
+    "version": "0.30.0"
+  }
+}
