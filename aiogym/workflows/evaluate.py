@@ -17,7 +17,7 @@ from aiogym.core.rollout import rollout
 
 from ._metadata import environment_metadata
 
-EVALUATION_SCHEMA_VERSION = "aiogym.evaluation.v3"
+EVALUATION_SCHEMA_VERSION = "aiogym.evaluation.v4"
 
 
 def evaluate(
@@ -116,7 +116,15 @@ def evaluate(
         "max_steps": rollout_limit,
         "trajectory_schema": _trajectory_schema(base_env, episodes),
         "ranking_metrics": [
-            {"name": name, "direction": direction}
+            {
+                "name": name,
+                "direction": direction,
+                "aggregate": (
+                    "mean"
+                    if name in {"unsafe_rate", "safe_completion", "settling_rate"}
+                    else "median"
+                ),
+            }
             for name, direction in ranking_metrics
         ],
         "episodes": episodes,

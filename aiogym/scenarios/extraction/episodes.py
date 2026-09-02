@@ -4,13 +4,14 @@ from __future__ import annotations
 import numpy as np
 
 from aiogym.core.specs import Benchmark, EpisodeSpec
+from aiogym.scenarios._boundary import forward_preroll
 from aiogym.scenarios._metrics import regulation_episode_metrics
 
 
 _TRACKING_RANGE = (0.12, 0.44)
 _MINIMUM_TRACKING_MOVE = 0.05
 _TRACKING_ACTION_RANGE = (0.05, 0.95)
-_BOUNDARY_INITIAL_PROBABILITY = 0.20
+_BOUNDARY_CONCENTRATION_RANGE = (0.01, 0.04)
 _MAXIMUM_SAMPLING_ATTEMPTS = 100
 _TRACKING_HORIZON = 100
 
@@ -103,21 +104,30 @@ def _disturbance_episode(model, rng) -> EpisodeSpec:
 
 
 def _boundary_episode(model, rng) -> EpisodeSpec:
-    boundary_reference = (float(rng.uniform(0.01, 0.04)),)
-    initial_state = model.tracking_steady_state_state(boundary_reference)
-    initial_action = model.tracking_steady_state_action(boundary_reference)
-    if initial_state is None or initial_action is None:
-        raise ValueError("extraction boundary operating point is infeasible")
+    boundary = _sample_boundary_preroll(model, rng)
     return EpisodeSpec(
-        initial_state=tuple(initial_state),
-        initial_action=tuple(initial_action),
+        initial_state=boundary["state"],
+        initial_action=boundary["action"],
         reference=tuple(model.default_setpoint_vector()),
         horizon=100,
         disturbances=model.default_disturbances(),
     )
 
 
-def sample_training_episode(model, rng, reward_id) -> tuple[EpisodeSpec, str]:
+def _sample_boundary_preroll(model, rng):
+    target = float(rng.uniform(*_BOUNDARY_CONCENTRATION_RANGE))
+    return forward_preroll(
+        model,
+        command=(0.0, float(rng.uniform(0.95, 1.0))),
+        reached=lambda state: float(state[8]) <= target,
+        control_dt=0.1,
+        maximum_steps=100,
+    )
+
+
+def sample_training_episode(
+    model, rng, reward_id, boundary: bool
+) -> tuple[EpisodeSpec, str]:
     if reward_id != "regulation":
         raise ValueError(f"unsupported extraction training reward {reward_id!r}")
     target = _sample_tracking_equilibrium(
@@ -125,17 +135,11 @@ def sample_training_episode(model, rng, reward_id) -> tuple[EpisodeSpec, str]:
         rng,
         previous_reference=tuple(model.default_setpoint_vector()),
     )
-    if rng.random() < _BOUNDARY_INITIAL_PROBABILITY:
-        boundary_reference = (float(rng.uniform(0.01, 0.04)),)
-        initial_state = model.tracking_steady_state_state(boundary_reference)
-        initial_action = model.tracking_steady_state_action(boundary_reference)
-        if initial_state is None or initial_action is None:
-            raise ValueError(
-                "sampled extraction boundary operating point is infeasible"
-            )
+    if boundary:
+        boundary_case = _sample_boundary_preroll(model, rng)
         episode = EpisodeSpec(
-            initial_state=tuple(initial_state),
-            initial_action=tuple(initial_action),
+            initial_state=boundary_case["state"],
+            initial_action=boundary_case["action"],
             reference=target["reference"],
             horizon=_TRACKING_HORIZON,
             disturbances=model.default_disturbances(),
@@ -148,7 +152,7 @@ def sample_training_episode(model, rng, reward_id) -> tuple[EpisodeSpec, str]:
             horizon=_TRACKING_HORIZON,
             disturbances=model.default_disturbances(),
         )
-    return episode, "tracking"
+    return episode, "boundary-prerun" if boundary else "interior"
 
 
 def sample_training_disturbance(model, rng):

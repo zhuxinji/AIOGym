@@ -325,31 +325,6 @@ class HeaterModel(PhysicsModelBase):
         operating_point = self._steady_operating_point(reference, disturbances)
         return None if operating_point is None else operating_point["state"]
 
-    def observation_schema(self):
-        return [
-            *(
-                {**row, "kind": "measurement", "low": 0.0, "high": 1.0}
-                for row in self.state_schema()
-            ),
-            *(
-                {
-                    **row,
-                    "name": f"{row['name']}_setpoint",
-                    "kind": "reference",
-                    "low": 0.0,
-                    "high": 1.0,
-                }
-                for row in self.output_schema()
-            ),
-        ]
-
-    def observation(self, state, reference, previous_action, disturbances):
-        del previous_action, disturbances
-        return [
-            *_normalized(state, self.state_schema()),
-            *_normalized(reference, self.output_schema()),
-        ]
-
     def measurement(self, state, disturbances=None):
         context = self._resolve_disturbances(
             {} if disturbances is None else disturbances
@@ -361,18 +336,6 @@ class HeaterModel(PhysicsModelBase):
             "temps": [float(state[0]), float(state[1])],
             **context,
         }
-
-    def measurement_from_observation(self, observation, disturbances=None):
-        values = np.asarray(observation, dtype=float).reshape(-1)
-        expected = len(self.observation_schema())
-        if values.shape != (expected,) or not np.isfinite(values).all():
-            raise ValueError("heater policy observation must match observation_schema")
-        state_rows = self.state_schema()
-        state_dimension = len(state_rows)
-        low = np.asarray([row["low"] for row in state_rows], dtype=float)
-        high = np.asarray([row["high"] for row in state_rows], dtype=float)
-        state = low + values[:state_dimension] * (high - low)
-        return self.measurement(state, disturbances)
 
     def clamp_state(self, state):
         return [float(value) for value in state]
@@ -434,13 +397,6 @@ class HeaterModel(PhysicsModelBase):
             "feed_flow": float(context["feed_flow"]),
             "fuel_heating_value_factor": float(context["fuel_heating_value_factor"]),
         }
-
-
-def _normalized(values, rows):
-    return [
-        (float(value) - float(row["low"])) / (float(row["high"]) - float(row["low"]))
-        for value, row in zip(values, rows)
-    ]
 
 
 def _resolved_parameters(defaults, overrides):

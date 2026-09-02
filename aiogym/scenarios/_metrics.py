@@ -14,6 +14,7 @@ def regulation_episode_metrics(
     *,
     output_scale=None,
     output_indices=None,
+    settling_tolerance=None,
 ) -> dict[str, float]:
     trace = _episode_trace(
         env,
@@ -25,6 +26,10 @@ def regulation_episode_metrics(
     matrix = np.asarray(trace["errors"], dtype=float)
     if matrix.size:
         absolute = np.abs(matrix)
+        tolerance = _normalized_settling_tolerance(
+            settling_tolerance,
+            trace["output_scale"],
+        )
         metrics.update(
             {
                 "tracking_iae": float(np.sum(absolute) * trace["dt"]),
@@ -37,7 +42,11 @@ def regulation_episode_metrics(
                 ),
                 "overshoot": float(np.max(np.maximum(matrix, 0.0))),
                 "final_error": float(np.max(absolute[-1])),
-                "settling_time": _settling_time(absolute, trace["dt"]),
+                "settling_time": _settling_time(
+                    absolute,
+                    trace["dt"],
+                    tolerance=tolerance,
+                ),
             }
         )
         event_steps = sorted(
@@ -55,6 +64,7 @@ def regulation_episode_metrics(
                 absolute,
                 trace["dt"],
                 start_step=last,
+                tolerance=tolerance,
             )
     return metrics
 
@@ -92,6 +102,7 @@ def _episode_trace(
         "constraint_violation_cost": 0.0,
     }
     errors = []
+    selected_scale = None
     minimum_safety_margin = math.inf
     first_violation_step = None
     for transition in transitions:
@@ -113,6 +124,9 @@ def _episode_trace(
         normalized_error = (output - reference) / scale
         if selected is not None:
             normalized_error = normalized_error[selected]
+            selected_scale = scale[selected]
+        else:
+            selected_scale = scale
         errors.append(normalized_error)
     step_count = len(transitions)
     metrics.update(
@@ -132,6 +146,7 @@ def _episode_trace(
         "dt": dt,
         "metrics": metrics,
         "errors": errors,
+        "output_scale": selected_scale,
     }
 
 
@@ -154,6 +169,20 @@ def _output_scale(env, size, *, output_scale=None):
     if values.shape != (size,) or not np.all(values > 0):
         raise ValueError("controlled output scales must be positive and match outputs")
     return values
+
+
+def _normalized_settling_tolerance(settling_tolerance, output_scale):
+    if settling_tolerance is None:
+        return 0.02
+    scale = np.asarray(output_scale, dtype=float).reshape(-1)
+    tolerance = np.asarray(settling_tolerance, dtype=float).reshape(-1)
+    if tolerance.shape != scale.shape:
+        raise ValueError(
+            "settling_tolerance must match the selected controlled outputs"
+        )
+    if not np.all(np.isfinite(tolerance)) or np.any(tolerance <= 0.0):
+        raise ValueError("settling_tolerance values must be finite and positive")
+    return tolerance / scale
 
 
 def _settling_time(absolute_errors, dt, tolerance=0.02):

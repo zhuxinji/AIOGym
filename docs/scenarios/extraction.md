@@ -1,9 +1,9 @@
 # Multistage extraction model
 
 The built-in `extraction` Scenario models a five-stage counter-current
-liquid-gas extraction column. It implements the nonlinear stage balances from
-the PC-Gym `multistage_extraction` model inside the current Scenario, Reward,
-Benchmark, controller, Dataset, and training workflow.
+liquid-gas extraction column. It adapts the nonlinear stage balances from the
+PC-Gym `multistage_extraction` model for simulation, PID/MPC control, Dataset
+collection, RL training, and fixed Benchmark comparisons.
 
 The physical interface is:
 
@@ -32,10 +32,10 @@ counter-current column equilibrium, and then solves the liquid action required
 for the target. Infeasible targets return no operating point instead of
 clipping the state or action.
 
-The deterministic training Episode starts from this `CX5=0.30` equilibrium and
+The deterministic training episode starts from this `CX5=0.30` equilibrium and
 immediately tracks `CX5=0.40` for 100 steps, or 10 h.
 
-## Source and evidence boundary
+## Model source and intended use
 
 The Scenario uses the five-stage equations and parameters declared by the
 upstream PC-Gym source. Its extraction training case uses liquid/gas action
@@ -70,15 +70,17 @@ physically inconsistent mappings fail at environment construction.
 
 ## Benchmarks
 
-```bash
-aiogym list benchmarks --scenario extraction
+```python
+import aiogym
+
+print(aiogym.list_benchmarks("extraction"))
 ```
 
 | Benchmark | Fixed protocol | Horizon | Ranking |
 |---|---|---:|---|
 | `tracking` | exact `CX5=0.30` equilibrium start that immediately tracks one case-seeded target | 100 steps / 10 h | unsafe rate, cumulative return |
 | `disturbance-rejection` | case-seeded feed concentrations, mass transfer, event time, and recovery time | 580 steps / 58 h | unsafe rate, cumulative return |
-| `boundary-safety` | case-seeded exact `CX5=0.01--0.04` equilibrium near the lower state boundary, followed by a `0.30` target | 100 steps / 10 h | unsafe rate, cumulative return |
+| `boundary-safety` | normal state is forward pre-run with minimum liquid and near-maximum gas flow until `CX5` reaches a case-seeded `0.01--0.04` lower boundary, followed by a `0.30` target | 100 steps / 10 h | unsafe rate, cumulative return |
 
 Tracking targets are sampled in `0.12--0.44`, with at least a `0.05` move from
 the initial output; tracking begins on the first control step. The model derives
@@ -91,23 +93,24 @@ Disturbance cases begin at step `140--240` and last `200--320` steps. They
 sample liquid feed concentration in `0.45--0.75`, gas feed concentration in
 `0.02--0.09`, and mass-transfer coefficient in `3.5--6.5`. Boundary cases
 sample an exact low-concentration equilibrium in `0.01--0.04`. Seeds `0--19`
-resolve to 20 distinct Episodes for all three Benchmarks.
+select 20 distinct episodes for all three Benchmarks.
 
-The latest possible disturbance recovery event is at 56 h; the 58 h horizon
-also exceeds the observed maximum 1.3 h post-event recovery. Boundary cases
-settled within 0.5 h, so their 10 h horizon matches tracking without losing the
-safety transient.
+The latest possible disturbance restoration is at 56 h, leaving a 2 h response
+window inside the 58 h protocol. Boundary safety uses the same 10 h window as
+tracking.
 
 ## Training variation
 
-`randomize=True` starts most episodes from the exact default equilibrium and
-immediately tracks one feasible target. Twenty percent start from an exact
-low-concentration equilibrium in `0.01--0.04`. All training Episodes use the
-tracking Benchmark's 100-step horizon. `disturbance=True` samples all three
+`randomize=True` starts every episode from the exact default interior equilibrium
+by default and immediately tracks one feasible target. Setting
+`boundary_probability=p` makes fraction `p` start from the same minimum-liquid,
+high-gas forward pre-run used by the `0.01--0.04`
+low-concentration boundary Benchmark. All training episodes use the tracking
+Benchmark's 100-step horizon. `disturbance=True` samples all three
 physical disturbances, begins at step `23--40`, and lasts `33--53` steps. Noise, delay, and
 actuator loss-of-effectiveness remain the shared optional channel variations.
 
-## Controllers and workflows
+## Quick start and controllers
 
 The extraction PI configuration uses `(Kp, Ki, Kd) = (2.2, 6.0, 0)` on the liquid-flow
 channel and zero gains on the gas-flow channel. The MPC uses a `0.01 h`
@@ -129,29 +132,7 @@ result = aiogym.compare_policies(
 env.close()
 ```
 
-The ordinary environment also follows the common
-`collect -> train -> save/load -> evaluate/compare` workflow. Short automated
-SAC runs verify that path but are not learned-controller performance evidence.
-
-## Current controller comparison
-
-The active local comparison artifacts under `runs/extraction/benchmarks/` contain PI and
-MPC only. Each Benchmark uses 20 distinct cases (`0--19`), for 120 evaluated
-controller Episodes. Every Episode completed its full horizon with
-`unsafe_rate = 0`.
-
-| Benchmark | PI median return | MPC median return | PI median IAE | MPC median IAE | Ranking |
-|---|---:|---:|---:|---:|---|
-| `tracking` | -0.003285 | -0.000126 | 0.061720 | 0.004720 | MPC, PI |
-| `disturbance-rejection` | -0.001629 | -0.000029 | 0.059744 | 0.002689 | MPC, PI |
-| `boundary-safety` | -0.014926 | -0.000240 | 0.061299 | 0.007056 | MPC, PI |
-
-The smallest normalized state safety margin over all formal runs was
-`0.042336`. These deterministic simulator baselines do not establish column
-calibration, robustness to parameter uncertainty, or learned-policy
-performance.
-
-The tracking comparison figure uses hours on every trajectory axis. Its
-compact layout places the controlled output across
-the first row, the two flow actions side by side, and the normalized closest
-state-boundary distance across the third row before the return distribution.
+Use the common [Quickstart](../quickstart.md) for Dataset collection and RL
+training with `scenario = "extraction"`. Generated comparison figures and
+trajectories use hours, matching this model's native time unit; current scores
+remain in `runs/extraction/benchmarks/<benchmark>/comparison.json`.

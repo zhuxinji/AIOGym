@@ -29,8 +29,8 @@ class EpisodeSpec:
     """One fully resolved process episode.
 
     This is an internal runtime value. Public environment selection is expressed
-    through ``benchmark=``, ``randomize=True``, or ``disturbance=True`` rather
-    than named episodes.
+    through ``benchmark=``, ``randomize=True``, ``disturbance=True``, or a
+    direct ``disturbance_schedule`` rather than named episodes.
     """
 
     initial_state: tuple[float, ...]

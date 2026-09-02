@@ -35,8 +35,9 @@ from .training_curve import (
 )
 
 
-TRAINING_SCHEMA_VERSION = "aiogym.training.v10"
-TRAINING_EVALUATION_SCHEMA_VERSION = "aiogym.training_evaluation.v1"
+TRAINING_SCHEMA_VERSION = "aiogym.training.v12"
+TRAINING_EVALUATION_SCHEMA_VERSION = "aiogym.training_evaluation.v2"
+DEFAULT_VALIDATION_SEEDS = tuple(range(1_000, 1_020))
 
 
 def train(
@@ -50,7 +51,6 @@ def train(
     record_every: int = 500,
     evaluation_env=None,
     evaluate_every: int | None = None,
-    evaluation_seed: int = 0,
     dataset: str | Path | None = None,
     behavior_cloning_epochs: int | None = None,
     behavior_cloning_batch_size: int = 256,
@@ -69,9 +69,6 @@ def train(
         None
         if evaluate_every is None
         else _positive_integer("evaluate_every", evaluate_every)
-    )
-    resolved_evaluation_seed = _nonnegative_integer(
-        "evaluation_seed", evaluation_seed
     )
     _validate_evaluation_env(env, evaluation_env, resolved_evaluate_every)
     requested_kwargs = copy.deepcopy(
@@ -213,7 +210,7 @@ def train(
             env=evaluation_env,
             checkpoint_env=env,
             evaluate_every=resolved_evaluate_every,
-            seed=resolved_evaluation_seed,
+            seeds=DEFAULT_VALIDATION_SEEDS,
             best_checkpoint=directory / "best" / "model.zip",
             initial_steps=initial_steps,
             checkpoint_state=checkpoint_state,
@@ -284,7 +281,7 @@ def train(
         best_evaluation = evaluate(
             env=evaluation_env,
             policy=best_policy,
-            seeds=[resolved_evaluation_seed],
+            seeds=DEFAULT_VALIDATION_SEEDS,
         )
         best_tracking_figure = best_checkpoint.parent / "tracking.svg"
         trajectory_report = {
@@ -299,7 +296,7 @@ def train(
                 trajectory_report,
                 title=(
                     f"{best_evaluation['environment']['scenario']} {key.upper()} "
-                    "best policy - fixed training case"
+                    "best policy - validation cases"
                 ),
             ),
             encoding="utf-8",
@@ -307,10 +304,17 @@ def train(
         evaluation_metadata = {
             "environment": environment_metadata(evaluation_env),
             "evaluate_every": resolved_evaluate_every,
-            "seed": resolved_evaluation_seed,
+            "seeds": list(DEFAULT_VALIDATION_SEEDS),
             "ranking_metric": evaluation_history["ranking_metric"],
+            "selection_order": evaluation_history["selection_order"],
             "best_step": evaluation_history["best_step"],
             "best_value": evaluation_history["best_value"],
+            "best_safe_completion": evaluation_history[
+                "best_safe_completion"
+            ],
+            "best_worst_case_value": evaluation_history[
+                "best_worst_case_value"
+            ],
             "tracking_figure": "best/tracking.svg",
         }
 
@@ -465,8 +469,8 @@ def _validate_evaluation_env(training_env, evaluation_env, evaluate_every):
         raise ValueError("training evaluation does not accept a Benchmark env")
     training_metadata = environment_metadata(training_env)
     evaluation_metadata = environment_metadata(evaluation_env)
-    if evaluation_metadata["randomize"]:
-        raise ValueError("training evaluation env must not randomize episodes")
+    if not evaluation_metadata["randomize"]:
+        raise ValueError("training evaluation env must use randomize=True")
     for channel in ("disturbance", "noise", "delay", "fault"):
         if evaluation_metadata[channel] is not None:
             raise ValueError(
@@ -488,7 +492,7 @@ class _TrainingEvaluationRecorder:
         env,
         checkpoint_env,
         evaluate_every,
-        seed,
+        seeds,
         best_checkpoint,
         initial_steps,
         checkpoint_state,
@@ -498,7 +502,7 @@ class _TrainingEvaluationRecorder:
         self._env = env
         self._checkpoint_env = checkpoint_env
         self._evaluate_every = evaluate_every
-        self._seed = seed
+        self._seeds = tuple(seeds)
         self._best_checkpoint = best_checkpoint
         self._initial_steps = initial_steps
         self._checkpoint_state = checkpoint_state
@@ -525,7 +529,7 @@ class _TrainingEvaluationRecorder:
             self._model,
             checkpoint=self._best_checkpoint,
         )
-        result = evaluate(env=self._env, policy=policy, seeds=[self._seed])
+        result = evaluate(env=self._env, policy=policy, seeds=self._seeds)
         ranking = result["ranking_metrics"][0]
         metric = ranking["name"]
         direction = ranking["direction"]
@@ -535,15 +539,44 @@ class _TrainingEvaluationRecorder:
         elif metric != self._ranking_metric or direction != self._direction:
             raise ValueError("training evaluation ranking metric changed")
         value = float(result["aggregate"][metric]["median"])
-        episode = result["episodes"][0]
+        episodes = result["episodes"]
+        metric_values = np.asarray(
+            [episode["metrics"][metric] for episode in episodes],
+            dtype=float,
+        )
+        worst_quantile = 0.90 if direction == "minimize" else 0.10
+        worst_case_value = float(np.quantile(metric_values, worst_quantile))
+        safe_completion = float(
+            np.mean([not episode["terminated"] for episode in episodes])
+        )
+        episode_length = float(
+            np.mean([episode["length"] for episode in episodes])
+        )
         record = {
             "step": int(step),
             "value": value,
-            "episode_return": float(episode["return"]),
-            "episode_length": int(episode["length"]),
-            "terminated": bool(episode["terminated"]),
-            "truncated": bool(episode["truncated"]),
-            "metrics": dict(episode["metrics"]),
+            "worst_case_value": worst_case_value,
+            "safe_completion": safe_completion,
+            "episode_length": episode_length,
+            "episodes": [
+                {
+                    "seed": int(episode["seed"]),
+                    "return": float(episode["return"]),
+                    "length": int(episode["length"]),
+                    "terminated": bool(episode["terminated"]),
+                    "truncated": bool(episode["truncated"]),
+                    "metrics": dict(episode["metrics"]),
+                    "episode_spec": copy.deepcopy(episode["episode_spec"]),
+                    "episode_family": episode["episode_family"],
+                    "episode_parameters": copy.deepcopy(
+                        episode["episode_parameters"]
+                    ),
+                    "runtime_variation": copy.deepcopy(
+                        episode["runtime_variation"]
+                    ),
+                }
+                for episode in episodes
+            ],
         }
         self._records.append(record)
         improved = _is_better_training_evaluation(
@@ -571,7 +604,7 @@ class _TrainingEvaluationRecorder:
         return {
             "schema_version": TRAINING_EVALUATION_SCHEMA_VERSION,
             "evaluate_every": int(self._evaluate_every),
-            "seed": int(self._seed),
+            "seeds": list(self._seeds),
             "ranking_metric": {
                 "name": self._ranking_metric,
                 "direction": self._direction,
@@ -580,12 +613,23 @@ class _TrainingEvaluationRecorder:
                 {"name": "safe_completion", "direction": "maximize"},
                 {"name": "episode_length", "direction": "maximize"},
                 {
+                    "name": "worst_case_quantile",
+                    "quantile": 0.90 if self._direction == "minimize" else 0.10,
+                    "direction": self._direction,
+                },
+                {
                     "name": self._ranking_metric,
                     "direction": self._direction,
                 },
             ],
             "best_step": int(self._best_step),
             "best_value": float(self._best_value),
+            "best_safe_completion": float(
+                self._records[self._best_index]["safe_completion"]
+            ),
+            "best_worst_case_value": float(
+                self._records[self._best_index]["worst_case_value"]
+            ),
             "records": list(self._records),
         }
 
@@ -593,12 +637,18 @@ class _TrainingEvaluationRecorder:
 def _is_better_training_evaluation(candidate, best, metric_direction):
     if best is None:
         return True
-    candidate_completion = not candidate["terminated"]
-    best_completion = not best["terminated"]
-    if candidate_completion != best_completion:
-        return candidate_completion
+    if candidate["safe_completion"] != best["safe_completion"]:
+        return candidate["safe_completion"] > best["safe_completion"]
     if candidate["episode_length"] != best["episode_length"]:
         return candidate["episode_length"] > best["episode_length"]
+    if candidate["worst_case_value"] != best["worst_case_value"]:
+        if metric_direction == "minimize":
+            return candidate["worst_case_value"] < best["worst_case_value"]
+        if metric_direction == "maximize":
+            return candidate["worst_case_value"] > best["worst_case_value"]
+        raise ValueError(
+            "training evaluation metric direction must be minimize or maximize"
+        )
     if metric_direction == "minimize":
         return candidate["value"] < best["value"]
     if metric_direction == "maximize":

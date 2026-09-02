@@ -4,9 +4,75 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
+
 
 # Volumetric heat capacity of liquid water, J/(m3*K).
 RHO_CP = 4_186_000.0
+
+
+def apply_action_slew(model, previous_action, requested_action):
+    """Apply one model-owned action slew step."""
+
+    previous = np.asarray(previous_action, dtype=float).reshape(-1)
+    requested = np.asarray(requested_action, dtype=float).reshape(-1)
+    if previous.shape != requested.shape:
+        raise ValueError("previous and requested actions must have matching shapes")
+    limits = model.action_slew_limits()
+    if limits is None:
+        return requested.copy()
+    maximum_step = np.asarray(limits, dtype=float).reshape(-1)
+    if (
+        maximum_step.shape != requested.shape
+        or not np.isfinite(maximum_step).all()
+        or np.any(maximum_step < 0.0)
+    ):
+        raise ValueError("model action slew limits must match actions")
+    return np.clip(requested, previous - maximum_step, previous + maximum_step)
+
+
+def integrate_process_state(
+    model,
+    state,
+    action,
+    disturbances,
+    *,
+    duration,
+):
+    """Advance one process state with the same RK4 cadence used by the Env."""
+
+    interval = float(duration)
+    if not math.isfinite(interval) or interval <= 0.0:
+        raise ValueError("integration duration must be finite and positive")
+    result = np.asarray(state, dtype=float).reshape(-1)
+    applied = np.asarray(action, dtype=float).reshape(-1)
+    if result.shape != (len(model.initial_state()),) or not np.isfinite(result).all():
+        raise ValueError("integration state must match the model state dimension")
+    if not np.isfinite(applied).all():
+        raise ValueError("integration action must contain finite values")
+    maximum_step = float(model.dt_micro)
+    substeps = max(1, math.ceil(interval / maximum_step - 1e-12))
+    step = interval / substeps
+
+    def derivative(values):
+        output = np.asarray(
+            model.dynamics(values, applied, disturbances=disturbances),
+            dtype=float,
+        ).reshape(-1)
+        if output.shape != result.shape:
+            raise ValueError("model dynamics shape does not match state shape")
+        return output
+
+    for _ in range(substeps):
+        k1 = derivative(result)
+        k2 = derivative(result + 0.5 * step * k1)
+        k3 = derivative(result + 0.5 * step * k2)
+        k4 = derivative(result + step * k3)
+        result = result + (step / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+        result = np.asarray(model.clamp_state(result), dtype=float)
+        if not np.isfinite(result).all():
+            raise FloatingPointError("model produced a non-finite state")
+    return result
 
 
 def _copy_value(v):
@@ -17,6 +83,7 @@ class PhysicsModelBase:
     """Shared vector, schema, disturbance, and numerical operations."""
 
     time_unit = "s"
+    reference_observation_suffix = "setpoint"
     state_names = ()
     state_units = {}
     state_bounds = {}
@@ -97,9 +164,6 @@ class PhysicsModelBase:
             )
         return values
 
-    def default_action(self):
-        return [0.5] * self.action_dim()
-
     def state_vector(self, x):
         """Return the generic state vector x used by controllers and simulators."""
         return [float(v) for v in x]
@@ -116,31 +180,6 @@ class PhysicsModelBase:
         """Generic continuous numeric dynamics ``dx/dt = f(x, u, env)``."""
         context = {} if disturbances is None else disturbances
         return self._dynamics(self.state_vector(x), self.action_vector(u), context)
-
-    def outputs(self, x):
-        """Return the controlled-output vector derived from state ``x``."""
-
-        return self.state_vector(x)
-
-    def measurement(self, x, env=None):
-        """Measured state dict exposed to controllers.
-
-        Controllers should use x/y generically; scenario-specific consumers can
-        also inspect levels, temps, conc, and disturbance names.
-        """
-        state = self.state_vector(x)
-        display = self.display_outputs(state)
-        measured = {
-            "x": state,
-            "levels": list(display["levels"]),
-            "temps": list(display["temps"]),
-            "y": list(self.outputs(state)),
-        }
-        for key, value in display.items():
-            if key not in measured:
-                measured[key] = value
-        context = {} if env is None else dict(env)
-        return {**measured, **context}
 
     def output_schema(self):
         y0 = list(self.outputs(self.initial_state()))
@@ -159,6 +198,53 @@ class PhysicsModelBase:
             scales.append(max(float(scale), 1e-12))
         return scales
 
+    def observation_schema(self):
+        return [
+            *(
+                {**row, "kind": "measurement", "low": 0.0, "high": 1.0}
+                for row in self.state_schema()
+            ),
+            *(
+                {
+                    **row,
+                    "name": f"{row['name']}_{self.reference_observation_suffix}",
+                    "kind": "reference",
+                    "low": 0.0,
+                    "high": 1.0,
+                }
+                for row in self.output_schema()
+            ),
+        ]
+
+    def observation(self, state, reference, previous_action, disturbances):
+        del previous_action, disturbances
+        return [
+            *self._normalize(state, self.state_schema()),
+            *self._normalize(reference, self.output_schema()),
+        ]
+
+    def measurement_from_observation(self, observation, disturbances=None):
+        values = np.asarray(observation, dtype=float).reshape(-1)
+        expected = len(self.observation_schema())
+        if values.shape != (expected,) or not np.isfinite(values).all():
+            raise ValueError(
+                f"{self.scenario} policy observation must match observation_schema"
+            )
+        state_rows = self.state_schema()
+        state_dimension = len(state_rows)
+        low = np.asarray([row["low"] for row in state_rows], dtype=float)
+        high = np.asarray([row["high"] for row in state_rows], dtype=float)
+        state = low + values[:state_dimension] * (high - low)
+        return self.measurement(state, disturbances)
+
+    @staticmethod
+    def _normalize(values, rows):
+        return [
+            (float(value) - float(row["low"]))
+            / (float(row["high"]) - float(row["low"]))
+            for value, row in zip(values, rows)
+        ]
+
     def energy_kw(self, u):
         return 0.0
 
@@ -166,9 +252,6 @@ class PhysicsModelBase:
         """Return total action energy rate in kW for numeric environment steps."""
 
         return float(self.energy_kw(self.action_vector(act)))
-
-    def display_outputs(self, x):
-        return {"levels": [], "temps": list(x)}
 
     def default_disturbances(self):
         defaults = {}
@@ -196,11 +279,3 @@ class PhysicsModelBase:
             }
         )
         return env
-
-    def hard_termination_reasons(self, x, levels, temps, env):
-        """Return unconditional physical termination reasons for a transition."""
-
-        return ()
-
-    def process_info(self, x, levels, temps, env):
-        return {}

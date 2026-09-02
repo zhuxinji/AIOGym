@@ -4,13 +4,13 @@ from __future__ import annotations
 import numpy as np
 
 from aiogym.core.specs import Benchmark, EpisodeSpec
+from aiogym.scenarios._boundary import forward_preroll
 from aiogym.scenarios._metrics import regulation_episode_metrics
 
 
 _TRACKING_TEMPERATURE_RANGE_C = (19.0, 25.0)
 _MINIMUM_TRACKING_MOVE_C = 1.5
 _TRACKING_ACTION_RANGE = (0.05, 0.95)
-_BOUNDARY_INITIAL_PROBABILITY = 0.20
 _MAXIMUM_SAMPLING_ATTEMPTS = 100
 _TRACKING_HORIZON = 60
 
@@ -100,31 +100,61 @@ def _disturbance_episode(model, rng) -> EpisodeSpec:
 
 
 def _boundary_episode(model, rng) -> EpisodeSpec:
-    if rng.random() < 0.5:
-        initial_state = tuple(float(value) for value in rng.uniform(48.0, 54.0, 2))
-    else:
-        initial_state = tuple(float(value) for value in rng.uniform(-14.0, -8.0, 2))
+    boundary = _sample_boundary_preroll(model, rng)
     return EpisodeSpec(
-        initial_state=initial_state,
-        initial_action=tuple(model.default_action()),
+        initial_state=boundary["state"],
+        initial_action=boundary["action"],
         reference=tuple(model.default_setpoint_vector()),
         horizon=60,
         disturbances=model.default_disturbances(),
     )
 
 
-def sample_training_episode(model, rng, reward_id) -> tuple[EpisodeSpec, str]:
+def _sample_boundary_preroll(model, rng):
+    disturbances = model.default_disturbances()
+    if rng.random() < 0.5:
+        target = float(rng.uniform(48.0, 54.0))
+        command = tuple(float(value) for value in rng.uniform(0.95, 1.0, size=2))
+        disturbances.update(
+            {
+                "outdoor_temperature": float(rng.uniform(48.0, 50.0)),
+                "internal_heat_load_zone_0": float(rng.uniform(1800.0, 2000.0)),
+                "internal_heat_load_zone_1": float(rng.uniform(1800.0, 2000.0)),
+            }
+        )
+        reached = lambda state: bool(np.all(state >= target))
+    else:
+        target = float(rng.uniform(-14.0, -8.0))
+        command = tuple(float(value) for value in rng.uniform(0.0, 0.05, size=2))
+        disturbances.update(
+            {
+                "outdoor_temperature": float(rng.uniform(-30.0, -28.0)),
+                "internal_heat_load_zone_0": float(rng.uniform(-1000.0, -800.0)),
+                "internal_heat_load_zone_1": float(rng.uniform(-1000.0, -800.0)),
+            }
+        )
+        reached = lambda state: bool(np.all(state <= target))
+    return forward_preroll(
+        model,
+        command=command,
+        reached=reached,
+        control_dt=5.0,
+        maximum_steps=30,
+        disturbances=disturbances,
+    )
+
+
+def sample_training_episode(
+    model, rng, reward_id, boundary: bool
+) -> tuple[EpisodeSpec, str]:
     if reward_id != "regulation":
         raise ValueError(f"unsupported HVAC training reward {reward_id!r}")
     target = _sample_tracking_equilibrium(model, rng)
-    if rng.random() < _BOUNDARY_INITIAL_PROBABILITY:
-        if rng.random() < 0.5:
-            initial_state = tuple(float(value) for value in rng.uniform(48.0, 54.0, 2))
-        else:
-            initial_state = tuple(float(value) for value in rng.uniform(-14.0, -8.0, 2))
+    if boundary:
+        boundary_case = _sample_boundary_preroll(model, rng)
         episode = EpisodeSpec(
-            initial_state=initial_state,
-            initial_action=target["action"],
+            initial_state=boundary_case["state"],
+            initial_action=boundary_case["action"],
             reference=target["reference"],
             horizon=_TRACKING_HORIZON,
             disturbances=model.default_disturbances(),
@@ -142,7 +172,7 @@ def sample_training_episode(model, rng, reward_id) -> tuple[EpisodeSpec, str]:
             horizon=_TRACKING_HORIZON,
             disturbances=model.default_disturbances(),
         )
-    return episode, "tracking"
+    return episode, "boundary-prerun" if boundary else "interior"
 
 
 def sample_training_disturbance(model, rng):

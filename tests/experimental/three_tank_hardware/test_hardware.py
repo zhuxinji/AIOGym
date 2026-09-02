@@ -47,7 +47,7 @@ def test_hardware_api_is_only_exported_from_experimental_package():
 def test_hardware_sample_uses_only_three_level_measurements():
     sample = HardwareSample(
         measurement=(0.225, 0.225, 0.225),
-        flow_measurement=(0.0, 0.0, 0.0),
+        flow_measurement=(0.0, 0.0, 0.0, 0.0),
         source_monotonic_time_s=0.0,
         received_monotonic_time_s=0.1,
         wall_time_utc="2026-08-08T00:00:00Z",
@@ -66,7 +66,7 @@ def _sample(index=0, *, applied=None, interlocks=None, measurement=None):
         measurement=tuple(
             measurement or [0.225, 0.225, 0.225]
         ),
-        flow_measurement=tuple([3.0 / 60000.0] * 3),
+        flow_measurement=tuple([3.0 / 60000.0] * 4),
         source_monotonic_time_s=float(index),
         received_monotonic_time_s=float(index) + 0.1,
         wall_time_utc="2026-08-08T00:00:00Z",
@@ -96,7 +96,7 @@ def test_hardware_sample_requires_every_safety_interlock(missing):
     with pytest.raises(ValueError, match="missing required fields"):
         HardwareSample(
             measurement=(0.225, 0.225, 0.225),
-            flow_measurement=(0.0, 0.0, 0.0),
+            flow_measurement=(0.0, 0.0, 0.0, 0.0),
             source_monotonic_time_s=0.0,
             received_monotonic_time_s=0.1,
             wall_time_utc="2026-08-08T00:00:00Z",
@@ -136,7 +136,11 @@ def test_shadow_mode_never_writes_recommended_action():
     )
     try:
         observation, info = env.reset(seed=0)
-        assert observation.shape == (6,)
+        assert observation.shape == (10,)
+        assert observation[3:7] == pytest.approx(
+            np.asarray([3.0 / 60000.0] * 4)
+            / np.asarray(env.model.parameter("flow_observation_scale"))
+        )
         assert info["backend_kind"] == "real"
         _, reward, terminated, truncated, next_info = env.step([0.0] * 4)
         assert np.isfinite(reward)
@@ -171,7 +175,7 @@ def test_hardware_environment_writes_self_identifying_rows(tmp_path):
         env.close()
     row = json.loads(path.read_text(encoding="utf-8"))
     assert hardware.validate_real_step_record(row) == row
-    assert row["schema_version"].endswith(".v8")
+    assert row["schema_version"].endswith(".v10")
     assert row["measurement"] == pytest.approx([0.225, 0.225, 0.225])
     assert row["commanded_action"] == pytest.approx([0.5, 0.4, 0.3, 0.2])
     assert row["hardware_mode"] == "shadow"

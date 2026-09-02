@@ -145,33 +145,48 @@ class EpisodeSamplingWrapper(gym.Wrapper):
         *,
         episode_sampler: EpisodeSampler | None,
         disturbance_sampler: TrainingDisturbanceSampler | None,
+        disturbance_schedule: Mapping[int, Mapping[str, float]] | None,
         reward_id: str,
+        boundary_probability: float,
     ) -> None:
         super().__init__(env)
         if episode_sampler is None and disturbance_sampler is None:
             raise ValueError("episode or disturbance sampling must be enabled")
         self._episode_sampler = episode_sampler
         self._disturbance_sampler = disturbance_sampler
+        self._disturbance_schedule = disturbance_schedule
         self._reward_id = reward_id
+        self._boundary_probability = boundary_probability
         self._episode_rng = np.random.default_rng()
         self._disturbance_rng = np.random.default_rng()
+        self._boundary_rng = np.random.default_rng()
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         if options:
             raise ValueError("reset options cannot override a sampled training episode")
         self._episode_rng = _reset_rng(seed, 101, self._episode_rng)
         self._disturbance_rng = _reset_rng(seed, 102, self._disturbance_rng)
+        self._boundary_rng = _reset_rng(seed, 103, self._boundary_rng)
         if self._episode_sampler is None:
             episode = self.unwrapped.default_episode
-            family = "tracking"
+            initial_family = "interior"
         else:
-            episode, family = self._episode_sampler(
-                self.unwrapped.model, self._episode_rng, self._reward_id
+            boundary = bool(
+                self._boundary_probability > 0.0
+                and self._boundary_rng.random() < self._boundary_probability
+            )
+            episode, initial_family = self._episode_sampler(
+                self.unwrapped.model,
+                self._episode_rng,
+                self._reward_id,
+                boundary,
             )
             if not isinstance(episode, EpisodeSpec):
                 raise TypeError("sample_training_episode must return an EpisodeSpec")
-            if not isinstance(family, str) or not family.strip():
-                raise ValueError("sample_training_episode family must be non-empty")
+            if not isinstance(initial_family, str) or not initial_family.strip():
+                raise ValueError(
+                    "sample_training_episode initial family must be non-empty"
+                )
         if self._disturbance_sampler is not None:
             schedule = self._disturbance_sampler(
                 self.unwrapped.model, self._disturbance_rng
@@ -179,8 +194,16 @@ class EpisodeSamplingWrapper(gym.Wrapper):
             if not isinstance(schedule, Mapping):
                 raise TypeError("sample_training_disturbance must return a mapping")
             episode = replace(episode, disturbance_schedule=schedule)
-        self.unwrapped.episode_family = family
-        return self.env.reset(seed=seed, options={"episode": episode})
+        elif self._disturbance_schedule is not None:
+            episode = replace(
+                episode, disturbance_schedule=self._disturbance_schedule
+            )
+        self.unwrapped.episode_family = "tracking"
+        observation, info = self.env.reset(seed=seed, options={"episode": episode})
+        self.unwrapped.episode_parameters["initial_family"] = initial_family
+        info = dict(info)
+        info["episode_parameters"] = dict(self.unwrapped.episode_parameters)
+        return observation, info
 
 
 class ActionChannelWrapper(gym.Wrapper):

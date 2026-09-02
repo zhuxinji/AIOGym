@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
+from numbers import Real
 from typing import Any
 
 import gymnasium as gym
 import numpy as np
 
 from .contracts import ProcessModel, Scenario
+from .model import apply_action_slew, integrate_process_state
 from .registry import get_benchmark, get_reward, get_scenario
 from .specs import Benchmark, EpisodeSpec, Reward
 from .variations import (
@@ -55,17 +58,38 @@ def validate_episode(model: ProcessModel, episode: EpisodeSpec) -> EpisodeSpec:
     )
     if any(np.any(values < output_low) or np.any(values > output_high) for values in all_references):
         raise ValueError("episode references must belong to model output bounds")
-    known_disturbances = set(model.default_disturbances())
-    supplied = set(episode.disturbances)
-    supplied.update(
-        name
-        for values in episode.disturbance_schedule.values()
-        for name in values
-    )
-    unknown = supplied - known_disturbances
+    _validate_disturbance_values(model, episode.disturbances)
+    for values in episode.disturbance_schedule.values():
+        _validate_disturbance_values(model, values)
+    return episode
+
+
+def _validate_disturbance_values(
+    model: ProcessModel, values: Mapping[str, float]
+) -> dict[str, float]:
+    defaults = model.default_disturbances()
+    unknown = set(values) - set(defaults)
     if unknown:
         raise ValueError(f"unknown disturbances: {sorted(unknown)}")
-    return episode
+    resolved = {str(name): float(value) for name, value in values.items()}
+    if not all(math.isfinite(value) for value in resolved.values()):
+        raise ValueError("disturbances must be finite")
+    schema = {
+        row["name"]: row for row in getattr(model, "input_disturbances", ())
+    }
+    for name, value in resolved.items():
+        row = schema.get(name)
+        if row is None:
+            continue
+        if "bounds" in row:
+            lower, upper = (float(item) for item in row["bounds"])
+            if value < lower or value > upper:
+                raise ValueError(
+                    f"disturbance {name!r} must be within [{lower}, {upper}]"
+                )
+        if row.get("unit") == "binary" and value not in (0.0, 1.0):
+            raise ValueError(f"disturbance {name!r} must be binary")
+    return resolved
 
 
 class ProcessControlEnv(gym.Env):
@@ -260,56 +284,25 @@ class ProcessControlEnv(gym.Env):
         return self._observation(), reward, terminated, truncated, info
 
     def set_disturbances(self, values: Mapping[str, float]) -> None:
-        defaults = self.model.default_disturbances()
-        unknown = set(values) - set(defaults)
-        if unknown:
-            raise ValueError(f"unknown disturbances: {sorted(unknown)}")
-        resolved = {str(name): float(value) for name, value in values.items()}
-        if not all(math.isfinite(value) for value in resolved.values()):
-            raise ValueError("disturbances must be finite")
+        resolved = _validate_disturbance_values(self.model, values)
         self._disturbance_overrides = resolved
         self.disturbances.update(resolved)
 
     def _apply_action_slew(self, requested: np.ndarray) -> np.ndarray:
-        limits = self.model.action_slew_limits()
-        if limits is None:
-            return requested.copy()
-        maximum_step = np.asarray(limits, dtype=float).reshape(-1)
-        if (
-            maximum_step.shape != requested.shape
-            or not np.isfinite(maximum_step).all()
-            or np.any(maximum_step < 0)
-        ):
-            raise ValueError("model action slew limits must match actions")
-        return np.clip(
+        return apply_action_slew(
+            self.model,
+            self._previous_applied_action,
             requested,
-            self._previous_applied_action - maximum_step,
-            self._previous_applied_action + maximum_step,
         ).astype(np.float32)
 
     def _integrate(self, state: np.ndarray, action: np.ndarray) -> np.ndarray:
-        maximum_step = float(self.model.dt_micro)
-        substeps = max(1, math.ceil(self.control_dt / maximum_step - 1e-12))
-        step = self.control_dt / substeps
-
-        def derivative(values):
-            output = np.asarray(
-                self.model.dynamics(values, action, disturbances=self.disturbances),
-                dtype=float,
-            ).reshape(-1)
-            if output.shape != state.shape:
-                raise ValueError("model dynamics shape does not match state shape")
-            return output
-
-        result = state.copy()
-        for _ in range(substeps):
-            k1 = derivative(result)
-            k2 = derivative(result + 0.5 * step * k1)
-            k3 = derivative(result + 0.5 * step * k2)
-            k4 = derivative(result + step * k3)
-            result = result + (step / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
-            result = np.asarray(self.model.clamp_state(result), dtype=float)
-        return result
+        return integrate_process_state(
+            self.model,
+            state,
+            action,
+            self.disturbances,
+            duration=self.control_dt,
+        )
 
     def _observation(self) -> np.ndarray:
         observation = np.asarray(
@@ -430,22 +423,57 @@ def make_env(
     *,
     reward: str | None = None,
     parameters: Mapping[str, Any] | None = None,
+    heater: Sequence[int] | None = None,
+    initial_state: Sequence[float] | None = None,
     benchmark: str | None = None,
     randomize: bool = False,
+    boundary_probability: float = 0.0,
     disturbance: bool = False,
+    disturbance_schedule: Mapping[int, Mapping[str, float]] | None = None,
     noise: bool | float | Mapping[str, Any] = False,
     delay: bool | Mapping[str, Any] = False,
     fault: bool | Mapping[str, Any] = False,
 ) -> gym.Env:
     if not isinstance(randomize, bool):
         raise TypeError("randomize must be a boolean")
+    if isinstance(boundary_probability, bool) or not isinstance(
+        boundary_probability, Real
+    ):
+        raise TypeError("boundary_probability must be a number")
+    boundary_probability = float(boundary_probability)
+    if not math.isfinite(boundary_probability) or not 0.0 <= boundary_probability <= 1.0:
+        raise ValueError("boundary_probability must be between 0 and 1")
+    if boundary_probability > 0.0 and not randomize:
+        raise ValueError("boundary_probability requires randomize=True")
     if not isinstance(disturbance, bool):
         raise TypeError("disturbance must be a boolean")
+    if disturbance_schedule is not None and not isinstance(
+        disturbance_schedule, Mapping
+    ):
+        raise TypeError("disturbance_schedule must be a mapping or None")
+    if disturbance_schedule is not None:
+        for values in disturbance_schedule.values():
+            if not isinstance(values, Mapping):
+                raise TypeError("disturbance_schedule values must be mappings")
+    if disturbance and disturbance_schedule is not None:
+        raise ValueError(
+            "disturbance_schedule cannot be combined with disturbance=True"
+        )
+    if initial_state is not None and isinstance(initial_state, (str, bytes)):
+        raise TypeError("initial_state must be a numeric sequence or None")
+    if initial_state is not None and randomize:
+        raise ValueError("initial_state cannot be combined with randomize=True")
+    if heater is not None and scenario != "cascade":
+        raise ValueError("heater is supported only by the cascade scenario")
     definition = get_scenario(scenario)
     if benchmark is not None and (reward is not None or parameters is not None):
         raise ValueError(
             "benchmark fixes model parameters and reward; "
             "do not pass parameters or reward"
+        )
+    if benchmark is not None and initial_state is not None:
+        raise ValueError(
+            "benchmark fixes the initial state; do not pass initial_state"
         )
     resolved_benchmark = (
         None if benchmark is None else get_benchmark(scenario, benchmark)
@@ -461,21 +489,37 @@ def make_env(
     resolved_fault = resolve_fault_option(fault)
     if benchmark is not None and (
         randomize
+        or boundary_probability > 0.0
         or disturbance
+        or disturbance_schedule is not None
         or resolved_noise is not None
         or resolved_delay is not None
         or resolved_fault is not None
     ):
         raise ValueError(
-            "benchmark cannot be combined with randomize, disturbance, noise, "
-            "delay, or fault"
+            "benchmark cannot be combined with randomize, boundary_probability, "
+            "disturbance, disturbance_schedule, noise, delay, or fault"
         )
-    model = definition.make_model(parameters)
+    model = (
+        definition.make_model(parameters, heater=heater)
+        if scenario == "cascade"
+        else definition.make_model(parameters)
+    )
     episode = (
         definition.make_default_episode(model)
         if resolved_benchmark is None
         else resolved_benchmark.make_episode(model, 0)
     )
+    if initial_state is not None:
+        try:
+            supplied_initial_state = tuple(initial_state)
+        except TypeError as error:
+            raise TypeError(
+                "initial_state must be a numeric sequence or None"
+            ) from error
+        episode = replace(episode, initial_state=supplied_initial_state)
+    if disturbance_schedule is not None:
+        episode = replace(episode, disturbance_schedule=disturbance_schedule)
     base = ProcessControlEnv(
         model,
         resolved_reward,
@@ -483,13 +527,28 @@ def make_env(
         episode,
         benchmark=resolved_benchmark,
     )
+    runtime_parameters = dict(model.resolved_parameters)
+    if scenario == "cascade":
+        runtime_parameters["heater"] = list(model.heater)
     base.runtime_config = {
         "scenario": scenario,
         "reward": reward_id,
-        "parameters": dict(model.resolved_parameters),
+        "parameters": runtime_parameters,
+        "initial_state": (
+            None if initial_state is None else list(episode.initial_state)
+        ),
         "benchmark": benchmark,
         "randomize": randomize,
+        "boundary_probability": boundary_probability,
         "disturbance": True if disturbance else None,
+        "disturbance_schedule": (
+            None
+            if disturbance_schedule is None
+            else {
+                str(step): dict(values)
+                for step, values in episode.disturbance_schedule.items()
+            }
+        ),
         "noise": resolved_noise,
         "delay": resolved_delay,
         "fault": resolved_fault,
@@ -505,7 +564,11 @@ def make_env(
             disturbance_sampler=(
                 definition.sample_training_disturbance if disturbance else None
             ),
+            disturbance_schedule=(
+                None if disturbance_schedule is None else episode.disturbance_schedule
+            ),
             reward_id=reward_id,
+            boundary_probability=boundary_probability,
         )
     if resolved_delay is not None or resolved_fault is not None:
         env = ActionChannelWrapper(

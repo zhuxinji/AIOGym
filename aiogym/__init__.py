@@ -1,4 +1,4 @@
-"""Small public API for AIO-Gym 0.15."""
+"""Small public API for AIO-Gym 0.30.0."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 
-__version__ = "0.15.0"
+__version__ = "0.30.0"
 
 from .core.contracts import Policy
 from .rl import AlgorithmBackend, SB3AlgorithmBackend, TrainingStep
@@ -78,14 +78,18 @@ def make_env(
     *,
     reward=None,
     parameters=None,
+    heater=None,
+    initial_state=None,
     benchmark=None,
     randomize=False,
+    boundary_probability=0.0,
     disturbance=False,
+    disturbance_schedule=None,
     noise=False,
     delay=False,
     fault=False,
 ):
-    """Create a default, randomized training, or fixed benchmark environment."""
+    """Create a default, user-initialized, randomized, or Benchmark environment."""
     _register()
     from .core.env import make_env as implementation
 
@@ -93,9 +97,13 @@ def make_env(
         scenario,
         reward=reward,
         parameters=parameters,
+        heater=heater,
+        initial_state=initial_state,
         benchmark=benchmark,
         randomize=randomize,
+        boundary_probability=boundary_probability,
         disturbance=disturbance,
+        disturbance_schedule=disturbance_schedule,
         noise=noise,
         delay=delay,
         fault=fault,
@@ -159,7 +167,6 @@ def train(
     record_every: int = 500,
     evaluation_env=None,
     evaluate_every: int | None = None,
-    evaluation_seed: int = 0,
     dataset: str | Path | None = None,
     behavior_cloning_epochs: int | None = None,
     behavior_cloning_batch_size: int = 256,
@@ -178,7 +185,6 @@ def train(
         record_every=record_every,
         evaluation_env=evaluation_env,
         evaluate_every=evaluate_every,
-        evaluation_seed=evaluation_seed,
         dataset=dataset,
         behavior_cloning_epochs=behavior_cloning_epochs,
         behavior_cloning_batch_size=behavior_cloning_batch_size,

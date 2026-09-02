@@ -15,7 +15,7 @@ from .calibration import validate_calibration
 from .real_log import RealLogWriter, build_real_step_record
 
 
-HARDWARE_BACKEND_VERSION = "aiogym.three_tank.hardware.v8"
+HARDWARE_BACKEND_VERSION = "aiogym.three_tank.hardware.v10"
 DEFAULT_HARDWARE_MAXIMUM_ACTION_STEP = (0.05, 0.08, 0.08, 0.08)
 
 
@@ -36,7 +36,7 @@ class HardwareSample:
     def __post_init__(self):
         measurement = _finite_vector("measurement", self.measurement, 3)
         flow_measurement = _finite_vector(
-            "flow_measurement", self.flow_measurement, 3
+            "flow_measurement", self.flow_measurement, 4
         )
         if any(value < 0.0 for value in flow_measurement):
             raise ValueError("flow_measurement must be non-negative")
@@ -245,8 +245,10 @@ class ThreeTankHardwareEnv(gym.Env):
             "scenario": "three_tank",
             "reward": self.reward.id,
             "parameters": dict(self.model.resolved_parameters),
+            "initial_state": None,
             "benchmark": "tracking",
             "randomize": False,
+            "boundary_probability": 0.0,
             "disturbance": None,
             "noise": None,
             "delay": None,
@@ -451,11 +453,10 @@ class ThreeTankHardwareEnv(gym.Env):
         }
 
     def _observation(self):
-        values = self.model.observation(
+        values = self.model.observation_from_measurements(
             self.state,
+            self._sample.flow_measurement,
             self._reference_state,
-            self._previous_applied_action,
-            self.disturbances,
         )
         return np.clip(
             np.asarray(values, dtype=np.float32),

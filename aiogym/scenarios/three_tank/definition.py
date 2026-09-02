@@ -20,10 +20,11 @@ from .model import TRACKING_ERROR_SCALES, ThreeTankModel
 
 _REGULATION_ERROR_SCALES = np.asarray(TRACKING_ERROR_SCALES, dtype=float)
 _EARLY_TERMINATION_COST_RATE = 2.0
+_ACTION_SLEW_COST_RATE = 1.0
 
 
 def _three_tank_regulation_reward(state, action, next_state, context):
-    del state, action
+    del state
     output = np.asarray(context["model"].outputs(next_state), dtype=float)
     reference = np.asarray(context["reference"], dtype=float)
     tracking_rate = float(
@@ -31,6 +32,15 @@ def _three_tank_regulation_reward(state, action, next_state, context):
     )
     dt = float(context["control_dt"])
     tracking_cost = dt * tracking_rate
+    applied_action = np.asarray(action, dtype=float)
+    previous_applied_action = np.asarray(
+        context["previous_applied_action"], dtype=float
+    )
+    slew_cost = (
+        dt
+        * _ACTION_SLEW_COST_RATE
+        * float(np.mean((applied_action - previous_applied_action) ** 2))
+    )
     early_termination_cost = 0.0
     if any(float(value) > 0.0 for value in context["constraint_costs"].values()):
         remaining_steps = (
@@ -39,10 +49,10 @@ def _three_tank_regulation_reward(state, action, next_state, context):
         if remaining_steps < 0:
             raise ValueError("termination step exceeds the episode horizon")
         early_termination_cost = _EARLY_TERMINATION_COST_RATE * remaining_steps * dt
-    return -tracking_cost - early_termination_cost, {
+    return -tracking_cost - slew_cost - early_termination_cost, {
         "tracking_error": -tracking_cost,
         "early_termination": -early_termination_cost,
-        "slew": 0.0,
+        "slew": -slew_cost,
         "effort": 0.0,
     }
 

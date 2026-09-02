@@ -36,9 +36,11 @@ def test_collect_uses_the_given_env_and_round_trips_episodes(tmp_path):
     assert reader.metadata["environment"]["scenario"] == "three_tank"
     assert reader.metadata["environment"]["benchmark"] is None
     assert reader.metadata["environment"]["randomize"] is False
+    assert reader.metadata["environment"]["boundary_probability"] == 0.0
     assert reader.metadata["environment"]["disturbance"] is None
     assert reader.metadata["environment"]["reward"] == "regulation"
     assert reader.metadata["environment"]["parameters"]["pump_power_max"] == 370.0
+    assert reader.metadata["environment"]["initial_state"] is None
     assert sorted(path.name for path in output.glob("episode-*.npz")) == [
         "episode-000000.npz",
         "episode-000001.npz",

@@ -53,7 +53,7 @@ def test_off_policy_training_saves_loads_and_predicts(tmp_path):
     finally:
         env.close()
 
-    assert result["schema_version"] == "aiogym.training.v10"
+    assert result["schema_version"] == "aiogym.training.v12"
     assert result["checkpoint_schema"] == "aiogym.checkpoint.v2"
     assert result["algorithm"] == "sac"
     assert result["steps"] == 2
@@ -178,6 +178,9 @@ def test_sac_training_continues_optimizer_and_replay_state(tmp_path):
 def test_continued_training_rejects_changed_seed_or_configuration(tmp_path):
     env = make_env("quadruple")
     randomized_env = make_env("quadruple", randomize=True)
+    boundary_env = make_env(
+        "quadruple", randomize=True, boundary_probability=0.3
+    )
     try:
         result = train(
             env=env,
@@ -221,7 +224,24 @@ def test_continued_training_rejects_changed_seed_or_configuration(tmp_path):
                 resume_from=result["checkpoint"],
                 output=tmp_path / "environment-mismatch",
             )
+        randomized_result = train(
+            env=randomized_env,
+            algorithm="sac",
+            steps=1,
+            seed=3,
+            algorithm_kwargs=SMALL_POLICY,
+            output=tmp_path / "randomized",
+        )
+        with pytest.raises(ValueError, match="checkpoint boundary_probability"):
+            train(
+                env=boundary_env,
+                algorithm="sac",
+                steps=1,
+                resume_from=randomized_result["checkpoint"],
+                output=tmp_path / "boundary-mismatch",
+            )
     finally:
+        boundary_env.close()
         randomized_env.close()
         env.close()
 
@@ -252,7 +272,7 @@ def test_checkpoint_rejects_incompatible_model_parameters(tmp_path):
 
 def test_training_periodically_evaluates_and_saves_best_checkpoint(tmp_path):
     env = make_env("quadruple")
-    evaluation_env = make_env("quadruple")
+    evaluation_env = make_env("quadruple", randomize=True)
     output = tmp_path / "evaluated-sac"
     try:
         result = train(
@@ -263,7 +283,6 @@ def test_training_periodically_evaluates_and_saves_best_checkpoint(tmp_path):
             algorithm_kwargs=SMALL_POLICY,
             evaluation_env=evaluation_env,
             evaluate_every=1,
-            evaluation_seed=7,
             output=output,
         )
     finally:
@@ -273,8 +292,23 @@ def test_training_periodically_evaluates_and_saves_best_checkpoint(tmp_path):
     history = json.loads(
         (output / "evaluation_history.json").read_text(encoding="utf-8")
     )
-    assert history["schema_version"] == "aiogym.training_evaluation.v1"
+    assert history["schema_version"] == "aiogym.training_evaluation.v2"
     assert [row["step"] for row in history["records"]] == [0, 1, 2]
+    assert history["seeds"] == list(range(1_000, 1_020))
+    assert all(len(row["episodes"]) == 20 for row in history["records"])
+    assert all(
+        [episode["seed"] for episode in row["episodes"]]
+        == list(range(1_000, 1_020))
+        for row in history["records"]
+    )
+    first_cases = [
+        episode["episode_spec"] for episode in history["records"][0]["episodes"]
+    ]
+    assert first_cases[0] != first_cases[1]
+    assert all(
+        [episode["episode_spec"] for episode in row["episodes"]] == first_cases
+        for row in history["records"][1:]
+    )
     assert history["ranking_metric"] == {
         "name": "return",
         "direction": "maximize",
@@ -282,20 +316,26 @@ def test_training_periodically_evaluates_and_saves_best_checkpoint(tmp_path):
     assert history["selection_order"] == [
         {"name": "safe_completion", "direction": "maximize"},
         {"name": "episode_length", "direction": "maximize"},
+        {
+            "name": "worst_case_quantile",
+            "quantile": 0.1,
+            "direction": "maximize",
+        },
         {"name": "return", "direction": "maximize"},
     ]
     assert (output / "best" / "model.zip").is_file()
     tracking_figure = output / "best" / "tracking.svg"
     ET.parse(tracking_figure)
     tracking_svg = tracking_figure.read_text(encoding="utf-8")
-    assert "quadruple SAC best policy - fixed training case" in tracking_svg
+    assert "quadruple SAC best policy - validation cases" in tracking_svg
     assert "Output: lower_tank_1_level [cm]" in tracking_svg
     assert "Applied action: pump_1_voltage [normalized_voltage]" in tracking_svg
     assert result["best_checkpoint"] == str(
         (output / "best" / "model.zip").resolve()
     )
     assert result["best_tracking_figure"] == str(tracking_figure.resolve())
-    assert result["evaluation"]["seed"] == 7
+    assert result["evaluation"]["seeds"] == list(range(1_000, 1_020))
+    assert result["evaluation"]["best_safe_completion"] >= 0.0
     assert result["evaluation"]["tracking_figure"] == "best/tracking.svg"
 
     continuation_env = make_env("quadruple")
@@ -313,17 +353,64 @@ def test_training_periodically_evaluates_and_saves_best_checkpoint(tmp_path):
     assert continued["actual_steps"] == continued["initial_steps"] + 1
 
 
+def test_training_evaluation_requires_randomized_environment(tmp_path):
+    env = make_env("quadruple")
+    evaluation_env = make_env("quadruple")
+    try:
+        with pytest.raises(ValueError, match="must use randomize=True"):
+            train(
+                env=env,
+                algorithm="sac",
+                steps=2,
+                evaluation_env=evaluation_env,
+                evaluate_every=1,
+                output=tmp_path / "fixed-evaluation",
+            )
+    finally:
+        evaluation_env.close()
+        env.close()
+
+
 def test_training_evaluation_never_prefers_short_unsafe_episode():
-    safe = {"terminated": False, "episode_length": 600, "value": 200.0}
-    unsafe = {"terminated": True, "episode_length": 300, "value": 50.0}
+    safe = {
+        "safe_completion": 1.0,
+        "episode_length": 600.0,
+        "worst_case_value": 200.0,
+        "value": 200.0,
+    }
+    unsafe = {
+        "safe_completion": 0.5,
+        "episode_length": 450.0,
+        "worst_case_value": 50.0,
+        "value": 50.0,
+    }
     assert not _is_better_training_evaluation(unsafe, safe, "minimize")
     assert _is_better_training_evaluation(safe, unsafe, "minimize")
+
+
+def test_training_evaluation_uses_worst_quantile_before_median():
+    robust = {
+        "safe_completion": 1.0,
+        "episode_length": 600.0,
+        "worst_case_value": -20.0,
+        "value": -10.0,
+    }
+    brittle = {
+        "safe_completion": 1.0,
+        "episode_length": 600.0,
+        "worst_case_value": -100.0,
+        "value": -5.0,
+    }
+    assert _is_better_training_evaluation(robust, brittle, "maximize")
+    assert not _is_better_training_evaluation(brittle, robust, "maximize")
 
 
 @pytest.mark.parametrize("variation", ("disturbance", "noise"))
 def test_training_evaluation_requires_deterministic_environment(tmp_path, variation):
     env = make_env("quadruple")
-    evaluation_env = make_env("quadruple", **{variation: True})
+    evaluation_env = make_env(
+        "quadruple", randomize=True, **{variation: True}
+    )
     try:
         with pytest.raises(ValueError, match=f"must not enable {variation}"):
             train(

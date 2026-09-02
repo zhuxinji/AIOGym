@@ -23,7 +23,7 @@ def _record(sequence=0):
         received_monotonic_time_s=float(sequence) + 0.1,
         wall_time_utc="2026-08-08T00:00:00Z",
         measurement=[0.18, 0.18, 0.18],
-        flow_measurement=[3.0 / 60000.0] * 3,
+        flow_measurement=[3.0 / 60000.0] * 4,
         reference=[0.18, 0.18, 0.18],
         transition_disturbance={"pump_flow_factor": 1.0},
         disturbance={"pump_flow_factor": 0.9},
@@ -43,7 +43,13 @@ def _record(sequence=0):
 
 def test_real_step_record_round_trips_and_rejects_tampering():
     record = _record()
-    assert record["schema_version"].endswith(".v8")
+    assert record["schema_version"].endswith(".v10")
+    assert record["flow_measurement_names"] == [
+        "FT101_flow",
+        "FT12_flow",
+        "FT23_flow",
+        "FT34_flow",
+    ]
     assert record["reward_id"] == "regulation"
     assert validate_real_step_record(record) == record
     record["measurement"][2] = 0.3

@@ -125,7 +125,7 @@ def register_toy() -> Scenario:
         make_model=ToyModel,
         control_dt=0.5,
         make_default_episode=lambda model: default_episode,
-        sample_training_episode=lambda model, rng, reward_id: (
+        sample_training_episode=lambda model, rng, reward_id, boundary: (
             short_episode,
             "tracking",
         ),
@@ -230,6 +230,177 @@ def test_benchmark_rejects_training_variation(variation):
 def test_disturbance_switch_requires_boolean():
     with pytest.raises(TypeError, match="disturbance must be a boolean"):
         aiogym.make_env("quadruple", disturbance=1)
+
+
+def test_public_disturbance_schedule_applies_step_zero_and_persists_changes():
+    env = aiogym.make_env(
+        "three_tank",
+        disturbance_schedule={
+            0: {"bv23_open": 1.0},
+            2: {"bv23_open": 0.0},
+        },
+    )
+    try:
+        _, reset_info = env.reset(seed=7)
+        assert reset_info["disturbance"]["bv23_open"] == 1.0
+        assert env.runtime_config["disturbance_schedule"] == {
+            "0": {"bv23_open": 1.0},
+            "2": {"bv23_open": 0.0},
+        }
+        _, _, _, _, first_info = env.step(env.action_space.sample())
+        assert first_info["transition_disturbance"]["bv23_open"] == 1.0
+        _, _, _, _, second_info = env.step(env.action_space.sample())
+        assert second_info["transition_disturbance"]["bv23_open"] == 1.0
+        assert second_info["disturbance"]["bv23_open"] == 0.0
+    finally:
+        env.close()
+
+
+def test_public_disturbance_schedule_combines_with_randomized_conditions():
+    env = aiogym.make_env(
+        "three_tank",
+        randomize=True,
+        disturbance_schedule={40: {"bv12_open": 1.0}},
+    )
+    try:
+        _, info = env.reset(seed=11)
+    finally:
+        env.close()
+    assert info["episode_spec"]["disturbance_schedule"] == {
+        "40": {"bv12_open": 1.0}
+    }
+
+
+def test_public_disturbance_schedule_is_recorded_in_evaluation_metadata():
+    schedule = {0: {"bv23_open": 1.0}, 2: {"bv23_open": 0.0}}
+    env = aiogym.make_env("three_tank", disturbance_schedule=schedule)
+    try:
+        result = aiogym.evaluate(
+            env=env,
+            policy="hold",
+            seeds=(3,),
+            max_steps=1,
+        )
+    finally:
+        env.close()
+    assert result["environment"]["disturbance_schedule"] == {
+        "0": {"bv23_open": 1.0},
+        "2": {"bv23_open": 0.0},
+    }
+
+
+@pytest.mark.parametrize(
+    ("schedule", "message"),
+    (
+        ([{"bv12_open": 1.0}], "must be a mapping"),
+        ({1: [1.0]}, "values must be mappings"),
+        ({1: {"missing": 1.0}}, "unknown disturbances"),
+        ({1: {"bv12_open": 0.5}}, "must be binary"),
+        ({600: {"bv12_open": 1.0}}, "within \\[0, horizon\\)"),
+    ),
+)
+def test_public_disturbance_schedule_validates_the_model_contract(
+    schedule, message
+):
+    with pytest.raises((TypeError, ValueError), match=message):
+        aiogym.make_env("three_tank", disturbance_schedule=schedule)
+
+
+def test_public_disturbance_schedule_rejects_owned_schedules():
+    schedule = {30: {"bv12_open": 1.0}}
+    with pytest.raises(ValueError, match="disturbance=True"):
+        aiogym.make_env(
+            "three_tank",
+            disturbance=True,
+            disturbance_schedule=schedule,
+        )
+    with pytest.raises(ValueError, match="benchmark cannot be combined"):
+        aiogym.make_env(
+            "three_tank",
+            benchmark="tracking",
+            disturbance_schedule=schedule,
+        )
+
+
+def test_public_initial_state_sets_the_default_episode_and_metadata():
+    register_toy()
+    env = None
+    try:
+        env = make_env("core-toy", initial_state=[0.4])
+        observation, info = env.reset(seed=7)
+        assert observation == pytest.approx([0.4])
+        assert env.state == pytest.approx([0.4])
+        assert info["episode_spec"]["initial_state"] == pytest.approx([0.4])
+        assert env.runtime_config["initial_state"] == pytest.approx([0.4])
+    finally:
+        if env is not None:
+            env.close()
+        unregister_scenario("core-toy")
+
+
+@pytest.mark.parametrize("initial_state", (0.4, "0.4"))
+def test_public_initial_state_requires_a_numeric_sequence(initial_state):
+    with pytest.raises(TypeError, match="numeric sequence"):
+        aiogym.make_env("quadruple", initial_state=initial_state)
+
+
+@pytest.mark.parametrize(
+    "initial_state, message",
+    (([0.2], "must contain 4 values"), ([float("nan")] * 4, "finite")),
+)
+def test_public_initial_state_validates_model_shape_and_values(
+    initial_state, message
+):
+    with pytest.raises(ValueError, match=message):
+        aiogym.make_env("quadruple", initial_state=initial_state)
+
+
+def test_public_initial_state_rejects_sampled_and_benchmark_episodes():
+    with pytest.raises(ValueError, match="cannot be combined with randomize"):
+        aiogym.make_env(
+            "quadruple", initial_state=[10.0, 10.0, 10.0, 10.0], randomize=True
+        )
+    with pytest.raises(ValueError, match="benchmark fixes the initial state"):
+        aiogym.make_env(
+            "quadruple",
+            initial_state=[10.0, 10.0, 10.0, 10.0],
+            benchmark="tracking",
+        )
+
+
+@pytest.mark.parametrize("value", (True, "0.3", None))
+def test_boundary_probability_requires_a_number(value):
+    with pytest.raises(TypeError, match="boundary_probability must be a number"):
+        aiogym.make_env(
+            "quadruple", randomize=True, boundary_probability=value
+        )
+
+
+@pytest.mark.parametrize("value", (-0.01, 1.01, float("nan")))
+def test_boundary_probability_must_be_a_probability(value):
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        aiogym.make_env(
+            "quadruple", randomize=True, boundary_probability=value
+        )
+
+
+def test_nonzero_boundary_probability_requires_randomization():
+    with pytest.raises(ValueError, match="requires randomize=True"):
+        aiogym.make_env("quadruple", boundary_probability=0.3)
+
+
+def test_benchmark_rejects_boundary_probability():
+    register_toy()
+    try:
+        with pytest.raises(ValueError, match="benchmark cannot be combined"):
+            make_env(
+                "core-toy",
+                benchmark="tracking",
+                randomize=True,
+                boundary_probability=0.3,
+            )
+    finally:
+        unregister_scenario("core-toy")
 
 
 @pytest.mark.parametrize(

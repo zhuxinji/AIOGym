@@ -75,7 +75,7 @@ def _scenario():
         make_model=RegistryModel,
         control_dt=1.0,
         make_default_episode=_episode,
-        sample_training_episode=lambda model, rng, reward_id: (
+        sample_training_episode=lambda model, rng, reward_id, boundary: (
             _episode(model),
             "tracking",
         ),

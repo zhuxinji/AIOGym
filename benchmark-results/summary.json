@@ -1,0 +1,5788 @@
+{
+  "benchmarks": [
+    {
+      "benchmark": "boundary-safety",
+      "figure": "figures/cascade/boundary-safety.svg",
+      "ordering": [
+        "pid",
+        "mpc"
+      ],
+      "policies": {
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.05510008754841019,
+            "median": 0.0573000068327286
+          },
+          "episode_length": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "episode_return": {
+            "mean": -186.1618159091925,
+            "median": -38.53337823766249
+          },
+          "final_error": {
+            "mean": 0.40510755929698183,
+            "median": 0.007175031786122688
+          },
+          "minimum_safety_margin": {
+            "mean": 0.15838657544078522,
+            "median": 0.15957752806933256
+          },
+          "overshoot": {
+            "mean": 1.9580671227960735,
+            "median": 1.952112359653337
+          },
+          "return": {
+            "mean": -186.1618159091925,
+            "median": -38.53337823766249
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_rate": {
+            "mean": 0.8,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 360.4,
+            "median": 157.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 1200.0,
+            "median": 1200.0
+          },
+          "tracking_iae": {
+            "mean": 676.525653704585,
+            "median": 256.40774650902733
+          },
+          "tracking_ise": {
+            "mean": 1116.9708954551547,
+            "median": 231.20026942597494
+          },
+          "tracking_itae": {
+            "mean": 321641.1222024119,
+            "median": 21352.285548885484
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.07751080756750425,
+            "median": 0.07180189227817935
+          },
+          "episode_length": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "episode_return": {
+            "mean": -31.09024761588566,
+            "median": -37.516558695962985
+          },
+          "final_error": {
+            "mean": 0.002800734334191493,
+            "median": 0.002895037446532661
+          },
+          "minimum_safety_margin": {
+            "mean": 0.16698885138790404,
+            "median": 0.16641281268275365
+          },
+          "overshoot": {
+            "mean": 1.9150557430604795,
+            "median": 1.9179359365862316
+          },
+          "return": {
+            "mean": -31.09024761588566,
+            "median": -37.516558695962985
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_rate": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 112.3,
+            "median": 126.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 1200.0,
+            "median": 1200.0
+          },
+          "tracking_iae": {
+            "mean": 241.32069492185815,
+            "median": 285.7379069416428
+          },
+          "tracking_ise": {
+            "mean": 186.54148569531395,
+            "median": 225.09935217577794
+          },
+          "tracking_itae": {
+            "mean": 29141.61877261522,
+            "median": 31713.93261936016
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "mean",
+          "direction": "maximize",
+          "name": "settling_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "cascade",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "benchmark": "disturbance-rejection",
+      "figure": "figures/cascade/disturbance-rejection.svg",
+      "ordering": [
+        "pid",
+        "mpc"
+      ],
+      "policies": {
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "disturbance_iae": {
+            "mean": 142.18547032114458,
+            "median": 134.87568662214642
+          },
+          "disturbance_ise": {
+            "mean": 9.30065814787486,
+            "median": 7.169891242715792
+          },
+          "energy": {
+            "mean": 0.26560670304507034,
+            "median": 0.2631956123202259
+          },
+          "episode_length": {
+            "mean": 1000.0,
+            "median": 1000.0
+          },
+          "episode_return": {
+            "mean": -1.5681069854325804,
+            "median": -1.2118855550178904
+          },
+          "final_error": {
+            "mean": 0.027648801096831727,
+            "median": 0.029582597987155523
+          },
+          "minimum_safety_margin": {
+            "mean": 0.22223331357782333,
+            "median": 0.22223331357782333
+          },
+          "overshoot": {
+            "mean": 0.027649444206815588,
+            "median": 0.029582597987155523
+          },
+          "recovery_time": {
+            "mean": 51.6,
+            "median": 52.0
+          },
+          "return": {
+            "mean": -1.5681069854325804,
+            "median": -1.2118855550178904
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_rate": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 1253.3,
+            "median": 1263.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 2000.0,
+            "median": 2000.0
+          },
+          "tracking_iae": {
+            "mean": 154.32824757464087,
+            "median": 147.0309450026849
+          },
+          "tracking_ise": {
+            "mean": 9.408641912595481,
+            "median": 7.271313330107343
+          },
+          "tracking_itae": {
+            "mean": 171155.7603068752,
+            "median": 163135.8051728599
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "disturbance_iae": {
+            "mean": 136.7008294892168,
+            "median": 134.36626299812835
+          },
+          "disturbance_ise": {
+            "mean": 7.14179903033174,
+            "median": 6.817353136983792
+          },
+          "energy": {
+            "mean": 0.19993515591058242,
+            "median": 0.19736320731896267
+          },
+          "episode_length": {
+            "mean": 1000.0,
+            "median": 1000.0
+          },
+          "episode_return": {
+            "mean": -1.1934837004230705,
+            "median": -1.1394262299087001
+          },
+          "final_error": {
+            "mean": 0.015791459896222722,
+            "median": 0.014609537120979964
+          },
+          "minimum_safety_margin": {
+            "mean": 0.22223331355749223,
+            "median": 0.22223331355749226
+          },
+          "overshoot": {
+            "mean": 0.04073716733987364,
+            "median": 0.038950130746106384
+          },
+          "recovery_time": {
+            "mean": 397.2,
+            "median": 451.0
+          },
+          "return": {
+            "mean": -1.1934837004230705,
+            "median": -1.1394262299087001
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_rate": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 1598.9,
+            "median": 1630.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 2000.0,
+            "median": 2000.0
+          },
+          "tracking_iae": {
+            "mean": 140.64783937149812,
+            "median": 138.42960936325406
+          },
+          "tracking_ise": {
+            "mean": 7.1609022025384235,
+            "median": 6.8365573794522
+          },
+          "tracking_itae": {
+            "mean": 171976.28494698106,
+            "median": 170020.77283556905
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "mean",
+          "direction": "maximize",
+          "name": "settling_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "cascade",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "benchmark": "tracking",
+      "figure": "figures/cascade/tracking.svg",
+      "ordering": [
+        "mpc",
+        "pid"
+      ],
+      "policies": {
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 1.0627742732964942,
+            "median": 0.9864913009984009
+          },
+          "episode_length": {
+            "mean": 2100.0,
+            "median": 2100.0
+          },
+          "episode_return": {
+            "mean": -86.5656253555479,
+            "median": -60.49047138892004
+          },
+          "final_error": {
+            "mean": 0.004878931165421463,
+            "median": 0.001663882801115335
+          },
+          "minimum_safety_margin": {
+            "mean": 0.2359530446436761,
+            "median": 0.23570163095446636
+          },
+          "overshoot": {
+            "mean": 1.1052110862368112,
+            "median": 0.8081365273481512
+          },
+          "return": {
+            "mean": -86.5656253555479,
+            "median": -60.49047138892004
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_rate": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 1651.3,
+            "median": 1508.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 4200.0,
+            "median": 4200.0
+          },
+          "tracking_iae": {
+            "mean": 1261.1790988518608,
+            "median": 1090.8088096479016
+          },
+          "tracking_ise": {
+            "mean": 519.3937521332873,
+            "median": 362.9428283335203
+          },
+          "tracking_itae": {
+            "mean": 810018.0940127991,
+            "median": 518415.40030485153
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 1.037623584269116,
+            "median": 1.0007997083335214
+          },
+          "episode_length": {
+            "mean": 2100.0,
+            "median": 2100.0
+          },
+          "episode_return": {
+            "mean": -109.10683456112918,
+            "median": -79.19530345838734
+          },
+          "final_error": {
+            "mean": 0.0006638776371731935,
+            "median": 0.00045762521067835846
+          },
+          "minimum_safety_margin": {
+            "mean": 0.2258201513321568,
+            "median": 0.23514934176175606
+          },
+          "overshoot": {
+            "mean": 1.066439708623058,
+            "median": 0.7727149185397251
+          },
+          "return": {
+            "mean": -109.10683456112918,
+            "median": -79.19530345838734
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_rate": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 1740.3,
+            "median": 1700.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 4200.0,
+            "median": 4200.0
+          },
+          "tracking_iae": {
+            "mean": 1365.150951036371,
+            "median": 1283.0090581696143
+          },
+          "tracking_ise": {
+            "mean": 654.641007366775,
+            "median": 475.1718207503241
+          },
+          "tracking_itae": {
+            "mean": 748010.9628058511,
+            "median": 635375.6720483502
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "mean",
+          "direction": "maximize",
+          "name": "settling_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "cascade",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "benchmark": "boundary-safety",
+      "figure": "figures/crystallization/boundary-safety.svg",
+      "ordering": [
+        "mpc",
+        "pid"
+      ],
+      "policies": {
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "episode_length": {
+            "mean": 100.0,
+            "median": 100.0
+          },
+          "episode_return": {
+            "mean": -40.08484457422375,
+            "median": -39.24911794560097
+          },
+          "final_error": {
+            "mean": 0.15059499451970243,
+            "median": 0.14427576738126419
+          },
+          "minimum_safety_margin": {
+            "mean": 4.5814487790141157e-07,
+            "median": 4.5807634325483024e-07
+          },
+          "overshoot": {
+            "mean": 1.7582710378783815,
+            "median": 1.7618487320914764
+          },
+          "return": {
+            "mean": -40.08484457422375,
+            "median": -39.24911794560097
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 100.0,
+            "median": 100.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 100.0,
+            "median": 100.0
+          },
+          "tracking_iae": {
+            "mean": 84.4575406470443,
+            "median": 82.82737567546927
+          },
+          "tracking_ise": {
+            "mean": 80.1696891484475,
+            "median": 78.49823589120194
+          },
+          "tracking_itae": {
+            "mean": 1875.9735692336576,
+            "median": 1836.849280113926
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "episode_length": {
+            "mean": 100.0,
+            "median": 100.0
+          },
+          "episode_return": {
+            "mean": -40.494624513410194,
+            "median": -39.49303837432643
+          },
+          "final_error": {
+            "mean": 0.20397309831060864,
+            "median": 0.2232465881729327
+          },
+          "minimum_safety_margin": {
+            "mean": 4.5814487790141157e-07,
+            "median": 4.5807634325483024e-07
+          },
+          "overshoot": {
+            "mean": 1.7582710378783815,
+            "median": 1.7618487320914764
+          },
+          "return": {
+            "mean": -40.494624513410194,
+            "median": -39.49303837432643
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 100.0,
+            "median": 100.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 100.0,
+            "median": 100.0
+          },
+          "tracking_iae": {
+            "mean": 87.19774285141929,
+            "median": 86.47153155757059
+          },
+          "tracking_ise": {
+            "mean": 80.98924902682039,
+            "median": 78.98607674865289
+          },
+          "tracking_itae": {
+            "mean": 2119.3912581593277,
+            "median": 2175.7310214171607
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "crystallization",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "benchmark": "disturbance-rejection",
+      "figure": "figures/crystallization/disturbance-rejection.svg",
+      "ordering": [
+        "mpc",
+        "pid"
+      ],
+      "policies": {
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "disturbance_iae": {
+            "mean": 25.443398328165994,
+            "median": 24.944945118279325
+          },
+          "disturbance_ise": {
+            "mean": 9.046520832528966,
+            "median": 8.556721766176675
+          },
+          "energy": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "episode_length": {
+            "mean": 100.0,
+            "median": 100.0
+          },
+          "episode_return": {
+            "mean": -28.071863964500956,
+            "median": -28.150223211013696
+          },
+          "final_error": {
+            "mean": 0.1622601002315895,
+            "median": 0.16015682403587406
+          },
+          "minimum_safety_margin": {
+            "mean": 4.5176398810997964e-07,
+            "median": 4.517639881099797e-07
+          },
+          "overshoot": {
+            "mean": 1.3826789387490268,
+            "median": 1.3826789387490268
+          },
+          "recovery_time": {
+            "mean": 32.45,
+            "median": 32.5
+          },
+          "return": {
+            "mean": -28.071863964500956,
+            "median": -28.150223211013696
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 100.0,
+            "median": 100.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 100.0,
+            "median": 100.0
+          },
+          "tracking_iae": {
+            "mean": 74.82756426230925,
+            "median": 75.06876895732157
+          },
+          "tracking_ise": {
+            "mean": 56.14372792900191,
+            "median": 56.30044642202739
+          },
+          "tracking_itae": {
+            "mean": 1848.524845114102,
+            "median": 1866.0963154731382
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "disturbance_iae": {
+            "mean": 28.80808196578547,
+            "median": 28.293861740416336
+          },
+          "disturbance_ise": {
+            "mean": 9.907033339033223,
+            "median": 9.40438894511254
+          },
+          "energy": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "episode_length": {
+            "mean": 100.0,
+            "median": 100.0
+          },
+          "episode_return": {
+            "mean": -28.502120217753088,
+            "median": -28.55454192476944
+          },
+          "final_error": {
+            "mean": 0.23285699034606297,
+            "median": 0.23077485427816896
+          },
+          "minimum_safety_margin": {
+            "mean": 4.5176398810997964e-07,
+            "median": 4.517639881099797e-07
+          },
+          "overshoot": {
+            "mean": 1.3826789387490268,
+            "median": 1.3826789387490268
+          },
+          "recovery_time": {
+            "mean": 32.45,
+            "median": 32.5
+          },
+          "return": {
+            "mean": -28.502120217753088,
+            "median": -28.55454192476944
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 100.0,
+            "median": 100.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 100.0,
+            "median": 100.0
+          },
+          "tracking_iae": {
+            "mean": 78.1922478999287,
+            "median": 78.5371965385651
+          },
+          "tracking_ise": {
+            "mean": 57.00424043550616,
+            "median": 57.10908384953888
+          },
+          "tracking_itae": {
+            "mean": 2113.9849181306977,
+            "median": 2119.290081905005
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "crystallization",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "benchmark": "tracking",
+      "figure": "figures/crystallization/tracking.svg",
+      "ordering": [
+        "mpc",
+        "pid"
+      ],
+      "policies": {
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "episode_length": {
+            "mean": 50.0,
+            "median": 50.0
+          },
+          "episode_return": {
+            "mean": -10.444739349120088,
+            "median": -10.392197988477314
+          },
+          "final_error": {
+            "mean": 0.04264485756569658,
+            "median": 0.04205039310067983
+          },
+          "minimum_safety_margin": {
+            "mean": 4.5176398810997964e-07,
+            "median": 4.517639881099797e-07
+          },
+          "overshoot": {
+            "mean": 1.001157850565003,
+            "median": 0.9997535583747713
+          },
+          "return": {
+            "mean": -10.444739349120088,
+            "median": -10.392197988477314
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 50.0,
+            "median": 50.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 50.0,
+            "median": 50.0
+          },
+          "tracking_iae": {
+            "mean": 37.22328572912938,
+            "median": 37.11703166210495
+          },
+          "tracking_ise": {
+            "mean": 20.889478698240172,
+            "median": 20.784395976954627
+          },
+          "tracking_itae": {
+            "mean": 584.2913864284003,
+            "median": 581.850417969529
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "episode_length": {
+            "mean": 50.0,
+            "median": 50.0
+          },
+          "episode_return": {
+            "mean": -10.547862598466628,
+            "median": -10.494621983685168
+          },
+          "final_error": {
+            "mean": 0.012605925041979837,
+            "median": 0.010385844301791331
+          },
+          "minimum_safety_margin": {
+            "mean": 4.5176398810997964e-07,
+            "median": 4.517639881099797e-07
+          },
+          "overshoot": {
+            "mean": 1.001157850565003,
+            "median": 0.9997535583747713
+          },
+          "return": {
+            "mean": -10.547862598466628,
+            "median": -10.494621983685168
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 48.4,
+            "median": 48.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 50.0,
+            "median": 50.0
+          },
+          "tracking_iae": {
+            "mean": 37.47559543957938,
+            "median": 37.35601893008812
+          },
+          "tracking_ise": {
+            "mean": 21.095725196933255,
+            "median": 20.98924396737034
+          },
+          "tracking_itae": {
+            "mean": 588.6976484659397,
+            "median": 585.5487872180504
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "crystallization",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "benchmark": "boundary-safety",
+      "figure": "figures/cstr/boundary-safety.svg",
+      "ordering": [
+        "pid",
+        "mpc"
+      ],
+      "policies": {
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.7834899676077889,
+            "median": 0.7833793673548426
+          },
+          "episode_length": {
+            "mean": 100.0,
+            "median": 100.0
+          },
+          "episode_return": {
+            "mean": -0.951013153236244,
+            "median": -0.947633088595145
+          },
+          "final_error": {
+            "mean": 8.412881145860833e-09,
+            "median": 8.351343281118615e-09
+          },
+          "minimum_safety_margin": {
+            "mean": 0.03960112914692696,
+            "median": 0.038994749849460206
+          },
+          "overshoot": {
+            "mean": 0.5878934089552784,
+            "median": 0.5874824000573249
+          },
+          "return": {
+            "mean": -0.951013153236244,
+            "median": -0.947633088595145
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 14.2,
+            "median": 14.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 100.0,
+            "median": 100.0
+          },
+          "tracking_iae": {
+            "mean": 5.883972481850657,
+            "median": 5.875080281047613
+          },
+          "tracking_ise": {
+            "mean": 1.902026306472488,
+            "median": 1.8952661771902901
+          },
+          "tracking_itae": {
+            "mean": 28.704703142113704,
+            "median": 28.522085715051517
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.7846508620179361,
+            "median": 0.7847047003507612
+          },
+          "episode_length": {
+            "mean": 100.0,
+            "median": 100.0
+          },
+          "episode_return": {
+            "mean": -0.9445352977748855,
+            "median": -0.9415556346743943
+          },
+          "final_error": {
+            "mean": 0.001638851621775231,
+            "median": 0.0016546289957764973
+          },
+          "minimum_safety_margin": {
+            "mean": 0.03960112914692696,
+            "median": 0.038994749849460206
+          },
+          "overshoot": {
+            "mean": 0.5878934089552784,
+            "median": 0.5874824000573249
+          },
+          "return": {
+            "mean": -0.9445352977748855,
+            "median": -0.9415556346743943
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 12.45,
+            "median": 12.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 100.0,
+            "median": 100.0
+          },
+          "tracking_iae": {
+            "mean": 6.00106276229052,
+            "median": 6.009098716522916
+          },
+          "tracking_ise": {
+            "mean": 1.889070595549771,
+            "median": 1.8831112693487886
+          },
+          "tracking_itae": {
+            "mean": 44.16600777778807,
+            "median": 44.56948080213293
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "cstr",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "benchmark": "disturbance-rejection",
+      "figure": "figures/cstr/disturbance-rejection.svg",
+      "ordering": [
+        "pid",
+        "mpc"
+      ],
+      "policies": {
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "disturbance_iae": {
+            "mean": 4.421674756011401,
+            "median": 4.225732388182578
+          },
+          "disturbance_ise": {
+            "mean": 0.1128892474132845,
+            "median": 0.08708478834455566
+          },
+          "energy": {
+            "mean": 2.5130446363596435,
+            "median": 2.5428775383366484
+          },
+          "episode_length": {
+            "mean": 400.0,
+            "median": 400.0
+          },
+          "episode_return": {
+            "mean": -0.05644462370665977,
+            "median": -0.043542394172297993
+          },
+          "final_error": {
+            "mean": 1.5024878525103803e-08,
+            "median": 1.3306038826321753e-08
+          },
+          "minimum_safety_margin": {
+            "mean": 0.07731194955277053,
+            "median": 0.07837251024020428
+          },
+          "overshoot": {
+            "mean": 0.01708974456738694,
+            "median": 0.014292876706917687
+          },
+          "recovery_time": {
+            "mean": 0.35,
+            "median": 0.0
+          },
+          "return": {
+            "mean": -0.05644462370665977,
+            "median": -0.043542394172297993
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 195.85,
+            "median": 251.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 400.0,
+            "median": 400.0
+          },
+          "tracking_iae": {
+            "mean": 4.421677131268919,
+            "median": 4.225734829382747
+          },
+          "tracking_ise": {
+            "mean": 0.11288924741331952,
+            "median": 0.08708478834459599
+          },
+          "tracking_itae": {
+            "mean": 933.7031574277341,
+            "median": 866.2388637274905
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "disturbance_iae": {
+            "mean": 2.2327941764314825,
+            "median": 2.3113366273471803
+          },
+          "disturbance_ise": {
+            "mean": 0.024699948316062214,
+            "median": 0.022079192144340138
+          },
+          "energy": {
+            "mean": 2.4969640142439147,
+            "median": 2.502037520532809
+          },
+          "episode_length": {
+            "mean": 400.0,
+            "median": 400.0
+          },
+          "episode_return": {
+            "mean": -0.012349974158061891,
+            "median": -0.011039596072205265
+          },
+          "final_error": {
+            "mean": 0.0024288349218270387,
+            "median": 0.001549006311445458
+          },
+          "minimum_safety_margin": {
+            "mean": 0.07662318383062558,
+            "median": 0.07651547464417352
+          },
+          "overshoot": {
+            "mean": 0.017778059263070283,
+            "median": 0.01680396129411313
+          },
+          "recovery_time": {
+            "mean": 7.0,
+            "median": 0.0
+          },
+          "return": {
+            "mean": -0.012349974158061891,
+            "median": -0.011039596072205265
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 125.7,
+            "median": 0.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 400.0,
+            "median": 400.0
+          },
+          "tracking_iae": {
+            "mean": 2.232797193382085,
+            "median": 2.3113398465925044
+          },
+          "tracking_ise": {
+            "mean": 0.024699948316123783,
+            "median": 0.02207919214441053
+          },
+          "tracking_itae": {
+            "mean": 541.6309754266595,
+            "median": 573.9424076193075
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "cstr",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "benchmark": "tracking",
+      "figure": "figures/cstr/tracking.svg",
+      "ordering": [
+        "mpc",
+        "pid"
+      ],
+      "policies": {
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 1.0983222380442565,
+            "median": 1.0795918807224902
+          },
+          "episode_length": {
+            "mean": 225.0,
+            "median": 225.0
+          },
+          "episode_return": {
+            "mean": -0.9946907492752152,
+            "median": -0.7233177706314896
+          },
+          "final_error": {
+            "mean": 2.6746443516295006e-08,
+            "median": 2.5873960080641862e-08
+          },
+          "minimum_safety_margin": {
+            "mean": 0.04164061688346242,
+            "median": 0.038925816716806186
+          },
+          "overshoot": {
+            "mean": 0.28645153363569487,
+            "median": 0.2540426301696376
+          },
+          "return": {
+            "mean": -0.9946907492752152,
+            "median": -0.7233177706314896
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 21.8,
+            "median": 16.5
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 225.0,
+            "median": 225.0
+          },
+          "tracking_iae": {
+            "mean": 6.5306767084165305,
+            "median": 5.416064478906071
+          },
+          "tracking_ise": {
+            "mean": 1.9893814985504303,
+            "median": 1.4466355412629792
+          },
+          "tracking_itae": {
+            "mean": 79.38573084857275,
+            "median": 27.64326449029157
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 1.0887736976540883,
+            "median": 1.0372432386146655
+          },
+          "episode_length": {
+            "mean": 225.0,
+            "median": 225.0
+          },
+          "episode_return": {
+            "mean": -0.9968061421694232,
+            "median": -0.7522985857051709
+          },
+          "final_error": {
+            "mean": 0.0012734345574666787,
+            "median": 0.0005679885961565631
+          },
+          "minimum_safety_margin": {
+            "mean": 0.04112417427111405,
+            "median": 0.039001124512608884
+          },
+          "overshoot": {
+            "mean": 0.2911913393696436,
+            "median": 0.2540426301696376
+          },
+          "return": {
+            "mean": -0.9968061421694232,
+            "median": -0.7522985857051709
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 50.4,
+            "median": 54.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 225.0,
+            "median": 225.0
+          },
+          "tracking_iae": {
+            "mean": 8.479958228064772,
+            "median": 6.772605579017614
+          },
+          "tracking_ise": {
+            "mean": 1.993612284338846,
+            "median": 1.5045971714103419
+          },
+          "tracking_itae": {
+            "mean": 236.4335779869942,
+            "median": 167.42688001993673
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "cstr",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "benchmark": "boundary-safety",
+      "figure": "figures/extraction/boundary-safety.svg",
+      "ordering": [
+        "mpc",
+        "pid"
+      ],
+      "policies": {
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.0022841656233287522,
+            "median": 0.002284169599413872
+          },
+          "episode_length": {
+            "mean": 100.0,
+            "median": 100.0
+          },
+          "episode_return": {
+            "mean": -0.0013143674377016188,
+            "median": -0.0013457679624764895
+          },
+          "final_error": {
+            "mean": 1.0443385051801041e-08,
+            "median": 1.0443385045633136e-08
+          },
+          "minimum_safety_margin": {
+            "mean": 0.06068043282424529,
+            "median": 0.060638303517375355
+          },
+          "overshoot": {
+            "mean": 0.03403021635289556,
+            "median": 0.034137435053392395
+          },
+          "return": {
+            "mean": -0.0013143674377016188,
+            "median": -0.0013457679624764895
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 0.20000000000000004,
+            "median": 0.2
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 10.0,
+            "median": 10.0
+          },
+          "tracking_iae": {
+            "mean": 0.014784806293711022,
+            "median": 0.014956807719821757
+          },
+          "tracking_ise": {
+            "mean": 0.001314367437701619,
+            "median": 0.0013457679624764899
+          },
+          "tracking_itae": {
+            "mean": 0.0019234604367390485,
+            "median": 0.001942844839285444
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.0022923527085118816,
+            "median": 0.002292353839510016
+          },
+          "episode_length": {
+            "mean": 100.0,
+            "median": 100.0
+          },
+          "episode_return": {
+            "mean": -0.014343221328996958,
+            "median": -0.014335691199306
+          },
+          "final_error": {
+            "mean": 5.2128892807306535e-08,
+            "median": 5.212889280730653e-08
+          },
+          "minimum_safety_margin": {
+            "mean": 0.0630880320590859,
+            "median": 0.06308919225113688
+          },
+          "overshoot": {
+            "mean": 0.36424082568611293,
+            "median": 0.3641516776219012
+          },
+          "return": {
+            "mean": -0.014343221328996958,
+            "median": -0.014335691199306
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 0.5,
+            "median": 0.5
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 10.0,
+            "median": 10.0
+          },
+          "tracking_iae": {
+            "mean": 0.0601954728861139,
+            "median": 0.06018104512183743
+          },
+          "tracking_ise": {
+            "mean": 0.014343221328996958,
+            "median": 0.014335691199306
+          },
+          "tracking_itae": {
+            "mean": 0.01536970286349367,
+            "median": 0.015366979616281919
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "extraction",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "benchmark": "disturbance-rejection",
+      "figure": "figures/extraction/disturbance-rejection.svg",
+      "ordering": [
+        "pid",
+        "mpc"
+      ],
+      "policies": {
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "disturbance_iae": {
+            "mean": 1.7186542376948228,
+            "median": 1.2678610942955448
+          },
+          "disturbance_ise": {
+            "mean": 0.1557738324697633,
+            "median": 0.07836479632906904
+          },
+          "energy": {
+            "mean": 0.013346447803700912,
+            "median": 0.013401829406619
+          },
+          "episode_length": {
+            "mean": 580.0,
+            "median": 580.0
+          },
+          "episode_return": {
+            "mean": -0.15577383246976534,
+            "median": -0.0783647963290709
+          },
+          "final_error": {
+            "mean": 1.0443385705599045e-08,
+            "median": 1.0443386032498045e-08
+          },
+          "minimum_safety_margin": {
+            "mean": 0.05849364857511968,
+            "median": 0.06398500328209647
+          },
+          "overshoot": {
+            "mean": 0.019563563938469218,
+            "median": 0.0064771887022824215
+          },
+          "recovery_time": {
+            "mean": 0.025,
+            "median": 0.0
+          },
+          "return": {
+            "mean": -0.15577383246976534,
+            "median": -0.0783647963290709
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 42.885,
+            "median": 44.6
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 58.0,
+            "median": 58.0
+          },
+          "tracking_iae": {
+            "mean": 1.7186544365725411,
+            "median": 1.267861268840176
+          },
+          "tracking_ise": {
+            "mean": 0.15577383246976534,
+            "median": 0.07836479632907088
+          },
+          "tracking_itae": {
+            "mean": 55.76202324517868,
+            "median": 39.3040880469537
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "disturbance_iae": {
+            "mean": 0.0772097819001902,
+            "median": 0.05974318814054874
+          },
+          "disturbance_ise": {
+            "mean": 0.0031699461153048315,
+            "median": 0.0016285843326555105
+          },
+          "energy": {
+            "mean": 0.013737375628575701,
+            "median": 0.013683624917848265
+          },
+          "episode_length": {
+            "mean": 580.0,
+            "median": 580.0
+          },
+          "episode_return": {
+            "mean": -0.003169946115320959,
+            "median": -0.0016285843326732975
+          },
+          "final_error": {
+            "mean": 3.116933134681175e-06,
+            "median": 2.37412109724586e-08
+          },
+          "minimum_safety_margin": {
+            "mean": 0.05848346496524219,
+            "median": 0.06400339968333349
+          },
+          "overshoot": {
+            "mean": 0.07821426576556617,
+            "median": 0.06843569924741216
+          },
+          "recovery_time": {
+            "mean": 0.6,
+            "median": 0.55
+          },
+          "return": {
+            "mean": -0.003169946115320959,
+            "median": -0.0016285843326732975
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 45.675000000000004,
+            "median": 44.85
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 58.0,
+            "median": 58.0
+          },
+          "tracking_iae": {
+            "mean": 0.07721021751631733,
+            "median": 0.059743667936019325
+          },
+          "tracking_ise": {
+            "mean": 0.003169946115320959,
+            "median": 0.0016285843326732975
+          },
+          "tracking_itae": {
+            "mean": 2.5060731787732204,
+            "median": 2.126160617994617
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "extraction",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "benchmark": "tracking",
+      "figure": "figures/extraction/tracking.svg",
+      "ordering": [
+        "mpc",
+        "pid"
+      ],
+      "policies": {
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.0023580420835739154,
+            "median": 0.0019633816477532167
+          },
+          "episode_length": {
+            "mean": 100.0,
+            "median": 100.0
+          },
+          "episode_return": {
+            "mean": -0.0003690498680842868,
+            "median": -0.00012631370436904345
+          },
+          "final_error": {
+            "mean": 5.115539609196814e-09,
+            "median": 4.464141988168456e-09
+          },
+          "minimum_safety_margin": {
+            "mean": 0.06300436128995344,
+            "median": 0.060292480287326505
+          },
+          "overshoot": {
+            "mean": 0.041065846359323775,
+            "median": 0.03236279298357326
+          },
+          "return": {
+            "mean": -0.0003690498680842868,
+            "median": -0.00012631370436904345
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 0.085,
+            "median": 0.1
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 10.0,
+            "median": 10.0
+          },
+          "tracking_iae": {
+            "mean": 0.005778317091129498,
+            "median": 0.004719719031204708
+          },
+          "tracking_ise": {
+            "mean": 0.00036904986808428684,
+            "median": 0.00012631370436904337
+          },
+          "tracking_itae": {
+            "mean": 0.0008877842577590889,
+            "median": 0.0006748042506068049
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.0023446055703123824,
+            "median": 0.0019660243435452376
+          },
+          "episode_length": {
+            "mean": 100.0,
+            "median": 100.0
+          },
+          "episode_return": {
+            "mean": -0.0031452897192731483,
+            "median": -0.0032848201012940278
+          },
+          "final_error": {
+            "mean": 4.407972330444037e-06,
+            "median": 2.3723034925371422e-08
+          },
+          "minimum_safety_margin": {
+            "mean": 0.06230767907732086,
+            "median": 0.06051094690720851
+          },
+          "overshoot": {
+            "mean": 0.05848638054948335,
+            "median": 0.0567662692649348
+          },
+          "return": {
+            "mean": -0.0031452897192731483,
+            "median": -0.0032848201012940278
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 1.0399999999999998,
+            "median": 1.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 10.0,
+            "median": 10.0
+          },
+          "tracking_iae": {
+            "mean": 0.06109717629361997,
+            "median": 0.06171941878410847
+          },
+          "tracking_ise": {
+            "mean": 0.0031452897192731483,
+            "median": 0.003284820101294027
+          },
+          "tracking_itae": {
+            "mean": 0.054138622182782835,
+            "median": 0.03948396901703353
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "extraction",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "benchmark": "boundary-safety",
+      "figure": "figures/heater/boundary-safety.svg",
+      "ordering": [
+        "pid",
+        "mpc"
+      ],
+      "policies": {
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 4243.378417357804,
+            "median": 4241.966700040632
+          },
+          "episode_length": {
+            "mean": 450.0,
+            "median": 450.0
+          },
+          "episode_return": {
+            "mean": -53.51288363784831,
+            "median": -54.676197539466315
+          },
+          "final_error": {
+            "mean": 3.31979673617866e-07,
+            "median": 3.2463051979902957e-07
+          },
+          "minimum_safety_margin": {
+            "mean": 0.021781810116917946,
+            "median": 0.020157455687168688
+          },
+          "overshoot": {
+            "mean": 1.8013061430190938,
+            "median": 1.809613718743229
+          },
+          "return": {
+            "mean": -53.51288363784831,
+            "median": -54.676197539466315
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 119.0,
+            "median": 119.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 450.0,
+            "median": 450.0
+          },
+          "tracking_iae": {
+            "mean": 92.9189313611997,
+            "median": 94.00715489071176
+          },
+          "tracking_ise": {
+            "mean": 107.02576727569662,
+            "median": 109.35239507893264
+          },
+          "tracking_itae": {
+            "mean": 3062.272946356689,
+            "median": 3101.5623138049887
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 4133.018547391725,
+            "median": 4130.169267679252
+          },
+          "episode_length": {
+            "mean": 450.0,
+            "median": 450.0
+          },
+          "episode_return": {
+            "mean": -47.91944391642889,
+            "median": -48.74369751901767
+          },
+          "final_error": {
+            "mean": 0.011160720880618058,
+            "median": 0.011276809489761064
+          },
+          "minimum_safety_margin": {
+            "mean": 0.042316562228512114,
+            "median": 0.04147684079736265
+          },
+          "overshoot": {
+            "mean": 1.7958027082841324,
+            "median": 1.802154453332129
+          },
+          "return": {
+            "mean": -47.91944391642889,
+            "median": -48.74369751901767
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 381.55,
+            "median": 382.5
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 450.0,
+            "median": 450.0
+          },
+          "tracking_iae": {
+            "mean": 139.6841294147012,
+            "median": 141.2301814539604
+          },
+          "tracking_ise": {
+            "mean": 95.83888783285778,
+            "median": 97.48739503803534
+          },
+          "tracking_itae": {
+            "mean": 11616.482897978949,
+            "median": 11763.46513295145
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "heater",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "benchmark": "disturbance-rejection",
+      "figure": "figures/heater/disturbance-rejection.svg",
+      "ordering": [
+        "pid",
+        "mpc"
+      ],
+      "policies": {
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "disturbance_iae": {
+            "mean": 223.28459193952972,
+            "median": 221.2407130006912
+          },
+          "disturbance_ise": {
+            "mean": 246.05210932813816,
+            "median": 154.3356646819599
+          },
+          "energy": {
+            "mean": 6735.314817978276,
+            "median": 6744.255589610995
+          },
+          "episode_length": {
+            "mean": 700.0,
+            "median": 700.0
+          },
+          "episode_return": {
+            "mean": -123.02605466407405,
+            "median": -77.16783234098429
+          },
+          "final_error": {
+            "mean": 0.00041573956602860564,
+            "median": 0.00017934535517838412
+          },
+          "minimum_safety_margin": {
+            "mean": 0.08680742620694959,
+            "median": 0.08860558714406774
+          },
+          "overshoot": {
+            "mean": 0.4707014870678883,
+            "median": 0.20756690577809067
+          },
+          "recovery_time": {
+            "mean": 117.4,
+            "median": 118.5
+          },
+          "return": {
+            "mean": -123.02605466407405,
+            "median": -77.16783234098429
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 568.15,
+            "median": 554.5
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 700.0,
+            "median": 700.0
+          },
+          "tracking_iae": {
+            "mean": 223.28464406792813,
+            "median": 221.2407649735881
+          },
+          "tracking_ise": {
+            "mean": 246.0521093281481,
+            "median": 154.33566468196858
+          },
+          "tracking_itae": {
+            "mean": 76969.23835374706,
+            "median": 72318.79285700011
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "disturbance_iae": {
+            "mean": 137.32230448754137,
+            "median": 117.1505879384284
+          },
+          "disturbance_ise": {
+            "mean": 60.902622434977886,
+            "median": 41.61383419540145
+          },
+          "energy": {
+            "mean": 6755.680448684431,
+            "median": 6871.0974892808335
+          },
+          "episode_length": {
+            "mean": 700.0,
+            "median": 700.0
+          },
+          "episode_return": {
+            "mean": -30.451311217506923,
+            "median": -20.80691709771602
+          },
+          "final_error": {
+            "mean": 0.03711205112724345,
+            "median": 0.031599706395297744
+          },
+          "minimum_safety_margin": {
+            "mean": 0.06292978509074612,
+            "median": 0.06351732009453294
+          },
+          "overshoot": {
+            "mean": 0.6408218430958759,
+            "median": 0.5738021422236095
+          },
+          "recovery_time": {
+            "mean": 222.85,
+            "median": 215.0
+          },
+          "return": {
+            "mean": -30.451311217506923,
+            "median": -20.80691709771602
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 673.6,
+            "median": 700.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 700.0,
+            "median": 700.0
+          },
+          "tracking_iae": {
+            "mean": 137.32241051944524,
+            "median": 117.15068503778114
+          },
+          "tracking_ise": {
+            "mean": 60.902622435013846,
+            "median": 41.61383419543204
+          },
+          "tracking_itae": {
+            "mean": 53907.67986894575,
+            "median": 46067.82323829475
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "heater",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "benchmark": "tracking",
+      "figure": "figures/heater/tracking.svg",
+      "ordering": [
+        "mpc",
+        "pid"
+      ],
+      "policies": {
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 2985.4078545040556,
+            "median": 2962.560526761743
+          },
+          "episode_length": {
+            "mean": 300.0,
+            "median": 300.0
+          },
+          "episode_return": {
+            "mean": -5.2318343916361965,
+            "median": -4.053085844908934
+          },
+          "final_error": {
+            "mean": 1.2792949155626676e-05,
+            "median": 1.2637370836898754e-05
+          },
+          "minimum_safety_margin": {
+            "mean": 0.09436707276592608,
+            "median": 0.09165752112562708
+          },
+          "overshoot": {
+            "mean": 0.30453170058605666,
+            "median": 0.32938641475225994
+          },
+          "return": {
+            "mean": -5.2318343916361965,
+            "median": -4.053085844908934
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 98.4,
+            "median": 99.5
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 300.0,
+            "median": 300.0
+          },
+          "tracking_iae": {
+            "mean": 29.555530563210652,
+            "median": 28.573401710565705
+          },
+          "tracking_ise": {
+            "mean": 10.463668783272393,
+            "median": 8.10617168981787
+          },
+          "tracking_itae": {
+            "mean": 867.5995415101413,
+            "median": 867.6443092352121
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 2978.910827608572,
+            "median": 2982.557222677601
+          },
+          "episode_length": {
+            "mean": 300.0,
+            "median": 300.0
+          },
+          "episode_return": {
+            "mean": -5.562339623746238,
+            "median": -4.312733056519901
+          },
+          "final_error": {
+            "mean": 0.012701839863887603,
+            "median": 0.011406533304968297
+          },
+          "minimum_safety_margin": {
+            "mean": 0.08927048882572237,
+            "median": 0.08777189098103239
+          },
+          "overshoot": {
+            "mean": 0.294426915884676,
+            "median": 0.29253346636016075
+          },
+          "return": {
+            "mean": -5.562339623746238,
+            "median": -4.312733056519901
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 212.25,
+            "median": 207.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 300.0,
+            "median": 300.0
+          },
+          "tracking_iae": {
+            "mean": 41.37239509967198,
+            "median": 40.07448971359224
+          },
+          "tracking_ise": {
+            "mean": 11.124679247492477,
+            "median": 8.625466113039801
+          },
+          "tracking_itae": {
+            "mean": 2686.2901828810195,
+            "median": 2487.550657694099
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "heater",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "benchmark": "boundary-safety",
+      "figure": "figures/hvac/boundary-safety.svg",
+      "ordering": [
+        "pid",
+        "mpc"
+      ],
+      "policies": {
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.15946203696553132,
+            "median": 0.1315281174238771
+          },
+          "episode_length": {
+            "mean": 60.0,
+            "median": 60.0
+          },
+          "episode_return": {
+            "mean": -391.01759053580105,
+            "median": -288.908107750963
+          },
+          "final_error": {
+            "mean": 0.0003019607516349332,
+            "median": 0.00014032978125277928
+          },
+          "minimum_safety_margin": {
+            "mean": 0.12237122020354077,
+            "median": 0.12547709899697845
+          },
+          "overshoot": {
+            "mean": 1.859350375041857,
+            "median": 3.1179650499784177
+          },
+          "return": {
+            "mean": -391.01759053580105,
+            "median": -288.908107750963
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 171.0,
+            "median": 155.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 300.0,
+            "median": 300.0
+          },
+          "tracking_iae": {
+            "mean": 336.2271466471112,
+            "median": 265.8772175759175
+          },
+          "tracking_ise": {
+            "mean": 782.0351810716021,
+            "median": 577.816215501926
+          },
+          "tracking_itae": {
+            "mean": 13339.886636368374,
+            "median": 8591.105609242004
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.17244865109119567,
+            "median": 0.15375011293217541
+          },
+          "episode_length": {
+            "mean": 60.0,
+            "median": 60.0
+          },
+          "episode_return": {
+            "mean": -381.70148563787336,
+            "median": -273.9780985694899
+          },
+          "final_error": {
+            "mean": 0.002248202871368976,
+            "median": 0.002328270790694642
+          },
+          "minimum_safety_margin": {
+            "mean": 0.12237122020354077,
+            "median": 0.12547709899697845
+          },
+          "overshoot": {
+            "mean": 1.8725974323269838,
+            "median": 3.1179650499784177
+          },
+          "return": {
+            "mean": -381.70148563787336,
+            "median": -273.9780985694899
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 176.5,
+            "median": 180.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 300.0,
+            "median": 300.0
+          },
+          "tracking_iae": {
+            "mean": 309.15642732098365,
+            "median": 230.65738073701618
+          },
+          "tracking_ise": {
+            "mean": 763.4029712757467,
+            "median": 547.9561971389799
+          },
+          "tracking_itae": {
+            "mean": 11277.515530105182,
+            "median": 6465.400920247255
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "hvac",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "benchmark": "disturbance-rejection",
+      "figure": "figures/hvac/disturbance-rejection.svg",
+      "ordering": [
+        "pid",
+        "mpc"
+      ],
+      "policies": {
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "disturbance_iae": {
+            "mean": 209.4507619964911,
+            "median": 178.88173236857966
+          },
+          "disturbance_ise": {
+            "mean": 108.72132797041411,
+            "median": 80.35258678886308
+          },
+          "energy": {
+            "mean": 0.5090140982568263,
+            "median": 0.504022868722677
+          },
+          "episode_length": {
+            "mean": 210.0,
+            "median": 210.0
+          },
+          "episode_return": {
+            "mean": -54.36066398520811,
+            "median": -40.17629339443266
+          },
+          "final_error": {
+            "mean": 1.53678128694823e-05,
+            "median": 1.535567404342686e-07
+          },
+          "minimum_safety_margin": {
+            "mean": 0.46027925700708094,
+            "median": 0.4630855218332596
+          },
+          "overshoot": {
+            "mean": 0.037299752785301975,
+            "median": 0.004649975887485613
+          },
+          "recovery_time": {
+            "mean": 83.25,
+            "median": 85.0
+          },
+          "return": {
+            "mean": -54.36066398520811,
+            "median": -40.17629339443266
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 735.5,
+            "median": 732.5
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 1050.0,
+            "median": 1050.0
+          },
+          "tracking_iae": {
+            "mean": 209.45079619583825,
+            "median": 178.88176040540753
+          },
+          "tracking_ise": {
+            "mean": 108.72132797041623,
+            "median": 80.35258678886531
+          },
+          "tracking_itae": {
+            "mean": 114291.45992307356,
+            "median": 93599.62960830255
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "disturbance_iae": {
+            "mean": 76.45522479772251,
+            "median": 45.11167530082824
+          },
+          "disturbance_ise": {
+            "mean": 28.425741579820887,
+            "median": 5.141152261439233
+          },
+          "energy": {
+            "mean": 0.5277112915962935,
+            "median": 0.5250857336819172
+          },
+          "episode_length": {
+            "mean": 210.0,
+            "median": 210.0
+          },
+          "episode_return": {
+            "mean": -14.212870789912945,
+            "median": -2.5705761307220723
+          },
+          "final_error": {
+            "mean": 0.0007805614639813996,
+            "median": 0.0004286884257087564
+          },
+          "minimum_safety_margin": {
+            "mean": 0.46062455656673224,
+            "median": 0.4624804005050256
+          },
+          "overshoot": {
+            "mean": 0.1179817843328737,
+            "median": 0.12251512036823575
+          },
+          "recovery_time": {
+            "mean": 138.5,
+            "median": 145.0
+          },
+          "return": {
+            "mean": -14.212870789912945,
+            "median": -2.5705761307220723
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 790.75,
+            "median": 802.5
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 1050.0,
+            "median": 1050.0
+          },
+          "tracking_iae": {
+            "mean": 76.45527326933343,
+            "median": 45.11171703212868
+          },
+          "tracking_ise": {
+            "mean": 28.42574157982589,
+            "median": 5.1411522614441445
+          },
+          "tracking_itae": {
+            "mean": 44023.24961714191,
+            "median": 23955.584918292905
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "hvac",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "benchmark": "tracking",
+      "figure": "figures/hvac/tracking.svg",
+      "ordering": [
+        "pid",
+        "mpc"
+      ],
+      "policies": {
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.1292194133102894,
+            "median": 0.1278915400803089
+          },
+          "episode_length": {
+            "mean": 60.0,
+            "median": 60.0
+          },
+          "episode_return": {
+            "mean": -1.9286520690983155,
+            "median": -1.8743560363895233
+          },
+          "final_error": {
+            "mean": 6.844583165599438e-06,
+            "median": 5.376380973087791e-06
+          },
+          "minimum_safety_margin": {
+            "mean": 0.45403001833598394,
+            "median": 0.4535967646222848
+          },
+          "overshoot": {
+            "mean": 0.237958283181179,
+            "median": 0.2525610308434285
+          },
+          "return": {
+            "mean": -1.9286520690983155,
+            "median": -1.8743560363895233
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 77.5,
+            "median": 80.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 300.0,
+            "median": 300.0
+          },
+          "tracking_iae": {
+            "mean": 19.001349086745137,
+            "median": 19.393180499980268
+          },
+          "tracking_ise": {
+            "mean": 3.857304138196631,
+            "median": 3.7487120727790466
+          },
+          "tracking_itae": {
+            "mean": 547.5761130946166,
+            "median": 593.3277733934594
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.1317453192025423,
+            "median": 0.12980236191302535
+          },
+          "episode_length": {
+            "mean": 60.0,
+            "median": 60.0
+          },
+          "episode_return": {
+            "mean": -0.7480909791124316,
+            "median": -0.550085362949388
+          },
+          "final_error": {
+            "mean": 0.0003758071914366834,
+            "median": 0.00034466224664719824
+          },
+          "minimum_safety_margin": {
+            "mean": 0.45666682914681667,
+            "median": 0.4525960197685376
+          },
+          "overshoot": {
+            "mean": 0.17872640160372608,
+            "median": 0.1899012997911882
+          },
+          "return": {
+            "mean": -0.7480909791124316,
+            "median": -0.550085362949388
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 61.0,
+            "median": 65.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 300.0,
+            "median": 300.0
+          },
+          "tracking_iae": {
+            "mean": 9.60612058556226,
+            "median": 9.666828921988714
+          },
+          "tracking_ise": {
+            "mean": 1.4961819582248632,
+            "median": 1.100170725898776
+          },
+          "tracking_itae": {
+            "mean": 354.0130813095245,
+            "median": 348.48446069253214
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "hvac",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "benchmark": "boundary-safety",
+      "figure": "figures/quadruple/boundary-safety.svg",
+      "ordering": [
+        "mpc",
+        "pid"
+      ],
+      "policies": {
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "episode_length": {
+            "mean": 180.0,
+            "median": 180.0
+          },
+          "episode_return": {
+            "mean": -0.3560484358219883,
+            "median": -0.3575667797172979
+          },
+          "final_error": {
+            "mean": 6.251481027508276e-08,
+            "median": 5.535570166692594e-08
+          },
+          "minimum_safety_margin": {
+            "mean": 0.04167452027032813,
+            "median": 0.042324626682899824
+          },
+          "overshoot": {
+            "mean": 0.25158526602335696,
+            "median": 0.25384069529074144
+          },
+          "return": {
+            "mean": -0.3560484358219883,
+            "median": -0.3575667797172979
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 18.3,
+            "median": 18.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 180.0,
+            "median": 180.0
+          },
+          "tracking_iae": {
+            "mean": 4.505207666459941,
+            "median": 4.57042834319275
+          },
+          "tracking_ise": {
+            "mean": 0.7120968716439766,
+            "median": 0.7151335594345958
+          },
+          "tracking_itae": {
+            "mean": 32.27519961545654,
+            "median": 32.59001492684455
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "episode_length": {
+            "mean": 180.0,
+            "median": 180.0
+          },
+          "episode_return": {
+            "mean": -0.3560679689251292,
+            "median": -0.3575932374234755
+          },
+          "final_error": {
+            "mean": 1.9166893166966406e-06,
+            "median": 1.9003604771139494e-06
+          },
+          "minimum_safety_margin": {
+            "mean": 0.04090290546716114,
+            "median": 0.04074531782270145
+          },
+          "overshoot": {
+            "mean": 0.25158526602335696,
+            "median": 0.25384069529074144
+          },
+          "return": {
+            "mean": -0.3560679689251292,
+            "median": -0.3575932374234755
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 18.3,
+            "median": 18.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 180.0,
+            "median": 180.0
+          },
+          "tracking_iae": {
+            "mean": 4.539381618772433,
+            "median": 4.608462075153227
+          },
+          "tracking_ise": {
+            "mean": 0.7121359378502583,
+            "median": 0.715186474846951
+          },
+          "tracking_itae": {
+            "mean": 33.62322848484011,
+            "median": 33.99343085498523
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "quadruple",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "benchmark": "disturbance-rejection",
+      "figure": "figures/quadruple/disturbance-rejection.svg",
+      "ordering": [
+        "pid",
+        "mpc"
+      ],
+      "policies": {
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "disturbance_iae": {
+            "mean": 0.9284182236137427,
+            "median": 0.8644943023090629
+          },
+          "disturbance_ise": {
+            "mean": 0.0022932487807105235,
+            "median": 0.0022769618630890513
+          },
+          "energy": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "episode_length": {
+            "mean": 500.0,
+            "median": 500.0
+          },
+          "episode_return": {
+            "mean": -0.0011466243904051294,
+            "median": -0.0011384809315928457
+          },
+          "final_error": {
+            "mean": 2.6484124422410104e-08,
+            "median": 1.9077859825245015e-08
+          },
+          "minimum_safety_margin": {
+            "mean": 0.06954499999645972,
+            "median": 0.06949568900319858
+          },
+          "overshoot": {
+            "mean": 1.1568282691101219e-05,
+            "median": 1.2168950947311075e-05
+          },
+          "recovery_time": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "return": {
+            "mean": -0.0011466243904051294,
+            "median": -0.0011384809315928457
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 500.0,
+            "median": 500.0
+          },
+          "tracking_iae": {
+            "mean": 0.9284232596818758,
+            "median": 0.864499739122282
+          },
+          "tracking_ise": {
+            "mean": 0.002293248780810259,
+            "median": 0.002276961863185692
+          },
+          "tracking_itae": {
+            "mean": 252.22224628165583,
+            "median": 238.01416054497162
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "disturbance_iae": {
+            "mean": 0.13348579196372806,
+            "median": 0.14099028902421562
+          },
+          "disturbance_ise": {
+            "mean": 0.00016705939194726062,
+            "median": 0.00017770996843228658
+          },
+          "energy": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "episode_length": {
+            "mean": 500.0,
+            "median": 500.0
+          },
+          "episode_return": {
+            "mean": -8.352969603744978e-05,
+            "median": -8.885498426906003e-05
+          },
+          "final_error": {
+            "mean": 2.095874140188414e-05,
+            "median": 4.356405940963981e-06
+          },
+          "minimum_safety_margin": {
+            "mean": 0.06949254496274912,
+            "median": 0.0694407725800444
+          },
+          "overshoot": {
+            "mean": 0.0028395275478751984,
+            "median": 0.00299337207577266
+          },
+          "recovery_time": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "return": {
+            "mean": -8.352969603744978e-05,
+            "median": -8.885498426906003e-05
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 500.0,
+            "median": 500.0
+          },
+          "tracking_iae": {
+            "mean": 0.13349136254815258,
+            "median": 0.14099491448515428
+          },
+          "tracking_ise": {
+            "mean": 0.00016705939207489957,
+            "median": 0.00017770996853812003
+          },
+          "tracking_itae": {
+            "mean": 38.0526902334154,
+            "median": 37.5624323506013
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "quadruple",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "benchmark": "tracking",
+      "figure": "figures/quadruple/tracking.svg",
+      "ordering": [
+        "mpc",
+        "pid"
+      ],
+      "policies": {
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "episode_length": {
+            "mean": 180.0,
+            "median": 180.0
+          },
+          "episode_return": {
+            "mean": -0.3779352492377871,
+            "median": -0.30175365037594065
+          },
+          "final_error": {
+            "mean": 4.913058997679798e-07,
+            "median": 4.506704540219175e-07
+          },
+          "minimum_safety_margin": {
+            "mean": 0.020410831248151233,
+            "median": 0.005079616884849748
+          },
+          "overshoot": {
+            "mean": 0.17503471040131988,
+            "median": 0.2134650769598893
+          },
+          "return": {
+            "mean": -0.3779352492377871,
+            "median": -0.30175365037594065
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 22.55,
+            "median": 21.5
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 180.0,
+            "median": 180.0
+          },
+          "tracking_iae": {
+            "mean": 4.291338167715666,
+            "median": 3.693642113513687
+          },
+          "tracking_ise": {
+            "mean": 0.7558704984755742,
+            "median": 0.6035073007518814
+          },
+          "tracking_itae": {
+            "mean": 38.713086381487514,
+            "median": 26.74885131377568
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "episode_length": {
+            "mean": 180.0,
+            "median": 180.0
+          },
+          "episode_return": {
+            "mean": -0.3778867896695787,
+            "median": -0.30178121751386056
+          },
+          "final_error": {
+            "mean": 1.6095494979262433e-05,
+            "median": 1.4009420394933692e-05
+          },
+          "minimum_safety_margin": {
+            "mean": 0.020749129914293316,
+            "median": 0.005914961679898237
+          },
+          "overshoot": {
+            "mean": 0.17626579457272562,
+            "median": 0.2134650769598893
+          },
+          "return": {
+            "mean": -0.3778867896695787,
+            "median": -0.30178121751386056
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 22.55,
+            "median": 21.5
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 180.0,
+            "median": 180.0
+          },
+          "tracking_iae": {
+            "mean": 4.399840109221405,
+            "median": 3.7823243574242027
+          },
+          "tracking_ise": {
+            "mean": 0.7557735793391575,
+            "median": 0.6035624350277211
+          },
+          "tracking_itae": {
+            "mean": 43.522926516489726,
+            "median": 31.126615912826306
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "quadruple",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "benchmark": "boundary-safety",
+      "figure": "figures/three-tank/boundary-safety.svg",
+      "ordering": [
+        "pid",
+        "rlpd",
+        "mpc",
+        "ddpg",
+        "sac",
+        "td3",
+        "ppo"
+      ],
+      "policies": {
+        "ddpg": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.022386576760518452,
+            "median": 0.021860992559446814
+          },
+          "episode_length": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "episode_return": {
+            "mean": -82.7630658906456,
+            "median": -96.3251546697064
+          },
+          "final_error": {
+            "mean": 0.35268731096228595,
+            "median": 0.3526873077631043
+          },
+          "minimum_safety_margin": {
+            "mean": 0.1612077129293566,
+            "median": 0.15929490496086063
+          },
+          "overshoot": {
+            "mean": 1.943961435353217,
+            "median": 1.9535254751956965
+          },
+          "return": {
+            "mean": -82.7630658906456,
+            "median": -96.3251546697064
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "tracking_iae": {
+            "mean": 428.0502438415266,
+            "median": 456.77308453689204
+          },
+          "tracking_ise": {
+            "mean": 244.84260249826502,
+            "median": 285.7538706826708
+          },
+          "tracking_itae": {
+            "mean": 98200.5832018262,
+            "median": 98990.74712803263
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.004099924967463883,
+            "median": 0.004543552084532382
+          },
+          "episode_length": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "episode_return": {
+            "mean": -137.98599059821467,
+            "median": -78.2144437620988
+          },
+          "final_error": {
+            "mean": 0.20000449415423577,
+            "median": 1.1521575984940746e-06
+          },
+          "minimum_safety_margin": {
+            "mean": 0.15710148912772032,
+            "median": 0.1536977885853793
+          },
+          "overshoot": {
+            "mean": 1.964492554361398,
+            "median": 1.9815110570731034
+          },
+          "return": {
+            "mean": -137.98599059821467,
+            "median": -78.2144437620988
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 243.65,
+            "median": 211.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "tracking_iae": {
+            "mean": 298.5861983028446,
+            "median": 230.6562289284792
+          },
+          "tracking_ise": {
+            "mean": 412.53480064398946,
+            "median": 233.00419842627701
+          },
+          "tracking_itae": {
+            "mean": 44881.04916477482,
+            "median": 11209.82495152171
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.00423417849065179,
+            "median": 0.004203523599365317
+          },
+          "episode_length": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "episode_return": {
+            "mean": -58.248083225219375,
+            "median": -70.97375517019861
+          },
+          "final_error": {
+            "mean": 0.004758036075501446,
+            "median": 0.005226563287080016
+          },
+          "minimum_safety_margin": {
+            "mean": 0.1620243344091982,
+            "median": 0.1593190746944138
+          },
+          "overshoot": {
+            "mean": 1.939878327954009,
+            "median": 1.9534046265279308
+          },
+          "return": {
+            "mean": -58.248083225219375,
+            "median": -70.97375517019861
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 120.6,
+            "median": 131.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "tracking_iae": {
+            "mean": 188.57753026576333,
+            "median": 225.34930513557072
+          },
+          "tracking_ise": {
+            "mean": 173.08285516597476,
+            "median": 210.9798358635373
+          },
+          "tracking_itae": {
+            "mean": 9382.641132378629,
+            "median": 10767.936448697652
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "ppo": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.008973342103137555,
+            "median": 0.008693864211310345
+          },
+          "episode_length": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "episode_return": {
+            "mean": -236.04074491571706,
+            "median": -247.09801792095487
+          },
+          "final_error": {
+            "mean": 0.4608883576666248,
+            "median": 0.46400587164007884
+          },
+          "minimum_safety_margin": {
+            "mean": 0.15856008197915578,
+            "median": 0.15394863707249917
+          },
+          "overshoot": {
+            "mean": 1.9571995901042212,
+            "median": 1.980256814637504
+          },
+          "return": {
+            "mean": -236.04074491571706,
+            "median": -247.09801792095487
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "tracking_iae": {
+            "mean": 638.2726116556323,
+            "median": 675.9619451388396
+          },
+          "tracking_ise": {
+            "mean": 393.0034653492781,
+            "median": 440.3451198720868
+          },
+          "tracking_itae": {
+            "mean": 157937.78225065663,
+            "median": 157912.63871477538
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "rlpd": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.02283951604968085,
+            "median": 0.02237505415050301
+          },
+          "episode_length": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "episode_return": {
+            "mean": -59.20228501390959,
+            "median": -74.67660564148835
+          },
+          "final_error": {
+            "mean": 0.07027075653323514,
+            "median": 0.07026782110916355
+          },
+          "minimum_safety_margin": {
+            "mean": 0.16284073513132308,
+            "median": 0.1591267563102815
+          },
+          "overshoot": {
+            "mean": 1.9357963243433847,
+            "median": 1.9543662184485924
+          },
+          "return": {
+            "mean": -59.20228501390959,
+            "median": -74.67660564148835
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "tracking_iae": {
+            "mean": 218.1481141039057,
+            "median": 256.0462859574931
+          },
+          "tracking_ise": {
+            "mean": 175.85538965009252,
+            "median": 222.36413518092667
+          },
+          "tracking_itae": {
+            "mean": 22958.10330779739,
+            "median": 24617.995348293254
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "sac": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.01084011702846298,
+            "median": 0.010634260073564127
+          },
+          "episode_length": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "episode_return": {
+            "mean": -183.7620928908288,
+            "median": -118.59482137517595
+          },
+          "final_error": {
+            "mean": 0.21964339830553037,
+            "median": 0.21918464610338528
+          },
+          "minimum_safety_margin": {
+            "mean": 0.12556297339266587,
+            "median": 0.15846226556502585
+          },
+          "overshoot": {
+            "mean": 1.948280180792284,
+            "median": 1.9576886721748705
+          },
+          "return": {
+            "mean": -183.7620928908288,
+            "median": -118.59482137517595
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "tracking_iae": {
+            "mean": 588.1234540062137,
+            "median": 491.5770111947603
+          },
+          "tracking_ise": {
+            "mean": 530.1829366582826,
+            "median": 326.6291614608697
+          },
+          "tracking_itae": {
+            "mean": 100522.57373164508,
+            "median": 85967.91777444081
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "td3": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.008979302318761396,
+            "median": 0.008939764541230525
+          },
+          "episode_length": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "episode_return": {
+            "mean": -200.84851304093428,
+            "median": -204.45456690748773
+          },
+          "final_error": {
+            "mean": 0.6035600455228287,
+            "median": 0.6085291545448203
+          },
+          "minimum_safety_margin": {
+            "mean": 0.15990418714632854,
+            "median": 0.15920621605347435
+          },
+          "overshoot": {
+            "mean": 1.950479064268357,
+            "median": 1.953968919732628
+          },
+          "return": {
+            "mean": -200.84851304093428,
+            "median": -204.45456690748773
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "tracking_iae": {
+            "mean": 751.8669360765641,
+            "median": 775.1279206310289
+          },
+          "tracking_ise": {
+            "mean": 548.3773721303965,
+            "median": 565.7064941368461
+          },
+          "tracking_itae": {
+            "mean": 187051.27535658138,
+            "median": 184933.13458688091
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "three_tank",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "benchmark": "disturbance-rejection",
+      "figure": "figures/three-tank/disturbance-rejection.svg",
+      "ordering": [
+        "pid",
+        "rlpd",
+        "mpc",
+        "ddpg",
+        "sac",
+        "td3",
+        "ppo"
+      ],
+      "policies": {
+        "ddpg": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.03051859460991137,
+            "median": 0.03220744604584687
+          },
+          "episode_length": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "episode_return": {
+            "mean": -72.14650345560946,
+            "median": -69.14152158180877
+          },
+          "final_error": {
+            "mean": 0.2983609416970225,
+            "median": 0.30136786837686436
+          },
+          "minimum_safety_margin": {
+            "mean": 0.23253663748382972,
+            "median": 0.23895049375519767
+          },
+          "overshoot": {
+            "mean": 1.0676612280964828,
+            "median": 0.8087194204789381
+          },
+          "return": {
+            "mean": -72.14650345560946,
+            "median": -69.14152158180877
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "tracking_iae": {
+            "mean": 423.595847687708,
+            "median": 424.8113085322381
+          },
+          "tracking_ise": {
+            "mean": 207.99767054235357,
+            "median": 185.34854506597867
+          },
+          "tracking_itae": {
+            "mean": 101924.1283307081,
+            "median": 104024.61186442953
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.00653272973087225,
+            "median": 0.005564146478541815
+          },
+          "episode_length": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "episode_return": {
+            "mean": -51.101291643214736,
+            "median": -42.898756929472896
+          },
+          "final_error": {
+            "mean": 0.0017644590430509893,
+            "median": 0.0015315104725130424
+          },
+          "minimum_safety_margin": {
+            "mean": 0.23621610866425752,
+            "median": 0.23725708750347557
+          },
+          "overshoot": {
+            "mean": 1.0900393742011327,
+            "median": 0.8280266430482531
+          },
+          "return": {
+            "mean": -51.101291643214736,
+            "median": -42.898756929472896
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 497.4,
+            "median": 498.5
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "tracking_iae": {
+            "mean": 248.92064795518564,
+            "median": 257.4519506171889
+          },
+          "tracking_ise": {
+            "mean": 152.90540169543902,
+            "median": 128.21087236460144
+          },
+          "tracking_itae": {
+            "mean": 30423.60181121728,
+            "median": 28323.927485890876
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.007573481811877505,
+            "median": 0.0072647873796452414
+          },
+          "episode_length": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "episode_return": {
+            "mean": -40.236053777003136,
+            "median": -33.88172909209083
+          },
+          "final_error": {
+            "mean": 0.007491932712192451,
+            "median": 0.007330899685137199
+          },
+          "minimum_safety_margin": {
+            "mean": 0.23880032340654242,
+            "median": 0.2387022279614529
+          },
+          "overshoot": {
+            "mean": 1.044169792514307,
+            "median": 0.8087194133898328
+          },
+          "return": {
+            "mean": -40.236053777003136,
+            "median": -33.88172909209083
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 174.3,
+            "median": 110.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "tracking_iae": {
+            "mean": 135.79635981005717,
+            "median": 131.60396691647898
+          },
+          "tracking_ise": {
+            "mean": 119.76442099123867,
+            "median": 100.43784172354313
+          },
+          "tracking_itae": {
+            "mean": 6886.354885411703,
+            "median": 6151.60055826656
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "ppo": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.013678739480086055,
+            "median": 0.01336532056814369
+          },
+          "episode_length": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "episode_return": {
+            "mean": -238.4209917030014,
+            "median": -217.96829323413402
+          },
+          "final_error": {
+            "mean": 0.48440377671812274,
+            "median": 0.49033726891653073
+          },
+          "minimum_safety_margin": {
+            "mean": 0.19481668735047242,
+            "median": 0.2052829459713036
+          },
+          "overshoot": {
+            "mean": 1.1799851561591337,
+            "median": 0.8089016401737388
+          },
+          "return": {
+            "mean": -238.4209917030014,
+            "median": -217.96829323413402
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "tracking_iae": {
+            "mean": 632.8317614060284,
+            "median": 636.0765255463632
+          },
+          "tracking_ise": {
+            "mean": 406.4751845935092,
+            "median": 359.8974638552879
+          },
+          "tracking_itae": {
+            "mean": 156392.91421718933,
+            "median": 162307.0326213704
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "rlpd": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.018311644764747552,
+            "median": 0.018078443334296014
+          },
+          "episode_length": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "episode_return": {
+            "mean": -51.15304659603024,
+            "median": -39.88841168655188
+          },
+          "final_error": {
+            "mean": 0.15739030863260794,
+            "median": 0.1524913942922962
+          },
+          "minimum_safety_margin": {
+            "mean": 0.23420262454068447,
+            "median": 0.22927708760803683
+          },
+          "overshoot": {
+            "mean": 1.0807717308453189,
+            "median": 0.8088391488668316
+          },
+          "return": {
+            "mean": -51.15304659603024,
+            "median": -39.88841168655188
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "tracking_iae": {
+            "mean": 280.1631663800402,
+            "median": 263.54050358802135
+          },
+          "tracking_ise": {
+            "mean": 150.86905660249255,
+            "median": 118.27382784340976
+          },
+          "tracking_itae": {
+            "mean": 53158.00828488873,
+            "median": 47673.501071987615
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "sac": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.021961985315590522,
+            "median": 0.02238943877132843
+          },
+          "episode_length": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "episode_return": {
+            "mean": -110.48841658665427,
+            "median": -106.90344347191675
+          },
+          "final_error": {
+            "mean": 0.3926110091397091,
+            "median": 0.29558568857469814
+          },
+          "minimum_safety_margin": {
+            "mean": 0.19789938984944672,
+            "median": 0.21821975814191513
+          },
+          "overshoot": {
+            "mean": 1.1038350076770358,
+            "median": 0.8881123255730939
+          },
+          "return": {
+            "mean": -110.48841658665427,
+            "median": -106.90344347191675
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "tracking_iae": {
+            "mean": 538.0012956532365,
+            "median": 484.4921373950653
+          },
+          "tracking_ise": {
+            "mean": 320.4405111425306,
+            "median": 300.11773402273457
+          },
+          "tracking_itae": {
+            "mean": 130901.86704150029,
+            "median": 114637.71968227004
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "td3": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.031556930863460377,
+            "median": 0.02935704654087069
+          },
+          "episode_length": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "episode_return": {
+            "mean": -140.77266192678837,
+            "median": -123.02877782172357
+          },
+          "final_error": {
+            "mean": 0.49951677637923514,
+            "median": 0.4474193600481946
+          },
+          "minimum_safety_margin": {
+            "mean": 0.21857287998573174,
+            "median": 0.23068519691131245
+          },
+          "overshoot": {
+            "mean": 1.1397406292071919,
+            "median": 0.8087210917492011
+          },
+          "return": {
+            "mean": -140.77266192678837,
+            "median": -123.02877782172357
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "tracking_iae": {
+            "mean": 634.7132345914906,
+            "median": 599.2010626872094
+          },
+          "tracking_ise": {
+            "mean": 369.8570921697062,
+            "median": 351.0779629670201
+          },
+          "tracking_itae": {
+            "mean": 167387.99235266348,
+            "median": 154318.88984786504
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "three_tank",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "benchmark": "tracking",
+      "figure": "figures/three-tank/tracking.svg",
+      "ordering": [
+        "pid",
+        "mpc",
+        "rlpd",
+        "ddpg",
+        "sac",
+        "td3",
+        "ppo"
+      ],
+      "policies": {
+        "ddpg": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.028006764936578537,
+            "median": 0.02932281025175805
+          },
+          "episode_length": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "episode_return": {
+            "mean": -73.53323706129561,
+            "median": -73.94162842912976
+          },
+          "final_error": {
+            "mean": 0.2966010273569944,
+            "median": 0.2902430694448165
+          },
+          "minimum_safety_margin": {
+            "mean": 0.2283960179383835,
+            "median": 0.23099611793505337
+          },
+          "overshoot": {
+            "mean": 1.0779798773331792,
+            "median": 0.8087194204789381
+          },
+          "return": {
+            "mean": -73.53323706129561,
+            "median": -73.94162842912976
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "tracking_iae": {
+            "mean": 425.3264247832344,
+            "median": 424.881381536925
+          },
+          "tracking_ise": {
+            "mean": 208.716593880591,
+            "median": 193.31324097316906
+          },
+          "tracking_itae": {
+            "mean": 102252.60753362795,
+            "median": 109515.13528555696
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "mpc": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.006279249324396083,
+            "median": 0.0051542980000881585
+          },
+          "episode_length": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "episode_return": {
+            "mean": -47.65690198489617,
+            "median": -40.11657266260644
+          },
+          "final_error": {
+            "mean": 8.033065939938577e-07,
+            "median": 7.000996209149957e-07
+          },
+          "minimum_safety_margin": {
+            "mean": 0.24152605572465474,
+            "median": 0.24853581142894582
+          },
+          "overshoot": {
+            "mean": 1.062084306417898,
+            "median": 0.8280266430482531
+          },
+          "return": {
+            "mean": -47.65690198489617,
+            "median": -40.11657266260644
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 185.6,
+            "median": 189.5
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "tracking_iae": {
+            "mean": 174.12184644697408,
+            "median": 167.73832414858634
+          },
+          "tracking_ise": {
+            "mean": 142.57178706624651,
+            "median": 119.8634641227179
+          },
+          "tracking_itae": {
+            "mean": 7715.921823260421,
+            "median": 7287.228420767624
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "pid": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.007244427213663867,
+            "median": 0.006999479262732795
+          },
+          "episode_length": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "episode_return": {
+            "mean": -40.32494369331492,
+            "median": -34.02642675734481
+          },
+          "final_error": {
+            "mean": 0.0040011462768500955,
+            "median": 0.004375882791119723
+          },
+          "minimum_safety_margin": {
+            "mean": 0.2392852631489867,
+            "median": 0.23871525842839297
+          },
+          "overshoot": {
+            "mean": 1.0427123824627182,
+            "median": 0.8087194133898328
+          },
+          "return": {
+            "mean": -40.32494369331492,
+            "median": -34.02642675734481
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 98.15,
+            "median": 96.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "tracking_iae": {
+            "mean": 133.43314404090876,
+            "median": 132.93491534999634
+          },
+          "tracking_ise": {
+            "mean": 120.03191426413223,
+            "median": 100.87426567150325
+          },
+          "tracking_itae": {
+            "mean": 5944.277250529995,
+            "median": 6180.512495026425
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "ppo": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.012774419564870318,
+            "median": 0.013194062087434077
+          },
+          "episode_length": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "episode_return": {
+            "mean": -227.69459259462428,
+            "median": -226.43018891547297
+          },
+          "final_error": {
+            "mean": 0.47988352859007677,
+            "median": 0.48497894725060586
+          },
+          "minimum_safety_margin": {
+            "mean": 0.19544668341450927,
+            "median": 0.2025583768261564
+          },
+          "overshoot": {
+            "mean": 1.1678090209814678,
+            "median": 0.8089016401737388
+          },
+          "return": {
+            "mean": -227.69459259462428,
+            "median": -226.43018891547297
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "tracking_iae": {
+            "mean": 609.4965821776308,
+            "median": 611.8229328412303
+          },
+          "tracking_ise": {
+            "mean": 377.50524354156073,
+            "median": 322.9204222451433
+          },
+          "tracking_itae": {
+            "mean": 149216.09891296504,
+            "median": 153839.5505409921
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "rlpd": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.016998919541427085,
+            "median": 0.016703109314507216
+          },
+          "episode_length": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "episode_return": {
+            "mean": -51.313132017437894,
+            "median": -41.945663570455096
+          },
+          "final_error": {
+            "mean": 0.15738261146174848,
+            "median": 0.1501366567352655
+          },
+          "minimum_safety_margin": {
+            "mean": 0.23660739280267054,
+            "median": 0.22958873688018241
+          },
+          "overshoot": {
+            "mean": 1.0653883643780468,
+            "median": 0.8088391488668316
+          },
+          "return": {
+            "mean": -51.313132017437894,
+            "median": -41.945663570455096
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "tracking_iae": {
+            "mean": 280.3437796087881,
+            "median": 273.5614217486678
+          },
+          "tracking_ise": {
+            "mean": 151.87888211457508,
+            "median": 124.51518108790953
+          },
+          "tracking_itae": {
+            "mean": 53124.448740699096,
+            "median": 48359.13590274667
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "sac": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.020175870437098453,
+            "median": 0.0206571268871249
+          },
+          "episode_length": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "episode_return": {
+            "mean": -105.47250226663228,
+            "median": -103.77492379373592
+          },
+          "final_error": {
+            "mean": 0.36589855060901044,
+            "median": 0.2825513752026465
+          },
+          "minimum_safety_margin": {
+            "mean": 0.2057854960653355,
+            "median": 0.21879047791454126
+          },
+          "overshoot": {
+            "mean": 1.0943868324891923,
+            "median": 0.8881115740587099
+          },
+          "return": {
+            "mean": -105.47250226663228,
+            "median": -103.77492379373592
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "tracking_iae": {
+            "mean": 510.58717110551027,
+            "median": 493.39851817073884
+          },
+          "tracking_ise": {
+            "mean": 305.397767528869,
+            "median": 280.2712250335909
+          },
+          "tracking_itae": {
+            "mean": 123442.13916325467,
+            "median": 101420.87288201545
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        },
+        "td3": {
+          "constraint_violation_cost": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "constraint_violations": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "energy": {
+            "mean": 0.029968835487365647,
+            "median": 0.0277960221356967
+          },
+          "episode_length": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "episode_return": {
+            "mean": -138.47998327255343,
+            "median": -122.5008451836988
+          },
+          "final_error": {
+            "mean": 0.4874346253996563,
+            "median": 0.4450971500266551
+          },
+          "minimum_safety_margin": {
+            "mean": 0.21978957505035618,
+            "median": 0.2281707237879026
+          },
+          "overshoot": {
+            "mean": 1.1353833125078805,
+            "median": 0.8087210917492011
+          },
+          "return": {
+            "mean": -138.47998327255343,
+            "median": -122.5008451836988
+          },
+          "safe_completion": {
+            "mean": 1.0,
+            "median": 1.0
+          },
+          "settling_time": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "termination": {
+            "mean": 0.0,
+            "median": 0.0
+          },
+          "time_to_violation": {
+            "mean": 600.0,
+            "median": 600.0
+          },
+          "tracking_iae": {
+            "mean": 622.4233101059457,
+            "median": 594.2777494967735
+          },
+          "tracking_ise": {
+            "mean": 358.15556164992506,
+            "median": 322.2484585963302
+          },
+          "tracking_itae": {
+            "mean": 163096.45980860412,
+            "median": 154596.60595566567
+          },
+          "unsafe_rate": {
+            "mean": 0.0,
+            "median": 0.0
+          }
+        }
+      },
+      "ranking_metrics": [
+        {
+          "aggregate": "mean",
+          "direction": "minimize",
+          "name": "unsafe_rate"
+        },
+        {
+          "aggregate": "median",
+          "direction": "maximize",
+          "name": "return"
+        }
+      ],
+      "scenario": "three_tank",
+      "schema_version": "aiogym.comparison.v5",
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    }
+  ],
+  "generated_at": "2026-09-02T03:04:08.274769+00:00",
+  "protocol": {
+    "benchmarks": [
+      "tracking",
+      "boundary-safety",
+      "disturbance-rejection"
+    ],
+    "classical_policies": [
+      "pid",
+      "mpc"
+    ],
+    "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19
+    ],
+    "three_tank_additional_policies": [
+      "ddpg",
+      "ppo",
+      "rlpd",
+      "sac",
+      "td3"
+    ]
+  },
+  "schema_version": "aiogym.published-benchmark-summary.v1",
+  "source": {
+    "git_commit": "bb176a327907e42f2349836a7d613e84129c1668",
+    "git_dirty": false,
+    "package": "aiogym",
+    "version": "0.30.0"
+  }
+}

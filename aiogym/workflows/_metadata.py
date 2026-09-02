@@ -19,12 +19,14 @@ ENVIRONMENT_COMPATIBILITY_FIELDS = (
 def environment_metadata(env):
     base = env.unwrapped
     config = base.runtime_config
-    return {
+    metadata = {
         "scenario": config["scenario"],
         "reward": config["reward"],
         "parameters": jsonable(config["parameters"]),
+        "initial_state": jsonable(config["initial_state"]),
         "benchmark": config["benchmark"],
         "randomize": config["randomize"],
+        "boundary_probability": config["boundary_probability"],
         "disturbance": config["disturbance"],
         "noise": jsonable(config["noise"]),
         "delay": jsonable(config["delay"]),
@@ -33,6 +35,11 @@ def environment_metadata(env):
         "observation_shape": list(env.observation_space.shape),
         "action_shape": list(env.action_space.shape),
     }
+    if config["disturbance_schedule"] is not None:
+        metadata["disturbance_schedule"] = jsonable(
+            config["disturbance_schedule"]
+        )
+    return metadata
 
 
 def validate_environment_compatibility(expected, env) -> None:

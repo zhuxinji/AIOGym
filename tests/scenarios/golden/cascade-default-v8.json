@@ -1,0 +1,97 @@
+{
+  "episode": {
+    "initial_state": [
+      0.225,
+      21.275449315221618,
+      0.225,
+      21.070804419076953,
+      0.225,
+      20.898994644656263,
+      0.09,
+      20.75475162104515
+    ],
+    "initial_action": [
+      0.42655831957658497,
+      0.13801311186847084,
+      0.13801311186847084,
+      0.13801311186847084,
+      0.07999999999999989,
+      0.0,
+      0.0
+    ],
+    "reference": [
+      0.3,
+      0.25,
+      0.325,
+      25.58009075409459,
+      24.684769333461684,
+      23.93310157037116
+    ],
+    "horizon": 600,
+    "disturbances": {
+      "reservoir_available": 1.0,
+      "bv12_open": 0.0,
+      "bv23_open": 0.0,
+      "bv34_open": 0.0,
+      "pump_flow_factor": 1.0,
+      "v12_flow_factor": 1.0,
+      "v23_flow_factor": 1.0,
+      "v34_flow_factor": 1.0,
+      "ambient_temperature": 20.0,
+      "heater_H1_efficiency_factor": 1.0,
+      "heater_H2_efficiency_factor": 1.0,
+      "heater_H3_efficiency_factor": 1.0,
+      "heat_loss_factor": 1.0
+    },
+    "reference_schedule": {},
+    "disturbance_schedule": {}
+  },
+  "interface": {
+    "action_names": [
+      "pump_P101",
+      "valve_V12",
+      "valve_V23",
+      "valve_V34",
+      "heater_H1",
+      "heater_H2",
+      "heater_H3"
+    ],
+    "observation": [
+      0.44999998807907104,
+      0.23639388382434845,
+      0.44999998807907104,
+      0.23412005603313446,
+      0.44999998807907104,
+      0.23221105337142944,
+      0.2999999523162842,
+      0.29999998211860657,
+      0.29999998211860657,
+      0.29999998211860657,
+      0.6000000238418579,
+      0.5,
+      0.6499999761581421,
+      0.2842232286930084,
+      0.2742752134799957,
+      0.2659233510494232
+    ],
+    "observation_names": [
+      "normalized_tank_1_level",
+      "normalized_tank_1_temperature",
+      "normalized_tank_2_level",
+      "normalized_tank_2_temperature",
+      "normalized_tank_3_level",
+      "normalized_tank_3_temperature",
+      "normalized_FT101_flow",
+      "normalized_FT12_flow",
+      "normalized_FT23_flow",
+      "normalized_FT34_flow",
+      "normalized_tank_1_level_reference",
+      "normalized_tank_2_level_reference",
+      "normalized_tank_3_level_reference",
+      "normalized_tank_1_temperature_reference",
+      "normalized_tank_2_temperature_reference",
+      "normalized_tank_3_temperature_reference"
+    ]
+  },
+  "schema_version": "aiogym.cascade_default_golden.v8"
+}

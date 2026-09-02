@@ -1,9 +1,9 @@
 # Two-input, two-output CSTR model
 
 The built-in `cstr` Scenario models an exothermic continuous stirred-tank
-reactor through the common Scenario, Reward, Benchmark, controller, Dataset,
-and training workflow contracts. Both physical commands and both controlled
-variables are part of the public interface.
+reactor. You can use it with the common PID, MPC, Dataset, training, and
+Benchmark workflows. Both physical commands and both controlled variables are
+available to controllers and learned policies.
 
 The physical interface is:
 
@@ -32,10 +32,10 @@ balance for feed flow and the energy balance for cooling. It returns no
 operating point when the requested pair is infeasible; it does not fix one
 actuator or clip the physical solution.
 
-The deterministic training Episode starts from that default equilibrium and
+The deterministic training episode starts from that default equilibrium and
 immediately tracks `(0.075 mol/L, 72 degC)` for 225 seconds.
 
-## Parameters and evidence boundary
+## Model parameters and intended use
 
 The main executable defaults are:
 
@@ -59,15 +59,17 @@ comparison, not a process-deployment or physical-fidelity claim.
 
 ## Benchmarks
 
-```bash
-aiogym list benchmarks --scenario cstr
+```python
+import aiogym
+
+print(aiogym.list_benchmarks("cstr"))
 ```
 
 | Benchmark | Fixed protocol | Horizon | Ranking |
 |---|---|---:|---|
 | `tracking` | case-seeded two-output equilibrium start that immediately tracks one independently sampled target | 225 steps / 225 s | unsafe rate, cumulative return |
 | `disturbance-rejection` | case-seeded feed temperature, concentration, coolant temperature, event time, and recovery time | 400 steps / 400 s | unsafe rate, cumulative return |
-| `boundary-safety` | case-seeded `0.02--0.04 mol/L`, `86--90 degC` equilibrium start inside the `92 degC` trip limit, followed by the default target | 100 steps / 100 s | unsafe rate, cumulative return |
+| `boundary-safety` | normal state is forward pre-run under high feed and low cooling until a case-seeded `86--90 degC` boundary, followed by the default target | 100 steps / 100 s | unsafe rate, cumulative return |
 
 Each tracking seed samples the start and one target in
 `0.02--0.20 mol/L` and `50--82 degC`. Tracking begins on the first control step;
@@ -82,26 +84,25 @@ Disturbance cases begin at step `100--180` and last `100--180` steps. They
 sample feed temperature in `12--32 degC`, feed concentration in
 `0.75--1.30 mol/L`, and coolant temperature in `5--20 degC`. Boundary cases
 sample an exact high-temperature equilibrium in `0.02--0.04 mol/L` and
-`86--90 degC`. Seeds `0--19` resolve to 20 distinct Episodes for all three
+`86--90 degC`. Seeds `0--19` select 20 distinct episodes for all three
 Benchmarks.
 
 The disturbance horizon leaves at least 40 seconds after the latest possible
-event recovery; the observed maximum PI recovery was 23 seconds. Boundary
-cases settled within 13 seconds for both controllers, so 100 seconds retains a
-wide transient and safety margin.
+event restoration. The boundary protocol retains a 100-second response window.
 
 ## Training variation
 
-`randomize=True` samples a feasible equilibrium tracking Episode on every reset.
-Most episodes start at another equilibrium and immediately track one sampled
-two-output target; 20% start at a high-temperature equilibrium in
-`0.02--0.04 mol/L` and `86--90 degC`. Every training Episode uses the tracking
-Benchmark's 225-step horizon.
+`randomize=True` samples a feasible equilibrium tracking episode on every reset.
+By default every episode starts at another interior equilibrium and immediately
+tracks one sampled two-output target. Setting `boundary_probability=p` makes
+fraction `p` start from the same high-feed, low-cooling forward pre-run used by
+the `86--90 degC` boundary Benchmark. Every training episode
+uses the tracking Benchmark's 225-step horizon.
 `disturbance=True` independently samples all three physical disturbances plus
 an event at step `50--90` and a `50--90` step duration. Noise, delay, and actuator loss-of-effectiveness
 remain the shared optional channel variations.
 
-## Controllers and workflows
+## Quick start and controllers
 
 The CSTR PI configuration uses `(Kp, Ki, Kd) = (16, 0.4, 0)` from concentration to
 feed flow and `(-0.2, -0.005, 0)` from temperature to cooling. The MPC uses a
@@ -124,24 +125,6 @@ result = aiogym.compare_policies(
 env.close()
 ```
 
-The ordinary environment also follows the common
-`collect -> train -> save/load -> evaluate/compare` workflow. Short automated
-SAC runs verify that path but are not learned-controller performance evidence.
-
-## Current controller comparison
-
-The active local comparison artifacts under `runs/cstr/benchmarks/` contain PI and MPC
-only. Each Benchmark uses 20 distinct cases (`0--19`), for 120 evaluated
-controller Episodes. Every Episode completed its full horizon with
-`unsafe_rate = 0`. Return and IAE aggregate both normalized controlled outputs.
-
-| Benchmark | PI median return | MPC median return | PI median IAE | MPC median IAE | Ranking |
-|---|---:|---:|---:|---:|---|
-| `tracking` | -0.752299 | -0.723318 | 6.772606 | 5.416064 | MPC, PI |
-| `disturbance-rejection` | -0.011040 | -0.000000 | 2.311340 | 0.000007 | MPC, PI |
-| `boundary-safety` | -0.782261 | -0.791479 | 5.141274 | 5.111865 | PI, MPC |
-
-The smallest normalized safety margin over all formal runs was `0.014728`.
-These are deterministic simulator baselines for the declared parameter set.
-They do not establish reactor calibration, robustness to parameter
-uncertainty, or learned-policy performance.
+Use the common [Quickstart](../quickstart.md) for Dataset collection and RL
+training with `scenario = "cstr"`. Current comparison scores remain in the
+generated `runs/cstr/benchmarks/<benchmark>/comparison.json` files.

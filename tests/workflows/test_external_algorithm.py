@@ -109,7 +109,7 @@ def test_external_algorithm_uses_the_complete_workflow(tmp_path, capsys):
     backend = ConstantAlgorithmBackend()
     aiogym.register_algorithm(backend)
     env = aiogym.make_env("quadruple")
-    evaluation_env = aiogym.make_env("quadruple")
+    evaluation_env = aiogym.make_env("quadruple", randomize=True)
     try:
         assert isinstance(backend, aiogym.AlgorithmBackend)
         assert "external_constant" in aiogym.list_algorithms()
@@ -157,6 +157,7 @@ def test_external_algorithm_uses_the_complete_workflow(tmp_path, capsys):
     assert result["actual_steps"] == 3
     assert result["runtime"]["external_backend"] == "test_constant.v1"
     assert result["best_checkpoint"].endswith("best/model.zip")
+    assert result["evaluation"]["seeds"] == list(range(1_000, 1_020))
     assert evaluation["policy"]["algorithm"] == "external_constant"
     assert set(comparison["evaluations"]) == {"external", "hold"}
     assert "external_constant" in listed

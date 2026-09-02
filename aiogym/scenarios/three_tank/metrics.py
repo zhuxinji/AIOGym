@@ -17,6 +17,14 @@ def regulation_episode_metrics(env, episode):
     )
 
 
+def disturbance_rejection_episode_metrics(env, episode):
+    metrics = regulation_episode_metrics(env, episode)
+    for name in ("disturbance_iae", "disturbance_ise", "recovery_time"):
+        metrics.pop(name, None)
+    return metrics
+
+
 __all__ = [
+    "disturbance_rejection_episode_metrics",
     "regulation_episode_metrics",
 ]

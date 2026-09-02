@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import Counter
+
 import numpy as np
 import pytest
 
@@ -21,6 +23,16 @@ def test_bom_geometry_reservoir_and_equipment_are_fixed():
     assert BOM_CONFIGURATION["reservoir"]["effective_capacity_m3"] == 0.18
     assert model.parameter("pump_power_max") == 370.0
     assert model.parameter("pump_flow_max") == pytest.approx(25.0 / 60000.0)
+    assert BOM_CONFIGURATION["pump"]["rated_max_flow_m3s"] == pytest.approx(
+        8.0 / 3600.0
+    )
+    assert BOM_CONFIGURATION["pump"]["rated_max_head_m"] == 12.0
+    assert model.parameter("cv_bypass") == pytest.approx([4.0e-5] * 3)
+    assert model.parameter("flow_observation_scale") == pytest.approx(
+        [10.0 / 60000.0] * 4
+    )
+    for flowmeter in BOM_CONFIGURATION["flowmeters"]:
+        assert flowmeter["range_l_min"] == pytest.approx([0.0, 10.0])
     assert model.parameter("nominal_level") == pytest.approx(0.225)
     assert NOMINAL_FLOW_M3S == pytest.approx(3.0 / 60000.0)
 
@@ -59,22 +71,129 @@ def test_45_litre_inventory_preserves_nominal_hydraulic_safety_margin():
     assert all(level < trips[index] for index, level in enumerate(levels))
 
 
-def test_disturbance_benchmark_starts_from_nominal_steady_state():
+def test_disturbance_benchmark_adds_seeded_bypasses_to_matching_tracking_case():
     model = ThreeTankModel()
-    steady = ThreeTankModel().nominal_steady_state()["state"]
-    episode = BENCHMARKS["disturbance-rejection"].make_episode(model, 0)
-    assert episode.initial_state == pytest.approx(steady)
-    assert episode.horizon == 1800
-    steps = tuple(episode.disturbance_schedule)
-    assert 600 <= steps[0] <= 850
-    assert 400 <= steps[1] - steps[0] <= 650
-    assert len(steps) == 2
-    assert 0.40 <= episode.disturbance_schedule[steps[0]]["pump_flow_factor"] <= 0.70
-    assert 0.50 <= episode.disturbance_schedule[steps[0]]["v23_flow_factor"] <= 0.70
-    assert episode.disturbance_schedule[steps[1]] == {
-        "pump_flow_factor": 1.0,
-        "v23_flow_factor": 1.0,
+    modes = Counter()
+    single_branches = Counter()
+    simultaneous_pairs = Counter()
+    simultaneous_triples = 0
+    for seed in range(20):
+        episode = BENCHMARKS["disturbance-rejection"].make_episode(model, seed)
+        paired = BENCHMARKS["tracking"].make_episode(model, seed)
+        assert episode.initial_state == pytest.approx(paired.initial_state)
+        assert episode.initial_action == pytest.approx(paired.initial_action)
+        assert episode.reference == pytest.approx(paired.reference)
+        assert not episode.reference_schedule
+        assert episode.horizon == 600
+        assert all(
+            set(changes) <= {"bv12_open", "bv23_open", "bv34_open"}
+            for changes in episode.disturbance_schedule.values()
+        )
+
+        branch_events = {}
+        for name in ("bv12_open", "bv23_open", "bv34_open"):
+            events = [
+                (step, changes[name])
+                for step, changes in episode.disturbance_schedule.items()
+                if name in changes
+            ]
+            if events:
+                assert len(events) == 2
+                assert events[0][1] == 1.0
+                assert events[1][0] == events[0][0] + 360
+                assert events[1][1] == 0.0
+                branch_events[name] = events
+        opens = sorted((events[0][0], name) for name, events in branch_events.items())
+        if len(opens) == 1:
+            modes["single"] += 1
+            start, name = opens[0]
+            assert 30 <= start <= 90
+            single_branches[name] += 1
+        elif len(opens) == 2 and opens[0][0] == opens[1][0]:
+            modes["simultaneous-pair"] += 1
+            assert 30 <= opens[0][0] <= 90
+            simultaneous_pairs[tuple(sorted(name for _, name in opens))] += 1
+        elif len(opens) == 3 and len({step for step, _ in opens}) == 1:
+            modes["simultaneous-triple"] += 1
+            simultaneous_triples += 1
+            assert 30 <= opens[0][0] <= 90
+        else:
+            raise AssertionError(f"unexpected bypass event pattern: {opens}")
+
+        open_step, close_step = sorted(episode.disturbance_schedule)
+        assert close_step == open_step + 360
+
+        flow = model.process_info(
+            episode.initial_state,
+            episode.initial_action,
+            episode.disturbances,
+        )["P101_flow_m3s"]
+        assert 3.0 <= flow * 60000.0 <= 8.0
+        persistent = dict(episode.disturbances)
+        persistent.update(episode.disturbance_schedule[open_step])
+        target = model.nominal_steady_state(
+            levels=episode.reference,
+            flow=flow,
+            env=persistent,
+        )
+        assert target["feasible"]
+        derivative = model.dynamics(target["state"], target["action"], persistent)
+        assert max(abs(float(value)) for value in derivative) < 1e-10
+        restored = dict(persistent)
+        restored.update(episode.disturbance_schedule[close_step])
+        restored_target = model.nominal_steady_state(
+            levels=episode.reference,
+            flow=flow,
+            env=restored,
+        )
+        assert restored_target["feasible"]
+
+    assert modes == {
+        "single": 6,
+        "simultaneous-pair": 9,
+        "simultaneous-triple": 5,
     }
+    assert set(single_branches) == {"bv12_open", "bv23_open", "bv34_open"}
+    assert set(simultaneous_pairs) == {
+        ("bv12_open", "bv23_open"),
+        ("bv12_open", "bv34_open"),
+        ("bv23_open", "bv34_open"),
+    }
+    assert simultaneous_triples == 5
+
+
+def test_bypass_and_operating_flow_ranges_are_physically_separated():
+    model = ThreeTankModel()
+    levels = (0.125, 0.4)
+    bypass_l_min = [
+        model.parameter("cv_bypass")[0]
+        * np.sqrt(level + model.parameter("gravity_drop")[0])
+        * 60000.0
+        for level in levels
+    ]
+    valve_l_min_at_benchmark_limit = (
+        model.parameter("cv_valves")[0]
+        * 0.85
+        * np.sqrt(levels[0] + model.parameter("gravity_drop")[0])
+        * 60000.0
+    )
+    assert bypass_l_min == pytest.approx([1.56460858, 2.00798406])
+    assert valve_l_min_at_benchmark_limit == pytest.approx(16.62396613)
+
+
+def test_disturbance_benchmark_uses_whole_episode_tracking_metrics_only():
+    env = aiogym.make_env("three_tank", benchmark="disturbance-rejection")
+    try:
+        result = aiogym.evaluate(env=env, policy="pid", seeds=(0,))
+    finally:
+        env.close()
+
+    metrics = result["episodes"][0]["metrics"]
+    expected = {"tracking_iae", "final_error", "settling_time", "return"}
+    assert expected <= set(metrics)
+    assert "disturbance_iae" not in metrics
+    assert "recovery_time" not in metrics
+    assert not any(name.startswith(("bypass_", "post_bypass_")) for name in metrics)
 
 
 def test_state_and_output_are_the_three_liquid_levels():
@@ -109,10 +228,16 @@ def test_observation_measurement_round_trip_preserves_state_and_output_order():
 
     assert measurement["x"] == pytest.approx(state)
     assert measurement["y"] == pytest.approx(model.outputs(state))
-    assert observation_with_other_previous_action == pytest.approx(observation)
-    assert len(observation) == 6
+    assert observation_with_other_previous_action[:3] == pytest.approx(observation[:3])
+    assert observation_with_other_previous_action[3:7] == pytest.approx([0.0] * 4)
+    assert observation_with_other_previous_action[7:] == pytest.approx(observation[7:])
+    assert observation[3:7] != pytest.approx([0.0] * 4)
+    assert measurement["flow_measurement_m3s"] == pytest.approx(
+        np.asarray(observation[3:7]) * np.asarray(model.parameter("flow_observation_scale"))
+    )
+    assert len(observation) == 10
     assert [row["kind"] for row in model.observation_schema()] == [
-        *("measurement",) * 3,
+        *("measurement",) * 7,
         *("reference",) * 3,
     ]
 
@@ -142,27 +267,85 @@ def test_reservoir_interlock_gates_pump():
     assert not dry["P101_enabled"]
     assert dry["P101_flow_m3s"] == 0.0
 
-def test_physical_io_declares_three_process_measurement_sets_and_v34():
+
+def test_binary_bypass_adds_a_bounded_parallel_transfer_flow():
+    model = ThreeTankModel()
+    action = model.default_action()
+    nominal = model.process_info(model.initial_state(), action)
+    disturbed = model.process_info(
+        model.initial_state(),
+        action,
+        {**model.default_disturbances(), "bv12_open": 1.0},
+    )
+    added_l_min = disturbed["BV12_flow_m3s"] * 60000.0
+    assert added_l_min == pytest.approx(1.738965, rel=1e-5)
+    assert disturbed["BV12_flow_m3s"] * 60000.0 == pytest.approx(
+        added_l_min
+    )
+    assert disturbed["BV23_flow_m3s"] == 0.0
+    assert disturbed["BV34_flow_m3s"] == 0.0
+    assert disturbed["V12_flow_m3s"] == pytest.approx(nominal["V12_flow_m3s"])
+    assert disturbed["FT12_flow_m3s"] == pytest.approx(nominal["FT12_flow_m3s"])
+    closed_observation = model.observation(
+        model.initial_state(),
+        model.default_setpoint_vector(),
+        action,
+        model.default_disturbances(),
+    )
+    open_observation = model.observation(
+        model.initial_state(),
+        model.default_setpoint_vector(),
+        action,
+        {**model.default_disturbances(), "bv12_open": 1.0},
+    )
+    assert open_observation[3] == pytest.approx(closed_observation[3])
+    assert open_observation[4] == pytest.approx(closed_observation[4])
+    assert open_observation[5] == pytest.approx(closed_observation[5])
+    assert open_observation[6] == pytest.approx(closed_observation[6])
+
+    outlet_bypass = model.process_info(
+        model.initial_state(),
+        action,
+        {**model.default_disturbances(), "bv34_open": 1.0},
+    )
+    assert outlet_bypass["FT34_flow_m3s"] == pytest.approx(
+        nominal["FT34_flow_m3s"]
+    )
+    assert outlet_bypass["V34_flow_m3s"] == pytest.approx(nominal["V34_flow_m3s"])
+    assert model.dynamics(
+        model.initial_state(),
+        action,
+        {**model.default_disturbances(), "bv34_open": 1.0},
+    )[2] < model.dynamics(model.initial_state(), action)[2]
+    with pytest.raises(ValueError, match="must be binary"):
+        model.dynamics(
+            model.initial_state(),
+            action,
+            {**model.default_disturbances(), "bv12_open": 0.5},
+        )
+
+
+def test_physical_io_declares_plan_flowmeters_bypasses_and_v34():
     io = ThreeTankModel().physical_io_schema()
     names = {row["name"] for row in io["measurements"]}
     assert {
         "LT101",
         "LT201",
         "LT301",
-    } == names - {"FT12", "FT23", "FT34"}
-    assert {"FT12", "FT23", "FT34"} <= names
+    } == names - {"FT101", "FT12", "FT23", "FT34"}
+    assert {"FT101", "FT12", "FT23", "FT34"} <= names
     assert [row["name"] for row in io["actuators"]] == [
         "P101",
         "V12",
         "V23",
         "V34",
     ]
+    assert [row["name"] for row in io["disturbance_actuators"]] == [
+        "BV12",
+        "BV23",
+        "BV34",
+    ]
     assert io["boundary"]["effective_capacity_m3"] == 0.18
-
-
-def test_environment_no_longer_accepts_a_plant_selector():
-    with pytest.raises(TypeError, match="unexpected keyword argument"):
-        aiogym.make_env("three_tank", reward="regulation", plant="anything")
 
 
 def test_three_tank_environment_applies_requested_action_without_slew():

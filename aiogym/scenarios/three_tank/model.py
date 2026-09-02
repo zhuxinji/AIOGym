@@ -31,11 +31,22 @@ BOM_CONFIGURATION = {
         "id": "P101",
         "motor_power_w": 370.0,
         "max_flow_m3s": 25.0 / 60000.0,
+        "rated_max_flow_m3s": 8.0 / 3600.0,
+        "rated_max_head_m": 12.0,
         "static_head_m": 1.7,
         "shutoff_head_m": 10.0,
     },
     "valves": ["V12", "V23", "V34"],
-    "source": "2026-08-16 45 L redesign; final procurement list takes precedence",
+    "bypass_valves": ["BV12", "BV23", "BV34"],
+    "flowmeters": [
+        {"id": name, "range_l_min": [0.0, 10.0]}
+        for name in ("FT101", "FT12", "FT23", "FT34")
+    ],
+    "source": (
+        "2026-08-16 45 L redesign with the 2026-08-27 heated-system "
+        "flow path and confirmed 0-10 L/min flowmeter span; final procurement "
+        "list takes precedence"
+    ),
 }
 
 NOMINAL_FLOW_M3S = 3.0 / 60000.0
@@ -69,6 +80,30 @@ class ThreeTankModel(PhysicsModelBase):
             "description": "hardwired reservoir dry-run permissive for P101",
         },
         {
+            "name": "bv12_open",
+            "event": "BV12_open",
+            "unit": "binary",
+            "bounds": (0.0, 1.0),
+            "default": 0.0,
+            "description": "BV12 on/off bypass position around the V12 branch",
+        },
+        {
+            "name": "bv23_open",
+            "event": "BV23_open",
+            "unit": "binary",
+            "bounds": (0.0, 1.0),
+            "default": 0.0,
+            "description": "BV23 on/off bypass position around the V23 branch",
+        },
+        {
+            "name": "bv34_open",
+            "event": "BV34_open",
+            "unit": "binary",
+            "bounds": (0.0, 1.0),
+            "default": 0.0,
+            "description": "BV34 on/off bypass position around the V34 branch",
+        },
+        {
             "name": "pump_flow_factor",
             "event": "pump_capacity_shift",
             "unit": "fraction",
@@ -96,6 +131,8 @@ class ThreeTankModel(PhysicsModelBase):
             "height_max": "m",
             "level_sensor_range": "m",
             "cv_valves": "m^(5/2)/s",
+            "cv_bypass": "m^(5/2)/s",
+            "flow_observation_scale": "m^3/s",
             "gravity_drop": "m",
             "overflow_level": "m",
             "cv_overflow": "m^(5/2)/s",
@@ -115,6 +152,8 @@ class ThreeTankModel(PhysicsModelBase):
             "height_max": [0.50, 0.50, 0.50],
             "level_sensor_range": [0.50, 0.50, 0.50],
             "cv_valves": [0.0005, 0.0005, 0.0005],
+            "cv_bypass": [0.00004, 0.00004, 0.00004],
+            "flow_observation_scale": [10.0 / 60000.0] * 4,
             "gravity_drop": [0.30, 0.30, 0.30],
             "overflow_level": [0.45, 0.45, 0.45],
             "cv_overflow": [0.001, 0.001, 0.001],
@@ -192,8 +231,14 @@ class ThreeTankModel(PhysicsModelBase):
             (static_head + (shutoff_head - static_head) * (q / pump_capacity) ** 2)
             / shutoff_head
         )
+        bypasses = [
+            self.p["cv_bypass"][index]
+            * context[f"bv{index + 1}{index + 2}_open"]
+            * math.sqrt(h[index] + self.p["gravity_drop"][index])
+            for index in range(3)
+        ]
         valves = [
-            q
+            (q - bypasses[index])
             / (
                 self.p["cv_valves"][index]
                 * context[f"v{index + 1}{index + 2}_flow_factor"]
@@ -207,6 +252,11 @@ class ThreeTankModel(PhysicsModelBase):
             for name, value in zip(self.action_names, action)
             if not math.isfinite(value) or value < 0.0 or value > 1.0
         ]
+        reasons.extend(
+            f"BV{index + 1}{index + 2} bypass flow exceeds the requested circulation"
+            for index, bypass in enumerate(bypasses)
+            if bypass > q
+        )
         if context["reservoir_available"] < 0.5:
             reasons.append("reservoir is unavailable")
         return {
@@ -265,6 +315,10 @@ class ThreeTankModel(PhysicsModelBase):
                     f"three_tank disturbance {name!r} must be within "
                     f"[{lower}, {upper}], got {value}"
                 )
+            if row["unit"] == "binary" and value not in (0.0, 1.0):
+                raise ValueError(
+                    f"three_tank disturbance {name!r} must be binary, got {value}"
+                )
             clean[name] = value
         return clean
 
@@ -304,6 +358,12 @@ class ThreeTankModel(PhysicsModelBase):
             * math.sqrt(max(levels[index] + self.p["gravity_drop"][index], 0.0))
             for index in range(3)
         ]
+        bypass_flows = [
+            self.p["cv_bypass"][index]
+            * env[f"bv{index + 1}{index + 2}_open"]
+            * math.sqrt(max(levels[index] + self.p["gravity_drop"][index], 0.0))
+            for index in range(3)
+        ]
         overflow_flows = []
         for index in range(3):
             head = levels[index] - self.p["overflow_level"][index]
@@ -313,13 +373,21 @@ class ThreeTankModel(PhysicsModelBase):
                 * enabled
                 * math.sqrt(max(head, self.p["overflow_head_floor"]))
             )
-        return pump_flow, valve_flows, overflow_flows, bool(pump_enabled)
+        return (
+            pump_flow,
+            valve_flows,
+            bypass_flows,
+            overflow_flows,
+            bool(pump_enabled),
+        )
 
     def _dynamics(self, x, action, env):
         context = self._resolved_env(env)
         u = self._effective_action(action)
-        pump, valves, overflows, _ = self._flow_terms(x, u, context)
-        q12, q23, q34 = valves
+        pump, valves, bypasses, overflows, _ = self._flow_terms(x, u, context)
+        q12, q23, q34 = (
+            valves[index] + bypasses[index] for index in range(3)
+        )
         flows_in = (pump, q12, q23)
         flows_out = (
             q12 + overflows[0],
@@ -335,10 +403,14 @@ class ThreeTankModel(PhysicsModelBase):
         return None
 
     def observation_schema(self):
-        names = [
+        measurement_names = [
             "normalized_tank_1_level",
             "normalized_tank_2_level",
             "normalized_tank_3_level",
+            "normalized_FT101_flow",
+            "normalized_FT12_flow",
+            "normalized_FT23_flow",
+            "normalized_FT34_flow",
         ]
         reference_names = [
             f"normalized_{row['name']}_reference" for row in self.output_schema()
@@ -352,7 +424,7 @@ class ThreeTankModel(PhysicsModelBase):
                     "low": 0.0,
                     "high": 1.0,
                 }
-                for name in names
+                for name in measurement_names
             ),
             *(
                 {
@@ -367,17 +439,53 @@ class ThreeTankModel(PhysicsModelBase):
         ]
 
     def observation(self, state, reference, previous_action, disturbances):
-        del previous_action, disturbances
+        context = self._resolved_env(disturbances)
+        action = self.default_action() if previous_action is None else previous_action
+        pump, valve_flows, _, _, _ = self._flow_terms(
+            [float(value) for value in state],
+            self._effective_action(action),
+            context,
+        )
+        return self.observation_from_measurements(
+            state,
+            [pump, *valve_flows],
+            reference,
+        )
+
+    def observation_from_measurements(self, levels, flows, reference):
+        level_values = np.asarray(levels, dtype=float).reshape(-1)
+        flow_values = np.asarray(flows, dtype=float).reshape(-1)
+        reference_values = np.asarray(reference, dtype=float).reshape(-1)
+        if (
+            level_values.shape != (3,)
+            or flow_values.shape != (4,)
+            or reference_values.shape != (3,)
+            or not np.isfinite(level_values).all()
+            or not np.isfinite(flow_values).all()
+            or not np.isfinite(reference_values).all()
+        ):
+            raise ValueError(
+                "three-tank observation requires three finite levels, four finite "
+                "flows, and three finite references"
+            )
         normalized_state = np.clip(
-            np.asarray(state, dtype=float) / np.asarray(self.height_max), 0.0, 1.0
+            level_values / np.asarray(self.height_max), 0.0, 1.0
         )
         normalized_reference = np.clip(
-            np.asarray(reference, dtype=float)
-            / np.asarray(self.output_scales(), dtype=float),
+            reference_values / np.asarray(self.output_scales(), dtype=float),
             0.0,
             1.0,
         )
-        return [*normalized_state.tolist(), *normalized_reference.tolist()]
+        normalized_flow = np.clip(
+            flow_values / np.asarray(self.p["flow_observation_scale"], dtype=float),
+            0.0,
+            1.0,
+        )
+        return [
+            *normalized_state.tolist(),
+            *normalized_flow.tolist(),
+            *normalized_reference.tolist(),
+        ]
 
     def measurement(self, state, disturbances=None):
         context = self._resolved_env(disturbances)
@@ -392,12 +500,23 @@ class ThreeTankModel(PhysicsModelBase):
 
     def measurement_from_observation(self, observation, disturbances=None):
         values = np.asarray(observation, dtype=float).reshape(-1)
-        if values.shape != (6,) or not np.isfinite(values).all():
+        if values.shape != (10,) or not np.isfinite(values).all():
             raise ValueError(
                 "three-tank policy observation must match observation_schema"
             )
         state = values[:3] * np.asarray(self.height_max)
-        return self.measurement(state, disturbances)
+        flows = values[3:7] * np.asarray(self.p["flow_observation_scale"])
+        measurement = self.measurement(state, disturbances)
+        measurement.update(
+            {
+                "flow_measurement_m3s": flows.tolist(),
+                "FT101_flow_m3s": float(flows[0]),
+                "FT12_flow_m3s": float(flows[1]),
+                "FT23_flow_m3s": float(flows[2]),
+                "FT34_flow_m3s": float(flows[3]),
+            }
+        )
+        return measurement
 
     def clamp_state(self, state):
         return list(state)
@@ -434,12 +553,21 @@ class ThreeTankModel(PhysicsModelBase):
         context = self._resolved_env(disturbances)
         u = self._effective_action(self.default_action() if action is None else action)
         levels = [float(value) for value in state]
-        pump, valves, overflows, pump_enabled = self._flow_terms(levels, u, context)
+        pump, valves, bypass_flows, overflows, pump_enabled = self._flow_terms(
+            levels, u, context
+        )
         return {
             "P101_flow_m3s": float(pump),
             "V12_flow_m3s": float(valves[0]),
             "V23_flow_m3s": float(valves[1]),
             "V34_flow_m3s": float(valves[2]),
+            "BV12_flow_m3s": float(bypass_flows[0]),
+            "BV23_flow_m3s": float(bypass_flows[1]),
+            "BV34_flow_m3s": float(bypass_flows[2]),
+            "FT101_flow_m3s": float(pump),
+            "FT12_flow_m3s": float(valves[0]),
+            "FT23_flow_m3s": float(valves[1]),
+            "FT34_flow_m3s": float(valves[2]),
             "overflow_flow_m3s": [float(value) for value in overflows],
             "P101_enabled": pump_enabled,
         }
@@ -449,7 +577,7 @@ class ThreeTankModel(PhysicsModelBase):
         pump_enabled = True
         if x is not None:
             context = self._resolved_env(env)
-            _, _, _, pump_enabled = self._flow_terms(x, action, context)
+            _, _, _, _, pump_enabled = self._flow_terms(x, action, context)
         pump = action[0] ** 3 * self.p["pump_power_max"] * float(pump_enabled)
         return float(pump / 1000.0)
 
@@ -478,11 +606,17 @@ class ThreeTankModel(PhysicsModelBase):
                 ],
                 *[
                     {
-                        "name": f"FT{start}{end}",
-                        "quantity": f"V{start}{end}_flow",
-                        "signal": "RS485",
+                        "name": name,
+                        "quantity": quantity,
+                        "range_l_min": [0.0, 10.0],
+                        "signal": "4-20mA / Modbus",
                     }
-                    for start, end in ((1, 2), (2, 3), (3, 4))
+                    for name, quantity in (
+                        ("FT101", "P101_flow"),
+                        ("FT12", "tank_1_to_2_flow"),
+                        ("FT23", "tank_2_to_3_flow"),
+                        ("FT34", "tank_3_to_reservoir_flow"),
+                    )
                 ],
             ],
             "actuators": [
@@ -490,6 +624,11 @@ class ThreeTankModel(PhysicsModelBase):
                 {"name": "V12", "command": "valve position"},
                 {"name": "V23", "command": "valve position"},
                 {"name": "V34", "command": "valve position"},
+            ],
+            "disturbance_actuators": [
+                {"name": "BV12", "command": "on/off bypass"},
+                {"name": "BV23", "command": "on/off bypass"},
+                {"name": "BV34", "command": "on/off bypass"},
             ],
             "boundary": dict(BOM_CONFIGURATION["reservoir"]),
         }

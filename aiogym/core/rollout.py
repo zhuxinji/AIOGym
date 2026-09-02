@@ -55,11 +55,9 @@ def rollout(
         raise ValueError("rollout max_steps must be positive")
     while len(rows) < limit:
         context = {
-            "env": env,
-            "info": info,
             "step_index": len(rows),
             "physical_time": float(info["physical_time"]),
-            "reference": info["reference"],
+            "reference": np.asarray(info["reference"], dtype=float).copy(),
         }
         action = np.asarray(policy.act(np.asarray(observation), context), dtype=np.float32)
         if action.shape != env.action_space.shape or not env.action_space.contains(action):
