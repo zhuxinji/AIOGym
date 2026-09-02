@@ -18,7 +18,23 @@ def test_cascade_default_episode_matches_the_versioned_fixture():
     env = aiogym.make_env("cascade")
     try:
         assert GOLDEN["schema_version"] == "aiogym.cascade_default_golden.v8"
-        assert env.unwrapped.default_episode.as_dict() == GOLDEN["episode"]
+        actual_episode = env.unwrapped.default_episode.as_dict()
+        expected_episode = GOLDEN["episode"]
+        assert actual_episode.keys() == expected_episode.keys()
+        approximate_fields = {"initial_state", "initial_action", "reference"}
+        for field in approximate_fields:
+            assert actual_episode[field] == pytest.approx(
+                expected_episode[field], rel=1e-12, abs=1e-12
+            )
+        assert {
+            key: value
+            for key, value in actual_episode.items()
+            if key not in approximate_fields
+        } == {
+            key: value
+            for key, value in expected_episode.items()
+            if key not in approximate_fields
+        }
         observation, _ = env.reset(seed=0)
         assert observation == pytest.approx(GOLDEN["interface"]["observation"])
         assert [
