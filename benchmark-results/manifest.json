@@ -45,12 +45,12 @@
       {
         "bytes": 171835,
         "name": "aiogym-0.30.0-py3-none-any.whl",
-        "sha256": "c7757e26e30e0eb1be73df1a429c3b7736b7b853bcfa37d61a8130c9372625a1"
+        "sha256": "57a317ec1c3ba83c3ff6f02d7572dfe3820a2c4e9d22122babdd30d5d3fce81e"
       },
       {
-        "bytes": 164291,
+        "bytes": 164284,
         "name": "aiogym-0.30.0.tar.gz",
-        "sha256": "0a555541ffada1887d085ce7df93d6d221f878a033d9f2fcb2b4e406f35b573c"
+        "sha256": "9a4cef815f87e3dfa0ce775961954b077d749099605a75948160d3bd3a87fa61"
       },
       {
         "bytes": 46630482,
@@ -69,13 +69,13 @@
       }
     ],
     "tag": "v0.30.0",
-    "url": "https://github.com/zhuxinji/AIO-gym/releases/tag/v0.30.0"
+    "url": "https://github.com/zhuxinji/AIOGym/releases/tag/v0.30.0"
   },
   "repository_files": [
     {
-      "bytes": 3998,
+      "bytes": 3997,
       "path": "README.md",
-      "sha256": "14ed87dec3f5897383ccf0278b54d46a9889cd1d9cedf544296f4eabe785996d"
+      "sha256": "b8448687d94ee57d3ac4b25ac0e96d4196c4324fc87d6560a67987bf0dbebd26"
     },
     {
       "bytes": 328693,

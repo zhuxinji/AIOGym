@@ -53,7 +53,7 @@ underlying distributions rather than treated as universal controller quality.
 
 The complete `comparison.json`, `comparison.svg`, and `trajectories.npz`
 triplets are distributed in the `aiogym-v0.30.0-benchmarks.tar.gz` asset on the
-[v0.30.0 release](https://github.com/zhuxinji/AIO-gym/releases/tag/v0.30.0).
+[v0.30.0 release](https://github.com/zhuxinji/AIOGym/releases/tag/v0.30.0).
 Best Three-Tank checkpoints and the RLPD demonstration dataset are separate
 release assets so normal clones do not download generated binary data.
 

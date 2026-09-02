@@ -38,10 +38,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/zhuxinji/AIO-gym"
-Documentation = "https://github.com/zhuxinji/AIO-gym/blob/main/docs/quickstart.md"
-Repository = "https://github.com/zhuxinji/AIO-gym"
-Issues = "https://github.com/zhuxinji/AIO-gym/issues"
+Homepage = "https://github.com/zhuxinji/AIOGym"
+Documentation = "https://github.com/zhuxinji/AIOGym/blob/main/docs/quickstart.md"
+Repository = "https://github.com/zhuxinji/AIOGym"
+Issues = "https://github.com/zhuxinji/AIOGym/issues"
 
 [tool.ruff]
 target-version = "py310"
