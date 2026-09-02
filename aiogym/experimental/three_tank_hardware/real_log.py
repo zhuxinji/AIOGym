@@ -10,14 +10,14 @@ from typing import Any
 from ._integrity import content_digest
 
 
-REAL_LOG_SCHEMA_VERSION = "aiogym.three_tank.real-step.v8"
+REAL_LOG_SCHEMA_VERSION = "aiogym.three_tank.real-step.v10"
 MEASUREMENT_NAMES = (
     "tank_1_level",
     "tank_2_level",
     "tank_3_level",
 )
 ACTUATOR_NAMES = ("pump_P101", "valve_V12", "valve_V23", "valve_V34")
-FLOW_MEASUREMENT_NAMES = ("V12_flow", "V23_flow", "V34_flow")
+FLOW_MEASUREMENT_NAMES = ("FT101_flow", "FT12_flow", "FT23_flow", "FT34_flow")
 
 
 def _finite_vector(name: str, values: Sequence[float], length: int) -> list[float]:
@@ -89,7 +89,7 @@ def build_real_step_record(
         "measurement": _finite_vector("measurement", measurement, 3),
         "flow_measurement_names": list(FLOW_MEASUREMENT_NAMES),
         "flow_measurement_m3s": _nonnegative_vector(
-            "flow_measurement", flow_measurement, 3
+            "flow_measurement", flow_measurement, 4
         ),
         "reference": _finite_vector("reference", reference, 3),
         "transition_disturbance": _finite_mapping(

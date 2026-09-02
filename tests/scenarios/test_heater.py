@@ -203,7 +203,7 @@ def test_heater_pid_and_mpc_return_two_physical_actions():
         observation, info = env.reset(seed=0)
         for controller_id in ("pid", "mpc"):
             policy = aiogym.make_controller(controller_id, env=env)
-            action = policy.act(observation, {"info": info})
+            action = policy.act(observation, {"reference": info["reference"]})
             assert np.asarray(action).shape == (2,)
             assert env.action_space.contains(np.asarray(action, dtype=np.float32))
     finally:

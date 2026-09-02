@@ -33,15 +33,15 @@ Every formal tracking case instead declares a 50-second batch-quality target
 that is known to be reachable. The case samples one constant action in
 `0.80--0.90`, simulates the same model for the complete tracking batch, and stores the
 resulting endpoint CV and mean size as the target. The sampled action remains
-in the Episode as reproducibility metadata, but evaluated controllers command
+with the saved episode information, but evaluated controllers command
 their own action on every step.
 
-The deterministic default Episode uses action `0.85` and its exact 50-second
+The deterministic default episode uses action `0.85` and its exact 50-second
 endpoint `(CV, mean size) = (0.727343, 11.392945 um)`. Randomized training uses
 the same 50-second duration and `0.80--0.90` reachable-action envelope as the
 tracking Benchmark.
 
-## Parameters and evidence boundary
+## Model parameters and intended use
 
 The main executable defaults are:
 
@@ -74,12 +74,14 @@ case study.
 Safety checks enforce nonnegative moments and concentration plus the declared
 state caps. The cooling-temperature bounds are guaranteed by the action
 mapping. No clipping is applied to evolving states; an actual bound crossing
-terminates the Episode.
+terminates the episode.
 
 ## Benchmarks
 
-```bash
-aiogym list benchmarks --scenario crystallization
+```python
+import aiogym
+
+print(aiogym.list_benchmarks("crystallization"))
 ```
 
 | Benchmark | Fixed protocol | Horizon | Ranking |
@@ -94,7 +96,7 @@ begin at step `20--35` and last `30--50` steps. They sample growth factor in
 `0.80--0.95`, nucleation factor in `1.05--1.20`, and solubility bias in
 `2--6 g/L`. Boundary cases sample initial solute concentration in
 `1.70--1.95 kg/L` and generate a reachable endpoint from a constant action in
-`0.10--0.50`. Seeds `0--19` resolve to 20 distinct Episodes for all three
+`0.10--0.50`. Seeds `0--19` select 20 distinct episodes for all three
 Benchmarks.
 
 Disturbance-rejection and boundary-safety remain 100-second finite batches.
@@ -104,15 +106,16 @@ rather than only remove an unused observation tail.
 
 ## Training variation
 
-`randomize=True` samples a reachable endpoint target on every reset. Twenty
-percent of training batches also start with solute concentration sampled in
-`1.70--1.95 kg/L`; the remaining batches use the nominal `0.90 kg/L` start.
+`randomize=True` samples a reachable endpoint target on every reset and uses the
+nominal `0.90 kg/L` start by default. Setting `boundary_probability=p` makes
+fraction `p` of training batches instead start with solute concentration sampled
+in `1.70--1.95 kg/L`.
 `disturbance=True` independently samples growth and nucleation factors,
 solubility bias, an event at step `10--17`, and a `15--25` step duration. Every
 default and randomized training batch uses the tracking Benchmark's 50-step
 horizon and has its endpoint target active at reset.
 
-## Controllers and workflows
+## Quick start and controllers
 
 The crystallization PID configuration uses both quality errors in its one actuator
 row. CV has `(Kp, Ki, Kd) = (1.0, 0.001, 0)` and mean size has
@@ -136,28 +139,7 @@ result = aiogym.compare_policies(
 env.close()
 ```
 
-The ordinary environment also follows the common
-`collect -> train -> save/load -> evaluate/compare` workflow. Short automated
-SAC runs verify the interface and checkpoint path but are not learned-policy
-performance evidence.
-
-## Current controller comparison
-
-The active local comparison artifacts under
-`runs/crystallization/benchmarks/` contain
-PID and MPC only. Each Benchmark uses 20 distinct cases (`0--19`), for 120
-evaluated controller batches. Every batch completed its full horizon with
-`unsafe_rate = 0`.
-
-| Benchmark | PID median return | MPC median return | PID median IAE | MPC median IAE | PID median final error | MPC median final error | Ranking |
-|---|---:|---:|---:|---:|---:|---:|---|
-| `tracking` | -10.494622 | -10.392198 | 37.356019 | 37.117032 | 0.010386 | 0.042050 | MPC, PID |
-| `disturbance-rejection` | -28.554542 | -28.140999 | 78.537197 | 74.923786 | 0.230775 | 0.144035 | MPC, PID |
-| `boundary-safety` | -39.493038 | -39.249118 | 86.471532 | 82.827376 | 0.223247 | 0.144276 | MPC, PID |
-
-The reported minimum normalized safety margin is about `4.52e-7`. That small
-number comes from normalizing the initial third moment (`4500`) by its very
-large configured cap (`1e10`); it is a scale artifact, not evidence of a near-zero
-absolute state or a near-violation. These deterministic baselines do not
-establish physical calibration, performance under untested conditions, or
-learned-policy quality.
+Use the common [Quickstart](../quickstart.md) for Dataset collection and RL
+training with `scenario = "crystallization"`. Read current controller results
+from the generated `runs/crystallization/benchmarks/<benchmark>/comparison.json`
+instead of treating a copied score as part of the model definition.

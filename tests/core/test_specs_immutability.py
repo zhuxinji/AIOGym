@@ -73,7 +73,7 @@ def test_scenario_benchmarks_and_rewards_are_read_only_mappings():
         make_model=ImmutableModel,
         control_dt=1.0,
         make_default_episode=_episode,
-        sample_training_episode=lambda model, rng, reward_id: (
+        sample_training_episode=lambda model, rng, reward_id, boundary: (
             _episode(model),
             "tracking",
         ),
@@ -106,7 +106,7 @@ def test_scenario_rejects_a_benchmark_with_an_unknown_reward():
             make_model=ImmutableModel,
             control_dt=1.0,
             make_default_episode=_episode,
-            sample_training_episode=lambda model, rng, reward_id: (
+            sample_training_episode=lambda model, rng, reward_id, boundary: (
                 _episode(model),
                 "tracking",
             ),

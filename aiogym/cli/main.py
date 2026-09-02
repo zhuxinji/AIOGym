@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Scenario-oriented AIO-Gym 0.15 command-line interface."""
+"""Scenario-oriented AIO-Gym 0.17 command-line interface."""
 
 from __future__ import annotations
 

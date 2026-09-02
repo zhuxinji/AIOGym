@@ -10,7 +10,6 @@ import aiogym.scenarios  # noqa: F401
 from aiogym.controllers.base import make_controller
 from aiogym.core.env import make_env
 from aiogym.core.rollout import rollout
-from aiogym.core.specs import EpisodeSpec
 from aiogym.rl.sb3 import SB3CheckpointPolicy
 
 
@@ -123,19 +122,10 @@ def test_name_bound_pid_rejects_unknown_actuator_before_rollout():
         env.close()
 
 
-def test_mpc_can_reseed_when_disturbance_changes_steady_feedforward():
+def test_mpc_does_not_receive_hidden_disturbance_values():
     env = make_env("three_tank", reward="regulation")
     try:
-        model = env.unwrapped.model
-        reference = tuple(model.default_setpoint_vector())
-        equilibrium_episode = EpisodeSpec(
-            initial_state=tuple(model.tracking_steady_state_state(reference)),
-            initial_action=tuple(model.tracking_steady_state_action(reference)),
-            reference=reference,
-            horizon=env.unwrapped.default_episode.horizon,
-            disturbances=model.default_disturbances(),
-        )
-        policy = make_controller(
+        nominal = make_controller(
             "mpc",
             env=env,
             config={
@@ -145,18 +135,26 @@ def test_mpc_can_reseed_when_disturbance_changes_steady_feedforward():
                 "reseed_on_feedforward_change": True,
             },
         )
-        observation, info = env.reset(seed=0, options={"episode": equilibrium_episode})
-        first = policy.act(observation, {"info": info})
-        env.set_disturbances({"pump_flow_factor": 0.85})
-        changed_info = {
-            **info,
-            "disturbance": {
-                **info["disturbance"],
-                "pump_flow_factor": 0.85,
+        repeated = make_controller(
+            "mpc",
+            env=env,
+            config={
+                "P": 5,
+                "move_supp": 1.0,
+                "steady_input_weight": 1.0,
+                "reseed_on_feedforward_change": True,
             },
+        )
+        observation, info = env.reset(seed=0)
+        context = {
+            "step_index": 0,
+            "physical_time": 0.0,
+            "reference": info["reference"],
         }
-        second = policy.act(observation, {"info": changed_info})
-        assert second[0] > first[0]
+        first = nominal.act(observation, context)
+        env.set_disturbances({"pump_flow_factor": 0.85})
+        second = repeated.act(observation, context)
+        assert second == pytest.approx(first)
     finally:
         env.close()
 

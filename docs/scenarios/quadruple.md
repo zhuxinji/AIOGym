@@ -23,15 +23,17 @@ held constant.
 
 ## Benchmarks
 
-```bash
-aiogym list benchmarks --scenario quadruple
+```python
+import aiogym
+
+print(aiogym.list_benchmarks("quadruple"))
 ```
 
 | Benchmark | Protocol | Horizon | Ranking |
 |---|---|---:|---|
 | `tracking` | case-seeded feasible equilibrium start that immediately tracks one independently resolved target | 180 steps / 180 s | unsafe rate, cumulative return |
 | `disturbance-rejection` | case-seeded pump-flow loss, event time, and recovery time | 500 steps / 500 s | unsafe rate, cumulative return |
-| `boundary-safety` | all four tanks start at independently sampled `82--92%` levels | 180 steps / 180 s | unsafe rate, cumulative return |
+| `boundary-safety` | the normal state is forward pre-run with high legal pump voltages until one tank reaches a case-seeded `82--90%` high-level boundary | 180 steps / 180 s | unsafe rate, cumulative return |
 
 All Benchmarks use exact observations without measurement noise. For tracking,
 each non-negative evaluation seed selects one reproducible case. Reset samples
@@ -46,23 +48,24 @@ once during reset; no precomputed case table or run-time steady-state solve is
 used.
 
 Disturbance cases begin at step `120--220`, last `150--250` steps, and sample a
-pump-flow factor in `0.78--0.90`. Boundary cases independently sample all four
-initial levels in `82--92%` of the resolved maximum. Seeds `0--19` resolve to
-20 distinct Episodes for all three Benchmarks.
+pump-flow factor in `0.78--0.90`. Boundary cases pre-run high legal pump
+voltages from the normal state until one tank reaches `82--90%` of the resolved
+maximum. Seeds `0--19` select 20 distinct episodes for all three
+Benchmarks.
 
-The latest possible disturbance recovery event is at step 470, so 500 steps
-keeps a 30-second observation tail. Both controllers remained inside the strict
-tracking band after every disturbance. Boundary cases settled within 64
-seconds, making the tracking-aligned 180-second horizon conservative.
+The latest possible disturbance restoration is at step 470, so the 500-step
+protocol keeps a 30-second response tail. Boundary safety uses the same
+180-second response window as tracking.
 
-The deterministic default training Episode starts at the default equilibrium,
+The deterministic default training episode starts at the default equilibrium,
 immediately requests `(8, 18)` cm, and uses the tracking Benchmark's 180-step
 horizon. The target has a feasible unsaturated steady pump command.
 With `randomize=True`, every reset instead samples a new operating condition
-for one tracking Episode using an independent random stream. 80% of episodes start
-from a feasible interior equilibrium and immediately track one sampled target.
-20% start with all four levels at `80–92%` of the hard upper bound and
-immediately track a feasible interior target. Every training Episode lasts 180
+for one tracking episode using an independent random stream. By default every
+episode starts from a feasible interior equilibrium and immediately tracks one
+sampled target. Setting `boundary_probability=p` makes fraction `p` start from
+the forward-pre-run family with all four levels at `80–92%` of the hard upper
+bound and immediately track a feasible interior target. Every training episode lasts 180
 steps. `disturbance=True` is independent
 of this operating-condition distribution: it temporarily multiplies pump flow
 by `0.78–0.94`, beginning at step `36–72` for `36–72` steps, before
@@ -73,59 +76,45 @@ moves span at least 15% of each controlled output's physical range.
 The tracking Benchmark's `7–16 cm` envelope stays away from the hard bounds.
 The `3 cm` minimum move equals 15% of each output's physical range.
 
-## SAC training
+## RL training
 
-Without `--algorithm-kwargs`, Stable-Baselines3 supplies every SAC
-hyperparameter from its defaults:
+The example below trains SAC with the Stable-Baselines3 defaults. Change
+`algorithm` to `"ppo"` or `"ddpg"` to train the other included baselines.
 
-```bash
-aiogym train quadruple sac --steps 50000 --seed 0 --record-every 500 \
-  --evaluate-every 5000 --evaluation-seed 0 \
-  --output runs/quadruple/training/sac-sb3-default-50k/seed-0
+```python
+import aiogym
+
+training_env = aiogym.make_env("quadruple", randomize=True)
+evaluation_env = aiogym.make_env("quadruple", randomize=True)
+trained = aiogym.train(
+    env=training_env,
+    algorithm="sac",
+    steps=50_000,
+    seed=0,
+    record_every=500,
+    evaluation_env=evaluation_env,
+    evaluate_every=5_000,
+    output=(
+        "runs/quadruple/training/sac/"
+        "randomized-sac-sb3-default-50k/seed-0"
+    ),
+)
+training_env.close()
+evaluation_env.close()
 ```
 
-SAC retains its native SB3 initialization and exploration.
+SAC retains its native SB3 initialization and exploration. DDPG does not add
+action noise unless it is explicitly configured. With PPO's default
+`n_steps=2048`, a 50,000-step request completes 51,200 environment steps.
+Training uses the scenario's default `regulation` Reward.
 
-For a multi-seed result, repeat training with different `--seed` values and
+For a multi-seed result, repeat training with different `seed` values and
 report all checkpoints. Do not select a checkpoint using the formal Benchmark.
 
-## PPO training
-
-PPO likewise uses its SB3 defaults when no algorithm-kwargs file is supplied:
-
-```bash
-aiogym train quadruple ppo --steps 50000 --seed 0 --record-every 500 \
-  --evaluate-every 5000 --evaluation-seed 0 \
-  --output runs/quadruple/training/ppo-sb3-default-50k/seed-0
-```
-
-With the default `n_steps=2048`, PPO rounds a 50,000-step request up to 51,200
-environment steps.
-
-## DDPG training
-
-DDPG also uses its SB3 defaults. In particular, AIO-Gym does not add action
-noise unless it is explicitly configured:
-
-```bash
-aiogym train quadruple ddpg --steps 50000 --seed 0 --record-every 500 \
-  --evaluate-every 5000 --evaluation-seed 0 \
-  --output runs/quadruple/training/ddpg-sb3-default-50k/seed-0
-```
-
-Training uses the Scenario's default `regulation` Reward.
-
-Periodic training evaluation always uses a separate deterministic default
-environment, never a fixed Benchmark. It evaluates at the invocation's initial
-step, every 5,000 cumulative steps, and the final step. The final learner is
-saved as `model.zip`; checkpoint
-selection first requires safe completion, then prefers the longer episode, and
-only then maximizes the Reward's cumulative `return` primary metric. The
-selected model is saved as
-`best/model.zip`, its fixed-training-case trajectory is written to
-`best/tracking.svg`, and compact results are recorded in `evaluation_history.json`.
-Formal tracking, disturbance-rejection, and boundary-safety Benchmarks remain
-post-training tests.
+Periodic evaluation follows the shared
+[best-checkpoint selection](../architecture.md#select-the-best-checkpoint) on a
+separate randomized environment. Formal tracking, disturbance-rejection, and
+boundary-safety Benchmarks remain held-out post-training tests.
 
 ## Phase configuration and parameter overrides
 
@@ -153,17 +142,19 @@ That run is recorded with its resolved parameter set but is not labeled as a
 formal Benchmark. This prevents results from different plants sharing the same
 Benchmark identity.
 
-## Run a controller
+## Quick start and controllers
 
 ```python
+import aiogym
+
 env = aiogym.make_env("quadruple", benchmark="tracking")
 pid = aiogym.make_controller("pid", env=env)
 result = aiogym.evaluate(env=env, policy=pid, seeds=range(20))
 env.close()
 ```
 
-Here, seeds `0--19` are 20 different operating cases. The same seed resolves
-the same complete `EpisodeSpec` for every compared policy. This applies to
+Here, seeds `0--19` are 20 different operating cases. The same seed selects
+the same complete physical case for every compared policy. This applies to
 tracking, disturbance rejection, and boundary safety.
 
 PID and MPC do not select different settings by Benchmark. The same controller
@@ -173,10 +164,5 @@ uses diagonal gains `(Kp, Ki, Kd) = (1.0159437333, 0.1, 0)` and
 `(2.0, 0.0900169896, 0)` for the two lower-tank loops. These gains use the
 1-second control interval.
 
-The active local comparisons use 20 distinct cases per Benchmark. Tracking was
-regenerated for PID and MPC under the immediate-target 180-step protocol; its
-median returns are `-0.301781` and `-0.301754`, respectively, and both policies
-completed every case safely. The return ranking is MPC then PID, although the
-difference is only about `2.76e-5`. The shortened disturbance-rejection and
-boundary-safety artifacts were also regenerated for PID and MPC. Both rank MPC
-before PID and completed every case safely.
+Current controller scores and safety metrics remain in the generated
+`runs/quadruple/benchmarks/<benchmark>/comparison.json` files.

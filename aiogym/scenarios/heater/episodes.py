@@ -4,6 +4,7 @@ from __future__ import annotations
 import numpy as np
 
 from aiogym.core.specs import Benchmark, EpisodeSpec
+from aiogym.scenarios._boundary import forward_preroll
 from aiogym.scenarios._metrics import regulation_episode_metrics
 
 
@@ -12,7 +13,8 @@ _TRACKING_TEMPERATURE_RANGE_C = (364.0, 372.0)
 _MINIMUM_OXYGEN_MOVE = 0.4
 _MINIMUM_TEMPERATURE_MOVE_C = 2.0
 _TRACKING_ACTION_RANGE = (0.05, 0.95)
-_BOUNDARY_INITIAL_PROBABILITY = 0.20
+_BOUNDARY_OXYGEN_RANGE = (1.30, 1.70)
+_BOUNDARY_TEMPERATURE_RANGE_C = (382.0, 385.0)
 _MAXIMUM_SAMPLING_ATTEMPTS = 100
 _TRACKING_HORIZON = 300
 
@@ -132,41 +134,49 @@ def _disturbance_episode(model, rng) -> EpisodeSpec:
 
 
 def _boundary_episode(model, rng) -> EpisodeSpec:
-    boundary_reference = (
-        float(rng.uniform(1.30, 1.70)),
-        float(rng.uniform(382.0, 390.0)),
-    )
-    initial_state = model.tracking_steady_state_state(boundary_reference)
-    initial_action = model.tracking_steady_state_action(boundary_reference)
-    if initial_state is None or initial_action is None:
-        raise ValueError("heater boundary operating point is infeasible")
+    boundary = _sample_boundary_preroll(model, rng)
     return EpisodeSpec(
-        initial_state=tuple(initial_state),
-        initial_action=tuple(initial_action),
+        initial_state=boundary["state"],
+        initial_action=boundary["action"],
         reference=tuple(model.default_setpoint_vector()),
         horizon=450,
         disturbances=model.default_disturbances(),
     )
 
 
-def sample_training_episode(model, rng, reward_id) -> tuple[EpisodeSpec, str]:
+def _sample_boundary_preroll(model, rng):
+    target_temperature = float(rng.uniform(*_BOUNDARY_TEMPERATURE_RANGE_C))
+    heated = forward_preroll(
+        model,
+        command=(0.5, 1.0),
+        reached=lambda state: float(state[1]) >= target_temperature,
+        control_dt=1.0,
+        maximum_steps=500,
+    )
+    target_oxygen = float(rng.uniform(*_BOUNDARY_OXYGEN_RANGE))
+    depleted = forward_preroll(
+        model,
+        command=(float(rng.uniform(0.38, 0.40)), float(rng.uniform(0.95, 1.0))),
+        reached=lambda state: float(state[2]) <= target_oxygen,
+        control_dt=1.0,
+        maximum_steps=100,
+        initial_state=heated["state"],
+        initial_action=heated["action"],
+    )
+    return {**depleted, "steps": heated["steps"] + depleted["steps"]}
+
+
+def sample_training_episode(
+    model, rng, reward_id, boundary: bool
+) -> tuple[EpisodeSpec, str]:
     if reward_id != "regulation":
         raise ValueError(f"unsupported heater training reward {reward_id!r}")
     target = _sample_tracking_equilibrium(model, rng)
-    if rng.random() < _BOUNDARY_INITIAL_PROBABILITY:
-        boundary_reference = (
-            float(rng.uniform(1.5, 1.7)),
-            float(rng.uniform(382.0, 388.0)),
-        )
-        initial_state = model.tracking_steady_state_state(boundary_reference)
-        initial_action = model.tracking_steady_state_action(boundary_reference)
-        if initial_state is None or initial_action is None:
-            raise ValueError(
-                "sampled heater boundary operating point is infeasible"
-            )
+    if boundary:
+        boundary_case = _sample_boundary_preroll(model, rng)
         episode = EpisodeSpec(
-            initial_state=tuple(initial_state),
-            initial_action=tuple(initial_action),
+            initial_state=boundary_case["state"],
+            initial_action=boundary_case["action"],
             reference=target["reference"],
             horizon=_TRACKING_HORIZON,
             disturbances=model.default_disturbances(),
@@ -184,7 +194,7 @@ def sample_training_episode(model, rng, reward_id) -> tuple[EpisodeSpec, str]:
             horizon=_TRACKING_HORIZON,
             disturbances=model.default_disturbances(),
         )
-    return episode, "tracking"
+    return episode, "boundary-prerun" if boundary else "interior"
 
 
 def sample_training_disturbance(model, rng):

@@ -9,7 +9,7 @@ import aiogym.workflows
 
 
 def test_public_api_is_scenario_reward_oriented_and_small():
-    assert aiogym.__version__ == "0.15.0"
+    assert aiogym.__version__ == "0.30.0"
     assert set(aiogym.__all__) == {
         "__version__",
         "AlgorithmBackend",
@@ -34,6 +34,7 @@ def test_public_api_is_scenario_reward_oriented_and_small():
         "train",
     }
     assert "three_tank" in aiogym.list_scenarios()
+    assert "cascade" in aiogym.list_scenarios()
     assert "regulation" in aiogym.list_rewards("three_tank")
 
 
@@ -49,6 +50,9 @@ def test_public_parameter_listing_includes_defaults_and_native_units():
     three_tank = {row["name"]: row for row in aiogym.list_parameters("three_tank")}
     assert three_tank["pump_flow_max"]["unit"] == "m^3/s"
     assert "heater_power" not in three_tank
+    cascade = {row["name"]: row for row in aiogym.list_parameters("cascade")}
+    assert cascade["heater_power_max"]["unit"] == "W"
+    assert cascade["heat_loss_coefficient"]["unit"] == "W/K"
 
 
 def test_every_built_in_scenario_has_a_documentation_page():

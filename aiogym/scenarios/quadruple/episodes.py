@@ -4,14 +4,14 @@ from __future__ import annotations
 import numpy as np
 
 from aiogym.core.specs import Benchmark, EpisodeSpec
+from aiogym.scenarios._boundary import forward_preroll
 from aiogym.scenarios._metrics import regulation_episode_metrics
 
 
 _TRACKING_LEVEL_RANGE_FRACTION = (0.35, 0.80)
 _TRACKING_ACTION_RANGE = (0.02, 0.95)
 _MINIMUM_TRACKING_MOVE_FRACTION = 0.15
-_BOUNDARY_INITIAL_PROBABILITY = 0.20
-_BOUNDARY_LEVEL_RANGE_FRACTION = (0.80, 0.92)
+_BOUNDARY_LEVEL_RANGE_FRACTION = (0.82, 0.90)
 _MAXIMUM_SAMPLING_ATTEMPTS = 100
 _TRACKING_HORIZON = 180
 
@@ -113,39 +113,46 @@ def _disturbance_episode(model, rng) -> EpisodeSpec:
 
 
 def _boundary_episode(model, rng) -> EpisodeSpec:
+    boundary = _sample_boundary_preroll(model, rng)
     maximum = float(model.parameter("max_level"))
-    initial = tuple(
-        float(value) for value in rng.uniform(0.82, 0.92, size=4) * maximum
-    )
     reference = np.clip(
         np.asarray(model.default_setpoint_vector(), dtype=float), 0.0, maximum
     )
     return EpisodeSpec(
-        initial_state=initial,
-        initial_action=tuple(model.default_action()),
+        initial_state=boundary["state"],
+        initial_action=boundary["action"],
         reference=tuple(reference),
         horizon=180,
         disturbances=model.default_disturbances(),
     )
 
 
-def sample_training_episode(model, rng, reward_id) -> tuple[EpisodeSpec, str]:
-    del reward_id
+def _sample_boundary_preroll(model, rng):
     maximum = float(model.parameter("max_level"))
-    boundary_initial = rng.random() < _BOUNDARY_INITIAL_PROBABILITY
+    target = float(rng.uniform(*_BOUNDARY_LEVEL_RANGE_FRACTION)) * maximum
+    if rng.random() < 0.5:
+        command = (1.0, float(rng.uniform(0.85, 1.0)))
+    else:
+        command = (float(rng.uniform(0.85, 1.0)), 1.0)
+    return forward_preroll(
+        model,
+        command=command,
+        reached=lambda state: bool(np.max(state) >= target),
+        control_dt=1.0,
+        maximum_steps=50,
+    )
+
+
+def sample_training_episode(
+    model, rng, reward_id, boundary: bool
+) -> tuple[EpisodeSpec, str]:
+    del reward_id
     target = _sample_tracking_equilibrium(model, rng)
-    if boundary_initial:
-        initial_state = tuple(
-            float(value)
-            for value in rng.uniform(
-                _BOUNDARY_LEVEL_RANGE_FRACTION[0] * maximum,
-                _BOUNDARY_LEVEL_RANGE_FRACTION[1] * maximum,
-                size=4,
-            )
-        )
+    if boundary:
+        boundary_case = _sample_boundary_preroll(model, rng)
         episode = EpisodeSpec(
-            initial_state=initial_state,
-            initial_action=target["action"],
+            initial_state=boundary_case["state"],
+            initial_action=boundary_case["action"],
             reference=target["reference"],
             horizon=_TRACKING_HORIZON,
             disturbances=model.default_disturbances(),
@@ -163,7 +170,7 @@ def sample_training_episode(model, rng, reward_id) -> tuple[EpisodeSpec, str]:
             horizon=_TRACKING_HORIZON,
             disturbances=model.default_disturbances(),
         )
-    return episode, "tracking"
+    return episode, "boundary-prerun" if boundary else "interior"
 
 
 def sample_training_disturbance(model, rng):

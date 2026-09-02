@@ -19,6 +19,7 @@ class CrystallizationModel(PhysicsModelBase):
 
     scenario = "crystallization"
     dt_micro = 0.02
+    reference_observation_suffix = "target"
     state_names = (
         "zeroth_crystal_moment",
         "first_crystal_moment",
@@ -325,31 +326,6 @@ class CrystallizationModel(PhysicsModelBase):
         _validated_reference(reference)
         return None
 
-    def observation_schema(self):
-        return [
-            *(
-                {**row, "kind": "measurement", "low": 0.0, "high": 1.0}
-                for row in self.state_schema()
-            ),
-            *(
-                {
-                    **row,
-                    "name": f"{row['name']}_target",
-                    "kind": "reference",
-                    "low": 0.0,
-                    "high": 1.0,
-                }
-                for row in self.output_schema()
-            ),
-        ]
-
-    def observation(self, state, reference, previous_action, disturbances):
-        del previous_action, disturbances
-        return [
-            *_normalized(state, self.state_schema()),
-            *_normalized(reference, self.output_schema()),
-        ]
-
     def measurement(self, state, disturbances=None):
         context = self._resolve_disturbances(
             {} if disturbances is None else disturbances
@@ -363,20 +339,6 @@ class CrystallizationModel(PhysicsModelBase):
             "conc": [values[4]],
             **context,
         }
-
-    def measurement_from_observation(self, observation, disturbances=None):
-        values = np.asarray(observation, dtype=float).reshape(-1)
-        expected = len(self.observation_schema())
-        if values.shape != (expected,) or not np.isfinite(values).all():
-            raise ValueError(
-                "crystallization policy observation must match observation_schema"
-            )
-        state_rows = self.state_schema()
-        state_dimension = len(state_rows)
-        low = np.asarray([row["low"] for row in state_rows], dtype=float)
-        high = np.asarray([row["high"] for row in state_rows], dtype=float)
-        state = low + values[:state_dimension] * (high - low)
-        return self.measurement(state, disturbances)
 
     def clamp_state(self, state):
         return [float(value) for value in state]
@@ -428,13 +390,6 @@ def _validated_reference(reference):
             "crystallization reference must contain finite CV and mean size"
         )
     return values
-
-
-def _normalized(values, rows):
-    return [
-        (float(value) - float(row["low"])) / (float(row["high"]) - float(row["low"]))
-        for value, row in zip(values, rows)
-    ]
 
 
 def _resolved_parameters(defaults, overrides):

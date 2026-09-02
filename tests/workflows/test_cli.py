@@ -10,6 +10,7 @@ from aiogym.cli.main import main
 def test_cli_lists_current_resources(capsys):
     assert main(["list", "scenarios"]) == 0
     assert capsys.readouterr().out.splitlines() == [
+        "cascade",
         "crystallization",
         "cstr",
         "extraction",
@@ -65,11 +66,11 @@ def test_cli_lists_benchmark_summaries(capsys):
         for line in lines[1:]
     )
     assert any(
-        line.split()
-        == [
-            "disturbance-rejection",
-            "1800",
-            "regulation",
+            line.split()
+            == [
+                "disturbance-rejection",
+                "600",
+                "regulation",
             "scenario-defaults",
             "unsafe_rate,return",
         ]
@@ -103,6 +104,7 @@ def test_cli_workflow_help_explains_arguments_and_hides_invalid_benchmark(capsys
     assert "checkpoint whose optimization state will be" in output
     assert "continued (default: None)" in output
     assert "--benchmark" not in output
+    assert "--boundary-probability PROBABILITY" in output
 
     with pytest.raises(SystemExit) as exit_info:
         main(["compare", "--help"])
@@ -110,6 +112,7 @@ def test_cli_workflow_help_explains_arguments_and_hides_invalid_benchmark(capsys
     output = capsys.readouterr().out
     assert "Compare controllers and checkpoints on identical seeds" in output
     assert "LABEL MODEL_ZIP" in output
+    assert "--boundary-probability PROBABILITY" in output
 
 
 def test_non_training_cli_does_not_discover_algorithm_plugins(monkeypatch, capsys):
@@ -140,6 +143,9 @@ def test_cli_collects_dataset_with_file_parameters(tmp_path, capsys):
                 str(parameters),
                 "--disturbance",
                 "on",
+                "--randomize",
+                "--boundary-probability",
+                "0.3",
                 "--controller",
                 "hold",
                 "--max-steps",
@@ -163,6 +169,8 @@ def test_cli_collects_dataset_with_file_parameters(tmp_path, capsys):
         20.0 / 60000.0
     )
     assert metadata["environment"]["disturbance"] is True
+    assert metadata["environment"]["randomize"] is True
+    assert metadata["environment"]["boundary_probability"] == pytest.approx(0.3)
     assert result["transitions"] == 2
 
 
@@ -248,7 +256,7 @@ def test_cli_train_builds_env_calls_workflow_and_closes(tmp_path, capsys, monkey
     def train(**kwargs):
         captured.update(kwargs)
         return {
-            "schema_version": "aiogym.training.v10",
+            "schema_version": "aiogym.training.v12",
             "path": str(output.resolve()),
             "algorithm": "sac",
             "initial_steps": 0,
@@ -285,6 +293,8 @@ def test_cli_train_builds_env_calls_workflow_and_closes(tmp_path, capsys, monkey
                 "4",
                 "--behavior-cloning-learning-rate",
                 "0.002",
+                "--evaluate-every",
+                "1",
                 "--output",
                 str(output),
             ]
@@ -292,7 +302,7 @@ def test_cli_train_builds_env_calls_workflow_and_closes(tmp_path, capsys, monkey
         == 0
     )
     summary = json.loads(capsys.readouterr().out)
-    assert summary["schema_version"] == "aiogym.training.v10"
+    assert summary["schema_version"] == "aiogym.training.v12"
     assert summary["algorithm"] == "sac"
     assert summary["initial_steps"] == 0
     assert summary["added_steps"] == 2
@@ -306,9 +316,8 @@ def test_cli_train_builds_env_calls_workflow_and_closes(tmp_path, capsys, monkey
     assert captured["algorithm"] == "sac"
     assert captured["steps"] == 2
     assert captured["record_every"] == 1
-    assert captured["evaluation_env"] is None
-    assert captured["evaluate_every"] is None
-    assert captured["evaluation_seed"] == 0
+    assert captured["evaluation_env"].unwrapped.runtime_config["randomize"] is True
+    assert captured["evaluate_every"] == 1
     assert captured["dataset"] == dataset
     assert captured["behavior_cloning_epochs"] == 3
     assert captured["behavior_cloning_batch_size"] == 4
@@ -336,9 +345,15 @@ def test_cli_compare_combines_controllers_and_checkpoints(
             for index, label in enumerate(kwargs["policies"])
         }
         return {
-            "schema_version": "aiogym.comparison.v4",
+            "schema_version": "aiogym.comparison.v5",
             "seeds": list(kwargs["seeds"]),
-            "ranking_metrics": [{"name": "return", "direction": "maximize"}],
+            "ranking_metrics": [
+                {
+                    "name": "return",
+                    "direction": "maximize",
+                    "aggregate": "median",
+                }
+            ],
             "ordering": list(kwargs["policies"]),
             "evaluations": evaluations,
         }

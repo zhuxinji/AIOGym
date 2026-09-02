@@ -16,6 +16,12 @@ SMALL_POLICY = {"policy_kwargs": {"net_arch": [8, 8]}}
 @pytest.mark.parametrize(
     ("scenario", "reward"),
     [
+        ("cascade", "regulation"),
+        ("crystallization", "regulation"),
+        ("cstr", "regulation"),
+        ("extraction", "regulation"),
+        ("heater", "regulation"),
+        ("hvac", "regulation"),
         ("quadruple", "regulation"),
         ("three_tank", "regulation"),
     ],

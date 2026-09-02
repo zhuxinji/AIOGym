@@ -107,6 +107,8 @@ class ProcessModel(Protocol):
 
 @runtime_checkable
 class Policy(Protocol):
+    """Act on observations plus public time and reference context only."""
+
     env: Any | None
 
     def reset(self, seed: int | None = None) -> None: ...
@@ -136,7 +138,7 @@ def policy_metadata(policy: Any) -> dict[str, Any]:
 
 
 EpisodeSampler = Callable[
-    [ProcessModel, np.random.Generator, str], tuple[EpisodeSpec, str]
+    [ProcessModel, np.random.Generator, str, bool], tuple[EpisodeSpec, str]
 ]
 TrainingDisturbanceSampler = Callable[
     [ProcessModel, np.random.Generator], Mapping[int, Mapping[str, float]]

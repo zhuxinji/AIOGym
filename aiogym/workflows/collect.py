@@ -156,6 +156,7 @@ def _episode_arrays(result):
         "disturbance_names": disturbance_names,
         "episode_spec": dict(result.reset_info["episode_spec"]),
         "episode_family": result.reset_info["episode_family"],
+        "episode_parameters": dict(result.reset_info["episode_parameters"]),
         "runtime_variation": dict(result.reset_info["runtime_variation"]),
     }
     return arrays, metadata

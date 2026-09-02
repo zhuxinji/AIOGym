@@ -165,7 +165,7 @@ def test_extraction_pid_holds_the_gas_feed_at_its_nominal_bias():
     try:
         observation, info = env.reset(seed=0)
         policy = aiogym.make_controller("pid", env=env)
-        action = policy.act(observation, {"info": info})
+        action = policy.act(observation, {"reference": info["reference"]})
         assert np.asarray(action).shape == (2,)
         assert float(action[1]) == pytest.approx(0.5)
     finally:

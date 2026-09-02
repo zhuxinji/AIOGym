@@ -4,16 +4,15 @@ from __future__ import annotations
 import numpy as np
 
 from aiogym.core.specs import Benchmark, EpisodeSpec
+from aiogym.scenarios._boundary import forward_preroll
 from aiogym.scenarios._metrics import regulation_episode_metrics
 
 
 _TRACKING_CONCENTRATION_RANGE = (0.02, 0.20)
 _TRACKING_TEMPERATURE_RANGE_C = (50.0, 82.0)
 _MINIMUM_TRACKING_MOVE = np.asarray([0.02, 5.0], dtype=float)
-_BOUNDARY_CONCENTRATION_RANGE = (0.02, 0.04)
 _BOUNDARY_TEMPERATURE_RANGE_C = (86.0, 90.0)
 _TRACKING_ACTION_RANGE = (0.05, 0.95)
-_BOUNDARY_INITIAL_PROBABILITY = 0.20
 _MAXIMUM_SAMPLING_ATTEMPTS = 100
 _TRACKING_HORIZON = 225
 
@@ -111,7 +110,7 @@ def _disturbance_episode(model, rng) -> EpisodeSpec:
 
 
 def _boundary_episode(model, rng) -> EpisodeSpec:
-    boundary = _sample_boundary_equilibrium(model, rng)
+    boundary = _sample_boundary_preroll(model, rng)
     return EpisodeSpec(
         initial_state=boundary["state"],
         initial_action=boundary["action"],
@@ -121,15 +120,17 @@ def _boundary_episode(model, rng) -> EpisodeSpec:
     )
 
 
-def sample_training_episode(model, rng, reward_id) -> tuple[EpisodeSpec, str]:
+def sample_training_episode(
+    model, rng, reward_id, boundary: bool
+) -> tuple[EpisodeSpec, str]:
     if reward_id != "regulation":
         raise ValueError(f"unsupported CSTR training reward {reward_id!r}")
     target = _sample_tracking_equilibrium(model, rng)
-    if rng.random() < _BOUNDARY_INITIAL_PROBABILITY:
-        boundary = _sample_boundary_equilibrium(model, rng)
+    if boundary:
+        boundary_case = _sample_boundary_preroll(model, rng)
         episode = EpisodeSpec(
-            initial_state=boundary["state"],
-            initial_action=boundary["action"],
+            initial_state=boundary_case["state"],
+            initial_action=boundary_case["action"],
             reference=target["reference"],
             horizon=_TRACKING_HORIZON,
             disturbances=model.default_disturbances(),
@@ -147,27 +148,17 @@ def sample_training_episode(model, rng, reward_id) -> tuple[EpisodeSpec, str]:
             horizon=_TRACKING_HORIZON,
             disturbances=model.default_disturbances(),
         )
-    return episode, "tracking"
+    return episode, "boundary-prerun" if boundary else "interior"
 
 
-def _sample_boundary_equilibrium(model, rng):
-    for _attempt in range(_MAXIMUM_SAMPLING_ATTEMPTS):
-        reference = (
-            float(rng.uniform(*_BOUNDARY_CONCENTRATION_RANGE)),
-            float(rng.uniform(*_BOUNDARY_TEMPERATURE_RANGE_C)),
-        )
-        action = model.tracking_steady_state_action(reference)
-        state = model.tracking_steady_state_state(reference)
-        if action is None or state is None:
-            continue
-        return {
-            "state": tuple(float(value) for value in state),
-            "action": tuple(float(value) for value in action),
-            "reference": reference,
-        }
-    raise ValueError(
-        "could not sample a feasible CSTR boundary equilibrium within "
-        f"{_MAXIMUM_SAMPLING_ATTEMPTS} attempts"
+def _sample_boundary_preroll(model, rng):
+    target_temperature = float(rng.uniform(*_BOUNDARY_TEMPERATURE_RANGE_C))
+    return forward_preroll(
+        model,
+        command=(float(rng.uniform(0.95, 1.0)), float(rng.uniform(0.0, 0.05))),
+        reached=lambda state: float(state[1]) >= target_temperature,
+        control_dt=1.0,
+        maximum_steps=50,
     )
 
 

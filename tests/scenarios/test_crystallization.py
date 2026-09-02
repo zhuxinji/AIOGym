@@ -206,7 +206,7 @@ def test_crystallization_pid_and_mpc_return_one_physical_action():
         observation, info = env.reset(seed=0)
         for controller_id in ("pid", "mpc"):
             policy = aiogym.make_controller(controller_id, env=env)
-            action = policy.act(observation, {"info": info})
+            action = policy.act(observation, {"reference": info["reference"]})
             assert np.asarray(action).shape == (1,)
             assert env.action_space.contains(np.asarray(action, dtype=np.float32))
     finally:

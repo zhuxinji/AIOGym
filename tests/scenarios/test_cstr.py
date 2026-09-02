@@ -180,7 +180,7 @@ def test_cstr_pid_uses_feed_for_concentration_and_cooling_for_temperature():
         observation, info = env.reset(seed=0)
         model = env.unwrapped.model
         policy = aiogym.make_controller("pid", env=env)
-        context = {"info": {**info, "reference": [0.075, 72.0]}}
+        context = {"reference": [0.075, 72.0]}
         action = policy.act(observation, context)
         assert np.asarray(action).shape == (2,)
         assert float(action[0]) < model.default_action()[0]

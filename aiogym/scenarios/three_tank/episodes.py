@@ -5,17 +5,22 @@ from __future__ import annotations
 import numpy as np
 
 from aiogym.core.specs import Benchmark, EpisodeSpec
-from .metrics import regulation_episode_metrics
+from aiogym.scenarios._boundary import forward_preroll
+from .metrics import (
+    disturbance_rejection_episode_metrics,
+    regulation_episode_metrics,
+)
 
 
 _TRACKING_LEVEL_RANGE_M = (0.125, 0.4)
-_TRACKING_FLOW_RANGE_M3S = (1.0 / 60000.0, 6.0 / 60000.0)
+_TRACKING_FLOW_RANGE_M3S = (3.0 / 60000.0, 8.0 / 60000.0)
 _TRACKING_ACTION_RANGE = (0.02, 0.85)
 _MINIMUM_LEVEL_MOVE_M = 0.05
-_BOUNDARY_INITIAL_PROBABILITY = 0.20
-_BOUNDARY_LEVEL_RANGE_FRACTION = (0.80, 0.92)
+_BOUNDARY_LEVEL_RANGE_FRACTION = (0.82, 0.848)
 _MAXIMUM_SAMPLING_ATTEMPTS = 100
 _TRACKING_HORIZON = 600
+_BYPASS_OPEN_STEP_RANGE = (30, 90)
+_BYPASS_DURATION_STEPS = 360
 
 
 def make_default_episode(model) -> EpisodeSpec:
@@ -80,68 +85,91 @@ def _tracking_episode(model, rng) -> EpisodeSpec:
     )
 
 
-def _disturbance_episode(model, rng) -> EpisodeSpec:
-    steady = model.nominal_steady_state()
-    if not steady["feasible"]:
-        raise ValueError(
-            "Three-Tank disturbance benchmark equilibrium is infeasible for "
-            f"the resolved parameters: {steady['infeasible_reasons']}"
+def _sample_bypass_schedule(rng):
+    bypass_mode = int(rng.integers(10))
+    bypass_names = ("bv12_open", "bv23_open", "bv34_open")
+    if bypass_mode < 3:
+        active_names = (bypass_names[int(rng.integers(len(bypass_names)))],)
+    elif bypass_mode < 7:
+        omitted_index = int(rng.integers(len(bypass_names)))
+        active_names = tuple(
+            name for index, name in enumerate(bypass_names) if index != omitted_index
         )
-    hydraulic_start = int(rng.integers(600, 851))
-    hydraulic_duration = int(rng.integers(400, 651))
-    pump_factor = float(rng.uniform(0.40, 0.70))
-    v23_factor = float(rng.uniform(0.50, 0.70))
+    else:
+        active_names = bypass_names
+    bypass_open_step = int(
+        rng.integers(
+            _BYPASS_OPEN_STEP_RANGE[0],
+            _BYPASS_OPEN_STEP_RANGE[1] + 1,
+        )
+    )
+    bypass_close_step = bypass_open_step + _BYPASS_DURATION_STEPS
+    return {
+        bypass_open_step: {name: 1.0 for name in active_names},
+        bypass_close_step: {name: 0.0 for name in active_names},
+    }
+
+
+def _disturbance_episode(model, rng) -> EpisodeSpec:
+    start, target = _sample_tracking_equilibria(model, rng)
     return EpisodeSpec(
-        initial_state=tuple(steady["state"]),
-        initial_action=tuple(steady["action"]),
-        reference=tuple(steady["y_sp"]),
-        horizon=1800,
+        initial_state=tuple(start["state"]),
+        initial_action=tuple(start["action"]),
+        reference=tuple(target["y_sp"]),
+        horizon=_TRACKING_HORIZON,
         disturbances=model.default_disturbances(),
-        disturbance_schedule={
-            hydraulic_start: {
-                "pump_flow_factor": pump_factor,
-                "v23_flow_factor": v23_factor,
-            },
-            hydraulic_start + hydraulic_duration: {
-                "pump_flow_factor": 1.0,
-                "v23_flow_factor": 1.0,
-            },
-        },
+        disturbance_schedule=_sample_bypass_schedule(rng),
     )
 
 
 def _boundary_episode(model, rng) -> EpisodeSpec:
-    maximum = np.asarray(model.parameter("height_max"), dtype=float)
-    levels = rng.uniform(0.86, 0.90, size=3) * maximum
+    boundary = _sample_boundary_preroll(model, rng)
     return EpisodeSpec(
-        initial_state=tuple(levels),
-        initial_action=tuple(model.default_action()),
+        initial_state=boundary["state"],
+        initial_action=boundary["action"],
         reference=tuple(model.default_setpoint_vector()),
         horizon=600,
         disturbances=model.default_disturbances(),
     )
 
 
-def sample_training_episode(model, rng, reward_id) -> tuple[EpisodeSpec, str]:
+def _sample_boundary_preroll(model, rng):
+    maximum = np.asarray(model.parameter("height_max"), dtype=float)
+    tank = int(rng.integers(3))
+    target = float(rng.uniform(*_BOUNDARY_LEVEL_RANGE_FRACTION)) * maximum[tank]
+    low = rng.uniform(0.03, 0.07, size=3)
+    transfer = rng.uniform(0.38, 0.42, size=2)
+    commands = (
+        (1.0, *low),
+        (1.0, transfer[0], low[1], low[2]),
+        (1.0, transfer[0], transfer[1], low[2]),
+    )
+    return forward_preroll(
+        model,
+        command=commands[tank],
+        reached=lambda state: float(state[tank]) >= target,
+        control_dt=1.0,
+        maximum_steps=500,
+    )
+
+
+def sample_training_episode(
+    model, rng, reward_id, boundary: bool
+) -> tuple[EpisodeSpec, str]:
     if reward_id != "regulation":
         raise ValueError(f"unsupported Three-Tank training reward {reward_id!r}")
     defaults = model.default_disturbances()
-    boundary_initial = rng.random() < _BOUNDARY_INITIAL_PROBABILITY
-    if boundary_initial:
-        maximum = np.asarray(model.parameter("height_max"), dtype=float)
-        boundary_lower = _BOUNDARY_LEVEL_RANGE_FRACTION[0] * maximum
-        boundary_upper = _BOUNDARY_LEVEL_RANGE_FRACTION[1] * maximum
-        start, target = _sample_tracking_equilibria(model, rng)
-        levels = rng.uniform(boundary_lower, boundary_upper)
+    start, target = _sample_tracking_equilibria(model, rng)
+    if boundary:
+        boundary_case = _sample_boundary_preroll(model, rng)
         episode = EpisodeSpec(
-            initial_state=tuple(levels),
-            initial_action=tuple(start["action"]),
+            initial_state=boundary_case["state"],
+            initial_action=boundary_case["action"],
             reference=tuple(target["y_sp"]),
             horizon=_TRACKING_HORIZON,
             disturbances=defaults,
         )
     else:
-        start, target = _sample_tracking_equilibria(model, rng)
         episode = EpisodeSpec(
             initial_state=tuple(start["state"]),
             initial_action=tuple(start["action"]),
@@ -149,18 +177,12 @@ def sample_training_episode(model, rng, reward_id) -> tuple[EpisodeSpec, str]:
             horizon=_TRACKING_HORIZON,
             disturbances=defaults,
         )
-    return episode, "tracking"
+    return episode, "boundary-prerun" if boundary else "interior"
 
 
 def sample_training_disturbance(model, rng):
     del model
-    start = int(rng.integers(112, 201))
-    duration = int(rng.integers(75, 151))
-    factor = float(rng.uniform(0.72, 0.94))
-    return {
-        start: {"pump_flow_factor": factor},
-        start + duration: {"pump_flow_factor": 1.0},
-    }
+    return _sample_bypass_schedule(rng)
 
 
 BENCHMARKS = {
@@ -178,7 +200,7 @@ BENCHMARKS = {
         id="disturbance-rejection",
         reward_id="regulation",
         episode_factory=_disturbance_episode,
-        metric_function=regulation_episode_metrics,
+        metric_function=disturbance_rejection_episode_metrics,
         ranking_metrics=(
             ("unsafe_rate", "minimize"),
             ("return", "maximize"),

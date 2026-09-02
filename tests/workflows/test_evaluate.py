@@ -23,9 +23,9 @@ def test_evaluate_preserves_seed_order_and_aggregates_metrics():
     finally:
         env.close()
 
-    assert result["schema_version"] == "aiogym.evaluation.v3"
+    assert result["schema_version"] == "aiogym.evaluation.v4"
     assert result["ranking_metrics"] == [
-        {"name": "return", "direction": "maximize"}
+        {"name": "return", "direction": "maximize", "aggregate": "median"}
     ]
     assert [row["seed"] for row in result["episodes"]] == [4, 3]
     assert [row["length"] for row in result["episodes"]] == [4, 4]
@@ -266,6 +266,73 @@ def test_compare_allows_constraint_names_observed_by_only_one_policy(tmp_path):
     ]
 
 
+def test_compare_does_not_hide_one_unsafe_case_behind_a_zero_median(tmp_path):
+    env = make_env("quadruple", benchmark="tracking")
+    try:
+        unsafe = make_controller(
+            "pid",
+            env=env,
+            config={
+                "matrix_terms": [
+                    {
+                        "actuator": actuator,
+                        "output": output,
+                        "kp": 0.0,
+                        "ki": 0.0,
+                        "kd": 0.0,
+                    }
+                    for actuator, output in (
+                        ("pump_1_voltage", "lower_tank_1_level"),
+                        ("pump_2_voltage", "lower_tank_2_level"),
+                    )
+                ],
+                "bias": [1.0, 1.0],
+            },
+        )
+        fallback = make_controller("mpc", env=env)
+
+        class OneCaseUnsafePolicy:
+            def __init__(self):
+                self.env = env
+
+            def reset(self, seed=None):
+                unsafe.reset(seed)
+                fallback.reset(seed)
+
+            def act(self, observation, context):
+                policy = (
+                    unsafe
+                    if env.unwrapped.episode_parameters["case_seed"] == 0
+                    else fallback
+                )
+                return policy.act(observation, context)
+
+            def metadata(self):
+                return {"id": "one-case-unsafe"}
+
+        comparison = compare_policies(
+            env=env,
+            policies={
+                "a-one-case-unsafe": OneCaseUnsafePolicy(),
+                "z-all-safe": make_controller("mpc", env=env),
+            },
+            seeds=(0, 1, 2),
+            output=tmp_path / "comparison",
+        )
+    finally:
+        env.close()
+
+    unsafe_rate = comparison["evaluations"]["a-one-case-unsafe"]["aggregate"][
+        "unsafe_rate"
+    ]
+    assert unsafe_rate["median"] == 0.0
+    assert unsafe_rate["mean"] > 0.0
+    assert comparison["evaluations"]["z-all-safe"]["aggregate"]["unsafe_rate"][
+        "mean"
+    ] == 0.0
+    assert comparison["ordering"][0] == "z-all-safe"
+
+
 def test_quadruple_pid_safely_completes_tracking_benchmark():
     env = make_env("quadruple", benchmark="tracking")
     try:
@@ -296,9 +363,9 @@ def test_compare_uses_reward_direction_and_writes_json_and_svg(tmp_path):
         for label, evaluation in result["evaluations"].items()
     }
     assert result["ranking_metrics"] == [
-        {"name": "return", "direction": "maximize"}
+        {"name": "return", "direction": "maximize", "aggregate": "median"}
     ]
-    assert result["schema_version"] == "aiogym.comparison.v4"
+    assert result["schema_version"] == "aiogym.comparison.v5"
     assert result["trajectory_seed"] == 0
     assert result["trajectory_archive"]["schema_version"] == (
         "aiogym.trajectory-archive.v1"
@@ -374,14 +441,18 @@ def test_compare_places_changing_disturbances_above_balanced_main_columns(tmp_pa
     output = tmp_path / "disturbance-comparison"
     env = make_env("three_tank", benchmark="disturbance-rejection")
     try:
-        disturbance_start = min(
-            env.unwrapped.default_episode.disturbance_schedule
-        )
+        _, info = env.reset(seed=4)
+        changing_disturbances = {
+            name
+            for changes in info["episode_spec"]["disturbance_schedule"].values()
+            for name in changes
+        }
+        last_disturbance_event = max(env.unwrapped.episode.disturbance_schedule)
         compare_policies(
             env=env,
             policies={"pid": "pid", "hold": "hold"},
-            seeds=(0,),
-            max_steps=disturbance_start + 1,
+            seeds=(4,),
+            max_steps=last_disturbance_event + 1,
             output=output,
         )
     finally:
@@ -389,22 +460,31 @@ def test_compare_places_changing_disturbances_above_balanced_main_columns(tmp_pa
 
     svg = (output / "comparison.svg").read_text(encoding="utf-8")
     ET.parse(output / "comparison.svg")
-    assert (
-        '<text class="panel-title" x="76.0" y="120">'
-        "Disturbance: pump_flow_factor"
-    ) in svg
-    assert (
-        '<text class="panel-title" x="762.0" y="120">'
-        "Disturbance: v23_flow_factor"
-    ) in svg
-    assert (
-        '<text class="panel-title" x="76.0" y="345">'
-        "Output: tank_1_level [m]"
-    ) in svg
-    assert (
-        '<text class="panel-title" x="76.0" y="570">'
-        "Applied action: pump_P101 [fraction]"
-    ) in svg
+    assert len(changing_disturbances) == 2
+    for name in changing_disturbances:
+        assert f"Disturbance: {name}" in svg
+        title = f">Disturbance: {name}</text>"
+        panel_start = svg.index(title) + len(title)
+        panel_end = svg.find('<text class="panel-title"', panel_start)
+        panel = svg[panel_start:] if panel_end < 0 else svg[panel_start:panel_end]
+        assert ">-0.05</text>" not in panel
+        assert ">1.05</text>" not in panel
+    disturbance_y = [
+        float(value)
+        for value in re.findall(
+            r'<text class="panel-title" x="[^"]+" y="([^"]+)">Disturbance:',
+            svg,
+        )
+    ]
+    output_y = [
+        float(value)
+        for value in re.findall(
+            r'<text class="panel-title" x="[^"]+" y="([^"]+)">Output:',
+            svg,
+        )
+    ]
+    assert disturbance_y and output_y
+    assert max(disturbance_y) < min(output_y)
 
 
 @pytest.mark.parametrize("benchmark", ("tracking", "boundary-safety"))
@@ -447,6 +527,105 @@ def test_three_tank_hydraulic_benchmarks_use_compact_plot_layout(
     assert [title for y, title in titles if y == "797"] == [
         "Cumulative return by policy"
     ]
+
+
+@pytest.mark.parametrize(
+    ("benchmark", "height", "row_titles"),
+    (
+        (
+            "tracking",
+            "1510",
+            {
+                "120": [
+                    "Output: tank_1_level [m]",
+                    "Output: tank_2_level [m]",
+                    "Output: tank_3_level [m]",
+                ],
+                "345": [
+                    "Output: tank_1_temperature [degC]",
+                    "Output: tank_2_temperature [degC]",
+                    "Output: tank_3_temperature [degC]",
+                ],
+                "570": [
+                    "Applied action: pump_P101 [fraction]",
+                    "Applied action: valve_V12 [fraction]",
+                    "Applied action: valve_V23 [fraction]",
+                    "Applied action: valve_V34 [fraction]",
+                ],
+                "795": [
+                    "Applied action: heater_H1 [fraction]",
+                    "Applied action: heater_H2 [fraction]",
+                    "Applied action: heater_H3 [fraction]",
+                ],
+                "1020": ["Closest level-boundary distance [m]"],
+                "1247": ["Cumulative return by policy"],
+            },
+        ),
+        (
+            "disturbance-rejection",
+            "1735",
+            {
+                "120": [
+                    "Disturbance: ambient_temperature",
+                    "Disturbance: heater_H1_efficiency_factor",
+                    "Disturbance: pump_flow_factor",
+                ],
+                "345": [
+                    "Output: tank_1_level [m]",
+                    "Output: tank_2_level [m]",
+                    "Output: tank_3_level [m]",
+                ],
+                "570": [
+                    "Output: tank_1_temperature [degC]",
+                    "Output: tank_2_temperature [degC]",
+                    "Output: tank_3_temperature [degC]",
+                ],
+                "795": [
+                    "Applied action: pump_P101 [fraction]",
+                    "Applied action: valve_V12 [fraction]",
+                    "Applied action: valve_V23 [fraction]",
+                    "Applied action: valve_V34 [fraction]",
+                ],
+                "1020": [
+                    "Applied action: heater_H1 [fraction]",
+                    "Applied action: heater_H2 [fraction]",
+                    "Applied action: heater_H3 [fraction]",
+                ],
+                "1245": ["Closest level-boundary distance [m]"],
+                "1472": ["Cumulative return by policy"],
+            },
+        ),
+    ),
+)
+def test_cascade_benchmarks_group_plot_panels_by_physical_role(
+    tmp_path,
+    benchmark,
+    height,
+    row_titles,
+):
+    output = tmp_path / benchmark
+    env = make_env("cascade", benchmark=benchmark)
+    try:
+        compare_policies(
+            env=env,
+            policies={"pid": "pid", "hold": "hold"},
+            seeds=(0,),
+            max_steps=900 if benchmark == "disturbance-rejection" else 2,
+            output=output,
+        )
+    finally:
+        env.close()
+    svg = (output / "comparison.svg").read_text(encoding="utf-8")
+    ET.parse(output / "comparison.svg")
+    assert f'width="1440" height="{height}"' in svg
+    titles = re.findall(
+        r'<text class="panel-title" x="[^"]+" y="([^"]+)">([^<]+)</text>',
+        svg,
+    )
+    assert {
+        y: [title for candidate_y, title in titles if candidate_y == y]
+        for y in row_titles
+    } == row_titles
 
 
 def test_extraction_tracking_uses_model_time_and_balanced_plot_layout(tmp_path):
@@ -504,8 +683,8 @@ def test_compare_uses_benchmark_declared_lexicographic_ranking(
     finally:
         env.close()
     assert result["ranking_metrics"] == [
-        {"name": "unsafe_rate", "direction": "minimize"},
-        {"name": "return", "direction": "maximize"},
+        {"name": "unsafe_rate", "direction": "minimize", "aggregate": "mean"},
+        {"name": "return", "direction": "maximize", "aggregate": "median"},
     ]
     assert "return" in result["evaluations"]["pid"]["aggregate"]
     output = (

@@ -9,7 +9,6 @@ _BATCH_HORIZON = 100
 _TRACKING_HORIZON = 50
 _TARGET_ACTION_RANGE = (0.10, 0.90)
 _TRACKING_TARGET_ACTION_RANGE = (0.80, 0.90)
-_BOUNDARY_INITIAL_PROBABILITY = 0.20
 
 
 def make_default_episode(model) -> EpisodeSpec:
@@ -102,14 +101,17 @@ def _boundary_episode(model, rng) -> EpisodeSpec:
     )
 
 
-def sample_training_episode(model, rng, reward_id) -> tuple[EpisodeSpec, str]:
+def sample_training_episode(
+    model, rng, reward_id, boundary: bool
+) -> tuple[EpisodeSpec, str]:
     if reward_id != "regulation":
         raise ValueError(
             f"unsupported crystallization training reward {reward_id!r}"
         )
-    if rng.random() < _BOUNDARY_INITIAL_PROBABILITY:
+    boundary_concentration = float(rng.uniform(1.70, 1.95))
+    if boundary:
         initial_state = tuple(
-            [*model.initial_state()[:4], float(rng.uniform(1.70, 1.95))]
+            [*model.initial_state()[:4], boundary_concentration]
         )
     else:
         initial_state = tuple(model.initial_state())
@@ -128,7 +130,7 @@ def sample_training_episode(model, rng, reward_id) -> tuple[EpisodeSpec, str]:
             horizon=_TRACKING_HORIZON,
             disturbances=model.default_disturbances(),
         ),
-        "tracking",
+        "boundary-batch" if boundary else "interior",
     )
 
 

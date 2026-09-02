@@ -96,14 +96,13 @@ class RecordingPolicy:
         self.calls = []
 
     def act(self, observation, context):
-        info = context["info"]
         self.calls.append(
             {
                 "observation": np.asarray(observation).copy(),
                 "reference": np.asarray(context["reference"]).copy(),
-                "disturbance": dict(info["disturbance"]),
                 "step_index": context["step_index"],
                 "physical_time": context["physical_time"],
+                "context_keys": tuple(context),
             }
         )
         return np.asarray([context["reference"][0]], dtype=np.float32)
@@ -164,7 +163,7 @@ def schedule_scenario():
         make_model=ScheduleModel,
         control_dt=1.0,
         make_default_episode=lambda model: episode,
-        sample_training_episode=lambda model, rng, reward_id: (
+        sample_training_episode=lambda model, rng, reward_id, boundary: (
             episode,
             "tracking",
         ),
@@ -194,7 +193,9 @@ def test_events_are_visible_before_corresponding_actions(schedule_scenario):
         [0.4],
         [0.6],
     ]
-    assert [call["disturbance"]["gain"] for call in policy.calls] == [4.0, 5.0, 6.0]
+    assert {call["context_keys"] for call in policy.calls} == {
+        ("step_index", "physical_time", "reference")
+    }
     assert np.allclose(
         [call["observation"][1:] for call in policy.calls],
         [[0.2, 4.0], [0.4, 5.0], [0.6, 6.0]],
@@ -281,7 +282,7 @@ def test_evaluation_metrics_use_the_same_transition_reference_as_reward(
         )
     finally:
         env.close()
-    assert result["schema_version"] == "aiogym.evaluation.v3"
+    assert result["schema_version"] == "aiogym.evaluation.v4"
     assert result["episodes"][0]["metrics"]["tracking_iae"] == pytest.approx(8.8)
 
 

@@ -1,18 +1,47 @@
 # Quickstart
 
-## Inspect and run an environment
+This guide follows the common Python workflow from environment creation through
+PID/MPC/RL comparison. Choose a built-in scenario first, then use the same
+workflow throughout. Physical variables, supported parameter overrides,
+disturbances, controller settings, and recommended training budgets belong to
+the [scenario guides](../README.md#included-scenarios).
+
+## 1. Install AIO-Gym
+
+From the repository root:
+
+```bash
+pip install '.[rl]'
+```
+
+This installs simulation, PID, MPC, data collection, evaluation, and the
+reinforcement-learning dependencies used later in this guide.
+
+## 2. Choose a scenario
 
 ```python
 import aiogym
 
-print(aiogym.list_scenarios())
-print(aiogym.list_benchmarks("quadruple"))
-print(aiogym.list_parameters("quadruple"))
+scenarios = aiogym.list_scenarios()
+scenario = scenarios[0]  # Replace this with any returned scenario id.
 
-env = aiogym.make_env(
-    "quadruple",
-    parameters={"pump_gain": [3.2, 3.25]},
-)
+print(scenarios)
+print(aiogym.list_algorithms())
+print(aiogym.list_benchmarks(scenario))
+print(aiogym.list_rewards(scenario))
+print(aiogym.list_parameters(scenario))
+```
+
+The scenario guide explains its observation, action, physical units, accepted
+initial state, parameters, disturbances, Benchmarks, and practical limits.
+
+## 3. Run an environment
+
+```python
+import aiogym
+
+scenario = aiogym.list_scenarios()[0]
+env = aiogym.make_env(scenario)
 observation, info = env.reset(seed=0)
 observation, reward, terminated, truncated, info = env.step(
     env.action_space.sample()
@@ -20,198 +49,264 @@ observation, reward, terminated, truncated, info = env.step(
 env.close()
 ```
 
-## Collect varied training data
+An ordinary environment may also accept `initial_state=` and `parameters=`.
+Their values, order, and physical units are scenario-specific, so copy them
+from the selected scenario guide. Randomized training environments choose their
+own initial states, while fixed Benchmarks own their complete test cases.
+
+## 4. Compare PID and MPC
 
 ```python
+import aiogym
+
+scenario = aiogym.list_scenarios()[0]
+env = aiogym.make_env(scenario, benchmark="tracking")
+pid = aiogym.make_controller("pid", env=env)
+mpc = aiogym.make_controller("mpc", env=env)
+
+comparison = aiogym.compare_policies(
+    env=env,
+    policies={"pid": pid, "mpc": mpc},
+    seeds=range(20),
+)
+env.close()
+
+print(comparison["ordering"])
+```
+
+Both controllers receive the same 20 physical test cases. The comparison is
+written to:
+
+```text
+runs/<scenario>/benchmarks/tracking/
+├── comparison.json
+├── comparison.svg
+└── trajectories.npz
+```
+
+Use `comparison.svg` for a quick review, `comparison.json` for scores and
+summaries, and `trajectories.npz` for complete numeric trajectories.
+
+PID, MPC, and loaded learned policies receive the same environment observation.
+At each action the policy context contains only `step_index`, `physical_time`,
+and the current public `reference`. Diagnostic fields such as true state,
+physical disturbance factors, applied action, safety margins, and the complete
+episode schedule remain in `info` and saved artifacts, but are not policy
+inputs.
+
+## 5. Collect a Dataset
+
+```python
+from pathlib import Path
+
+import aiogym
+
+scenario = aiogym.list_scenarios()[0]
+run_scenario = scenario.replace("_", "-")
+dataset_path = Path("runs") / run_scenario / "datasets" / "pid-20" / "seed-0"
+
+env = aiogym.make_env(scenario, randomize=True)
+pid = aiogym.make_controller("pid", env=env)
+dataset = aiogym.collect(
+    env=env,
+    policy=pid,
+    episodes=20,
+    seed=0,
+    output=dataset_path,
+)
+env.close()
+
+reader = aiogym.DatasetReader(dataset_path)
+print(len(reader), reader.transition_count)
+```
+
+## 6. Train SAC
+
+```python
+from pathlib import Path
+
+import aiogym
+
+scenario = aiogym.list_scenarios()[0]
+run_scenario = scenario.replace("_", "-")
+run_path = (
+    Path("runs")
+    / run_scenario
+    / "training"
+    / "sac"
+    / "sac-100k"
+    / "seed-0"
+)
+
+training_env = aiogym.make_env(scenario, randomize=True)
+evaluation_env = aiogym.make_env(scenario, randomize=True)
+trained = aiogym.train(
+    env=training_env,
+    algorithm="sac",
+    steps=100_000,
+    seed=0,
+    record_every=500,
+    evaluation_env=evaluation_env,
+    evaluate_every=5_000,
+    output=run_path,
+)
+training_env.close()
+evaluation_env.close()
+
+print(trained["checkpoint"])
+```
+
+Training writes a final `model.zip`, a learning curve, metadata, and—because
+periodic evaluation is enabled—a `best/model.zip` checkpoint. Selection follows
+the shared [best-checkpoint protocol](architecture.md#select-the-best-checkpoint)
+on a separate randomized validation environment. Formal Benchmark cases remain
+held out from this selection.
+
+Store runs as
+`runs/<scenario>/training/<algorithm>/<experiment>/seed-<n>` so checkpoints
+from different algorithms remain separate. Scenario guides may recommend a
+different step budget or algorithm configuration for meaningful performance.
+
+## 7. Compare the learned policy
+
+```python
+from pathlib import Path
+
+import aiogym
+
+scenario = aiogym.list_scenarios()[0]
+run_scenario = scenario.replace("_", "-")
+checkpoint = (
+    Path("runs")
+    / run_scenario
+    / "training"
+    / "sac"
+    / "sac-100k"
+    / "seed-0"
+    / "best"
+    / "model.zip"
+)
+
+env = aiogym.make_env(scenario, benchmark="tracking")
+pid = aiogym.make_controller("pid", env=env)
+mpc = aiogym.make_controller("mpc", env=env)
+sac = aiogym.load_policy(checkpoint, env=env)
+comparison = aiogym.compare_policies(
+    env=env,
+    policies={"pid": pid, "mpc": mpc, "sac": sac},
+    seeds=range(20),
+)
+env.close()
+```
+
+## 8. Continue training
+
+```python
+from pathlib import Path
+
+import aiogym
+
+scenario = aiogym.list_scenarios()[0]
+run_scenario = scenario.replace("_", "-")
+source = (
+    Path("runs")
+    / run_scenario
+    / "training"
+    / "sac"
+    / "sac-100k"
+    / "seed-0"
+    / "model.zip"
+)
+output = (
+    Path("runs")
+    / run_scenario
+    / "training"
+    / "sac"
+    / "sac-150k"
+    / "seed-0"
+)
+
+training_env = aiogym.make_env(scenario, randomize=True)
+continued = aiogym.train(
+    env=training_env,
+    algorithm="sac",
+    steps=50_000,
+    resume_from=source,
+    output=output,
+)
+training_env.close()
+```
+
+Here, `steps=50_000` adds 50,000 environment steps. The new run keeps the
+source checkpoint unchanged. Use the same scenario, training settings, seed,
+and—for RLPD—the same Dataset.
+
+## Add training variation
+
+Training environments can vary operating conditions and add common process or
+measurement problems:
+
+```python
+import aiogym
+
+scenario = aiogym.list_scenarios()[0]
 env = aiogym.make_env(
-    "quadruple",
+    scenario,
     randomize=True,
+    boundary_probability=0.30,
     disturbance=True,
     noise=True,
     delay=True,
     fault=True,
 )
-pid = aiogym.make_controller("pid", env=env)
-aiogym.collect(env=env, policy=pid, episodes=2, seed=0, output="runs/data")
-env.close()
-
-reader = aiogym.DatasetReader("runs/data")
-print(len(reader), reader.transition_count)
 ```
 
-## Training variation
+- `randomize` varies feasible interior initial conditions and targets;
+- `boundary_probability` selects the fraction of randomized episodes that use
+  the scenario's reachable boundary initializer (default `0.0`);
+- `disturbance` adds a temporary physical disturbance;
+- `noise` affects measured observation channels;
+- `delay` adds observation or action delay;
+- `fault` applies temporary actuator loss of effectiveness.
 
-`randomize=True` samples a new operating condition for one tracking training
-Episode on every reset. 80% of episodes start from a feasible interior steady
-state and apply a randomized setpoint step; 20% start near the upper liquid-
-level boundary and track a feasible interior target. Physical disturbances are
-not part of this distribution. The fixed disturbance-rejection and boundary-
-safety Benchmarks remain evaluation-only protocols.
+Pass a mapping instead of `True` when you need explicit settings. These options
+are for training and ordinary simulation; fixed Benchmarks keep their own test
+conditions so policies remain directly comparable. Available disturbance names,
+schedule examples, event timing, and physical meaning are documented by each
+scenario.
 
-`disturbance=True` independently samples one temporary physical pump-capacity
-loss per episode. It may be used with either the fixed training condition or
-`randomize=True`; it changes the true process dynamics and is not appended to
-the policy observation. Quadruple applies a `0.78–0.94` pump-flow factor from a
-sampled step in `120–240` for `120–240` steps. Three-Tank applies a `0.72–0.94`
-factor from a sampled step in `450–800` for `300–600` steps. Both restore the
-factor to `1.0` afterward.
+## Read the main metrics
 
-The optional policy-channel variations can be enabled with `True` or configured
-explicitly:
+- `unsafe_rate`: lower is better;
+- `safe_completion`: higher is better;
+- `settling_rate`: fraction of cases that enter and remain inside every settling
+  band; higher is better;
+- `return`: higher is better when policies use the same Reward;
+- `tracking_iae` and `tracking_ise`: lower tracking error is better;
+- `final_error`: lower endpoint error is better.
 
-```python
-env = aiogym.make_env(
-    "quadruple",
-    randomize=True,
-    disturbance=True,
-    noise={"std": 0.01, "bias_std": 0.002},
-    delay={"observation_steps": [0, 2], "action_steps": [0, 1]},
-    fault={
-        "probability": 0.05,
-        "severity": [0.2, 0.5],
-        "duration_steps": [20, 100],
-    },
-)
-```
+Formal comparisons rank mean safety metrics across all cases before performance
+metrics. The report's `ranking_metrics` rows show the exact metric order and
+aggregate used by the selected Benchmark. Scenario guides define their physical
+settling bands, Reward terms, and any additional ranking rules.
 
-- `std` is zero-mean white observation noise sampled on every step;
-  `bias_std` controls an observation bias sampled once per episode. Both are
-  fractions of each observation channel's range. Noise is not added to known
-  reference channels.
-- `observation_steps` and `action_steps` are delays sampled once per episode.
-  Observation delay applies to the complete policy observation; action delay is
-  initially filled with the model's default action.
-- `probability` is the per-episode probability of one actuator
-  loss-of-effectiveness fault. One action channel is multiplied by
-  `1 - severity` for the sampled number of consecutive control steps.
+Short training runs only show that the workflow executes. For performance
+claims, use fixed Benchmarks, identical seeds, and enough training and test
+cases to support the conclusion.
 
-When the options are `True`, the values above are their defaults. The resolved
-physical-disturbance schedule is stored in `episode_spec`; noise bias, delay,
-and fault values are stored in `runtime_variation`. Workflows record both.
-These variations are AIO-Gym environment behavior, not Stable-Baselines3
-exploration settings.
+Keep these interpretation limits in mind:
 
-## Train, load, evaluate, and compare
+- a good median return does not cancel unsafe episodes;
+- results using different Rewards or model parameters are not directly
+  comparable;
+- learned-policy comparisons use the checkpoint selected by the shared
+  validation protocol and still make final claims on held-out Benchmark cases;
+- simulation safety does not establish safety on real equipment.
 
-Install `aiogym[rl]`, then run:
+## Optional command-line use
 
-```python
-training_env = aiogym.make_env(
-    "quadruple", randomize=True, disturbance=True, noise=True
-)
-trained = aiogym.train(
-    env=training_env,
-    algorithm="sac",
-    steps=64,
-    seed=0,
-    dataset="runs/data",
-    behavior_cloning_epochs=10,
-    record_every=500,
-    output="runs/quadruple/training/sac/seed-0",
-)
-aiogym.plot_training_curve(
-    trained["training_curve"],
-    output=(
-        "runs/quadruple/training/sac/seed-0/"
-        "replotted-training-curve.svg"
-    ),
-)
-sac = aiogym.load_policy(
-    trained["checkpoint"], env=training_env
-)
-
-continued = aiogym.train(
-    env=training_env,
-    algorithm="sac",
-    steps=64,
-    resume_from=trained["checkpoint"],
-    output="runs/quadruple/training/sac/seed-0-continued",
-)
-training_env.close()
-
-benchmark_env = aiogym.make_env("quadruple", benchmark="tracking")
-pid = aiogym.make_controller("pid", env=benchmark_env)
-mpc = aiogym.make_controller("mpc", env=benchmark_env)
-evaluation = aiogym.evaluate(
-    env=benchmark_env, policy=sac, seeds=range(20)
-)
-comparison = aiogym.compare_policies(
-    env=benchmark_env,
-    policies={"pid": pid, "mpc": mpc, "sac": sac},
-    seeds=range(20),
-)
-benchmark_env.close()
-```
-
-For a Benchmark, `seeds` are reproducible case seeds rather than repeated
-controller seeds. `compare_policies()` resolves the same ordered `EpisodeSpec`
-values for every policy. The built-in formal artifact set uses seeds `0--19`,
-and every built-in tracking, disturbance-rejection, and boundary-safety factory
-resolves those seeds to 20 distinct physical Episodes.
-
-Behavior cloning is optional pretraining for DDPG, SAC, and TD3. The Dataset
-must match the training Scenario, Reward, parameters, control interval, and
-observation/action dimensions. Training uses `observation` as input and
-`commanded_action` as the expert label. Channel-delayed, faulted, or
-slew-limited actions are retained for analysis but are not imitation targets.
-After pretraining, online training continues for `steps`. AIO-Gym stores the
-backend payload and algorithm manifest in the common `model.zip` checkpoint.
-Every checkpoint is trainable: pass it as `resume_from=` to the same `train()`
-function, where `steps` is the additional environment-step budget. Continuation
-uses the checkpoint seed and resolved algorithm configuration, writes a new
-empty output directory, and leaves the source run unchanged. For RLPD, pass the
-same `dataset=` again.
-
-RLPD instead requires `dataset=` and retains the complete transition Dataset
-for every online optimizer update. Each batch contains equal numbers of fixed
-prior transitions and newly collected online transitions. The implementation
-follows [Ball et al. (2023)](https://arxiv.org/abs/2302.02948) and the
-[reference code](https://github.com/ikostrikov/rlpd), with AIO-Gym-specific
-Dataset, environment, artifact, and checkpoint integration.
-
-External algorithms can implement and register the public `AlgorithmBackend`
-contract without imitating an SB3 model. They then reuse the same training
-curve, periodic evaluation, best checkpoint, loader, evaluation, comparison,
-and CLI paths. See [External algorithm backends](external_algorithms.md).
-
-Short RL runs verify the pipeline; they are not performance evidence. The
-default comparison directory is `runs/<scenario>/benchmarks/<benchmark>/`;
-rerunning the same benchmark replaces its compact `comparison.json`, trajectory figure
-`comparison.svg`, and compressed full-trajectory archive `trajectories.npz`.
-Pass an explicit empty `output` directory when those artifacts must not be
-overwritten.
-
-The comparison SVG plots trajectories only for the first ordered seed. Its
-return panel shows one point for every seed and a median marker. The JSON keeps
-every seed's exact return, metrics, resolved Episode, and the plotted seed's
-trajectory. Complete numeric trajectories for every policy and seed are stored
-without repeated field names in `trajectories.npz`; the JSON
-`trajectory_archive` section records each array prefix and its channel columns.
-
-## CLI
-
-```bash
-aiogym list benchmarks --scenario quadruple
-aiogym list parameters --scenario quadruple
-aiogym collect quadruple --randomize --disturbance on --noise on \
-  --delay on --fault on \
-  --controller pid --episodes 2 --output runs/data
-aiogym train quadruple sac --randomize --disturbance on --noise on --steps 64 \
-  --dataset runs/data --behavior-cloning-epochs 10 \
-  --record-every 500 --output runs/quadruple/training/sac/seed-0
-aiogym train quadruple rlpd --randomize --dataset runs/data --steps 100000 \
-  --record-every 500 --output runs/quadruple/training/rlpd/seed-0
-aiogym train quadruple sac --randomize --disturbance on --noise on --steps 64000 \
-  --resume-from runs/quadruple/training/sac/seed-0/model.zip \
-  --output runs/quadruple/training/sac/seed-0-continued
-aiogym evaluate quadruple --benchmark tracking --controller pid --seeds {0..19} \
-  --output runs/pid-evaluation.json
-aiogym compare quadruple --benchmark tracking --controllers pid mpc \
-  --checkpoint sac runs/quadruple/training/sac/seed-0/model.zip \
-  --seeds {0..19}
-```
-
-Use `--parameters parameters.json` on any workflow command to apply one JSON
-object of model parameter overrides. Workflow commands print compact JSON
-summaries; evaluation and comparison trajectories remain in their output
-artifacts. Use `aiogym <command> --help` for parameter meanings and defaults.
+The same workflows are available through the `aiogym` command for shell scripts
+and batch jobs. Use `aiogym --help` and `aiogym <command> --help` when needed;
+the documentation uses Python as the primary interface. In CLI automation,
+`boundary_probability=0.30` is written as `--boundary-probability 0.30` and
+requires `--randomize`.

@@ -43,14 +43,21 @@ def _environment_arguments(parser, *, allow_benchmark):
             "--benchmark",
             help=(
                 "fixed evaluation protocol; invalid with --reward, --parameters, "
-                "--randomize, --disturbance on, --noise on, --delay on, or "
-                "--fault on"
+                "--randomize, nonzero --boundary-probability, --disturbance "
+                "on, --noise on, --delay on, or --fault on"
             ),
         )
     parser.add_argument(
         "--randomize",
         action="store_true",
         help="sample a new training episode on every reset",
+    )
+    parser.add_argument(
+        "--boundary-probability",
+        type=float,
+        default=0.0,
+        metavar="PROBABILITY",
+        help="boundary-initialization probability; requires --randomize",
     )
     parser.add_argument(
         "--disturbance",
@@ -167,12 +174,6 @@ def _parser(command):
             "--evaluate-every",
             type=int,
             help="periodically evaluate and save the best checkpoint at this interval",
-        )
-        parser.add_argument(
-            "--evaluation-seed",
-            type=int,
-            default=0,
-            help="seed for periodic deterministic evaluation",
         )
         parser.add_argument(
             "--output",
@@ -334,7 +335,6 @@ def _success_summary(command, args, result, env):
             "ranking_metrics": result["ranking_metrics"],
             "aggregate": result["aggregate"],
         }
-    metric_names = [row["name"] for row in result["ranking_metrics"]]
     return {
         "schema_version": result["schema_version"],
         "output": _comparison_output(args, env),
@@ -344,8 +344,10 @@ def _success_summary(command, args, result, env):
             {
                 "policy": label,
                 "metrics": {
-                    name: result["evaluations"][label]["aggregate"][name]["median"]
-                    for name in metric_names
+                    metric["name"]: result["evaluations"][label]["aggregate"][
+                        metric["name"]
+                    ][metric["aggregate"]]
+                    for metric in result["ranking_metrics"]
                 },
             }
             for label in result["ordering"]
@@ -369,6 +371,7 @@ def main(command, argv=None):
             parameters=parameters,
             benchmark=benchmark,
             randomize=args.randomize,
+            boundary_probability=args.boundary_probability,
             disturbance=args.disturbance == "on",
             noise=args.noise == "on",
             delay=args.delay == "on",
@@ -394,6 +397,7 @@ def main(command, argv=None):
                     args.scenario,
                     reward=args.reward,
                     parameters=parameters,
+                    randomize=True,
                 )
             result = aiogym.train(
                 env=env,
@@ -404,7 +408,6 @@ def main(command, argv=None):
                 record_every=args.record_every,
                 evaluation_env=evaluation_env,
                 evaluate_every=args.evaluate_every,
-                evaluation_seed=args.evaluation_seed,
                 dataset=args.dataset,
                 behavior_cloning_epochs=args.behavior_cloning_epochs,
                 behavior_cloning_batch_size=args.behavior_cloning_batch_size,

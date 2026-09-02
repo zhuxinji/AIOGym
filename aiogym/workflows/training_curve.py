@@ -10,6 +10,8 @@ from typing import Any
 
 import numpy as np
 
+from ._svg import map_value, plot_range
+
 
 TRAINING_CURVE_SCHEMA_VERSION = "aiogym.training_curve.v2"
 
@@ -291,32 +293,20 @@ def _draw_panel(panel, *, top, width, total_steps, show_x_label):
 
 
 def _plot_range(values: np.ndarray, *, include_zero: bool) -> tuple[float, float]:
-    if values.size == 0:
-        return 0.0, 1.0
-    if not np.isfinite(values).all():
-        raise ValueError("training curve plot values must be finite")
-    minimum = float(np.min(values))
-    maximum = float(np.max(values))
-    if include_zero:
-        minimum = min(0.0, minimum)
-        maximum = max(0.0, maximum)
-    if math.isclose(minimum, maximum, rel_tol=0.0, abs_tol=1e-15):
-        padding = max(1.0, abs(minimum) * 0.05)
-    else:
-        padding = 0.08 * (maximum - minimum)
-    lower = minimum - padding
-    upper = maximum + padding
-    if include_zero and minimum >= 0.0:
-        lower = 0.0
-    return lower, upper
+    return plot_range(
+        values,
+        include_zero=include_zero,
+        padding_fraction=0.08,
+        floor_zero=True,
+    )
 
 
 def _map_x(value, maximum, left, right):
-    return left + float(value) / float(maximum) * (right - left)
+    return map_value(value, 0.0, maximum, left, right)
 
 
 def _map_y(value, minimum, maximum, top, bottom):
-    return bottom - (float(value) - minimum) / (maximum - minimum) * (bottom - top)
+    return map_value(value, minimum, maximum, bottom, top)
 
 
 def _format_number(value: float) -> str:
