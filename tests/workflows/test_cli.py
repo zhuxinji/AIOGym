@@ -96,15 +96,18 @@ def test_cli_workflow_help_explains_arguments_and_hides_invalid_benchmark(capsys
         main(["train", "--help"])
     assert exit_info.value.code == 0
     output = capsys.readouterr().out
-    assert "positive environment-step budget" in output
-    assert "JSON object file passed to the algorithm backend" in output
-    assert "Dataset v2 used by behavior cloning or offline-to-" in output
-    assert "online learning" in output
+    assert "--steps" in output
+    assert "--algorithm-kwargs" in output
+    assert "--dataset" in output
     assert "--resume-from MODEL_ZIP" in output
-    assert "checkpoint whose optimization state will be" in output
-    assert "continued (default: None)" in output
     assert "--benchmark" not in output
     assert "--boundary-probability PROBABILITY" in output
+    assert "--no-randomize" in output
+    assert "Training and output:" in output
+    assert "Validation and progress:" in output
+    assert "Examples:" in output
+    assert "--steps adds steps" in output
+    assert "RLPD requires a compatible Dataset" in output
 
     with pytest.raises(SystemExit) as exit_info:
         main(["compare", "--help"])
@@ -164,7 +167,7 @@ def test_cli_collects_dataset_with_file_parameters(tmp_path, capsys):
         "schema_version": "aiogym.collect.v2",
         "transitions": 2,
     }
-    assert metadata["schema_version"] == "aiogym.dataset.v2"
+    assert metadata["schema_version"] == "aiogym.dataset.v3"
     assert metadata["environment"]["parameters"]["pump_flow_max"] == pytest.approx(
         20.0 / 60000.0
     )
@@ -236,7 +239,13 @@ def test_cli_compares_to_default_benchmark_directory(tmp_path, capsys, monkeypat
     assert (output / "trajectories.npz").is_file()
 
 
-def test_cli_train_builds_env_calls_workflow_and_closes(tmp_path, capsys, monkeypatch):
+@pytest.mark.parametrize(
+    ("randomize_args", "randomize"),
+    [([], True), (["--randomize"], True), (["--no-randomize"], False)],
+)
+def test_cli_train_builds_env_calls_workflow_and_closes(
+    tmp_path, capsys, monkeypatch, randomize_args, randomize
+):
     import aiogym
 
     real_make_env = aiogym.make_env
@@ -254,14 +263,20 @@ def test_cli_train_builds_env_calls_workflow_and_closes(tmp_path, capsys, monkey
         return env
 
     def train(**kwargs):
+        from aiogym.workflows._metadata import environment_metadata
+
         captured.update(kwargs)
         return {
-            "schema_version": "aiogym.training.v12",
+            "schema_version": "aiogym.training.v14",
             "path": str(output.resolve()),
             "algorithm": "sac",
+            "seed": kwargs["seed"],
+            "record_every": kwargs["record_every"],
+            "environment": environment_metadata(kwargs["env"]),
+            "evaluation": None,
             "initial_steps": 0,
-            "added_steps": 2,
-            "actual_steps": 2,
+            "added_steps": kwargs["steps"],
+            "actual_steps": kwargs["steps"],
             "resume_from": None,
             "checkpoint": str((output / "model.zip").resolve()),
             "best_checkpoint": None,
@@ -281,8 +296,7 @@ def test_cli_train_builds_env_calls_workflow_and_closes(tmp_path, capsys, monkey
                 "train",
                 "quadruple",
                 "sac",
-                "--steps",
-                "2",
+                *randomize_args,
                 "--record-every",
                 "1",
                 "--dataset",
@@ -293,31 +307,34 @@ def test_cli_train_builds_env_calls_workflow_and_closes(tmp_path, capsys, monkey
                 "4",
                 "--behavior-cloning-learning-rate",
                 "0.002",
-                "--evaluate-every",
-                "1",
                 "--output",
                 str(output),
             ]
         )
         == 0
     )
-    summary = json.loads(capsys.readouterr().out)
-    assert summary["schema_version"] == "aiogym.training.v12"
+    streams = capsys.readouterr()
+    summary = json.loads(streams.out)
+    assert "final; no validation selection" in streams.err
+    assert "--no-evaluation" in streams.err
+    assert str(output / "model.zip") in streams.err
+    assert summary["schema_version"] == "aiogym.training.v14"
     assert summary["algorithm"] == "sac"
     assert summary["initial_steps"] == 0
-    assert summary["added_steps"] == 2
-    assert summary["actual_steps"] == 2
+    assert summary["added_steps"] == 500_000
+    assert summary["actual_steps"] == 500_000
     assert summary["resume_from"] is None
     assert summary["output"] == str(output.resolve())
     assert summary["behavior_cloning_artifact"] == str(
         (output / "behavior_cloning.json").resolve()
     )
-    assert captured["env"].scenario.id == "quadruple"
+    assert captured["env"].unwrapped.scenario.id == "quadruple"
+    assert captured["env"].unwrapped.runtime_config["randomize"] is randomize
     assert captured["algorithm"] == "sac"
-    assert captured["steps"] == 2
+    assert captured["steps"] == 500_000
     assert captured["record_every"] == 1
     assert captured["evaluation_env"].unwrapped.runtime_config["randomize"] is True
-    assert captured["evaluate_every"] == 1
+    assert captured["evaluate_every"] == 5_000
     assert captured["dataset"] == dataset
     assert captured["behavior_cloning_epochs"] == 3
     assert captured["behavior_cloning_batch_size"] == 4
@@ -341,17 +358,17 @@ def test_cli_compare_combines_controllers_and_checkpoints(
     def compare_policies(**kwargs):
         captured["compare"] = kwargs
         evaluations = {
-            label: {"aggregate": {"return": {"median": float(index)}}}
+            label: {"aggregate": {"return": {"mean": float(index)}}}
             for index, label in enumerate(kwargs["policies"])
         }
         return {
-            "schema_version": "aiogym.comparison.v5",
+            "schema_version": "aiogym.comparison.v6",
             "seeds": list(kwargs["seeds"]),
             "ranking_metrics": [
                 {
                     "name": "return",
                     "direction": "maximize",
-                    "aggregate": "median",
+                    "aggregate": "mean",
                 }
             ],
             "ordering": list(kwargs["policies"]),

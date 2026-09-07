@@ -32,6 +32,7 @@ def test_behavior_cloning_pretrains_and_saves_the_standard_sb3_checkpoint(tmp_pa
         )
         result = train(
             env=env,
+            evaluate_every=None,
             algorithm="sac",
             steps=1,
             seed=0,
@@ -75,6 +76,7 @@ def test_behavior_cloning_supports_the_other_off_policy_actors(
         collect(env=env, policy="hold", max_steps=2, output=dataset)
         result = train(
             env=env,
+            evaluate_every=None,
             algorithm=algorithm,
             steps=1,
             algorithm_kwargs=SMALL_POLICY,
@@ -111,6 +113,7 @@ def test_behavior_cloning_rejects_incompatible_scenario_before_writing_output(
         with pytest.raises(ValueError, match="scenario does not match"):
             train(
                 env=target_env,
+                evaluate_every=None,
                 algorithm="sac",
                 steps=1,
                 dataset=dataset,
@@ -126,6 +129,7 @@ def test_behavior_cloning_requires_an_off_policy_actor_and_explicit_epochs(tmp_p
         with pytest.raises(ValueError, match="does not consume a training Dataset"):
             train(
                 env=env,
+                evaluate_every=None,
                 algorithm="ppo",
                 steps=1,
                 dataset=tmp_path / "dataset",
@@ -135,6 +139,7 @@ def test_behavior_cloning_requires_an_off_policy_actor_and_explicit_epochs(tmp_p
         with pytest.raises(ValueError, match="requires behavior_cloning_epochs"):
             train(
                 env=env,
+                evaluate_every=None,
                 algorithm="sac",
                 steps=1,
                 dataset=tmp_path / "dataset",
@@ -143,6 +148,7 @@ def test_behavior_cloning_requires_an_off_policy_actor_and_explicit_epochs(tmp_p
         with pytest.raises(ValueError, match="requires dataset"):
             train(
                 env=env,
+                evaluate_every=None,
                 algorithm="sac",
                 steps=1,
                 behavior_cloning_epochs=1,
@@ -151,6 +157,7 @@ def test_behavior_cloning_requires_an_off_policy_actor_and_explicit_epochs(tmp_p
         with pytest.raises(ValueError, match="batch_size must be a positive integer"):
             train(
                 env=env,
+                evaluate_every=None,
                 algorithm="sac",
                 steps=1,
                 dataset=tmp_path / "dataset",
@@ -161,6 +168,7 @@ def test_behavior_cloning_requires_an_off_policy_actor_and_explicit_epochs(tmp_p
         with pytest.raises(ValueError, match="learning_rate must be a positive"):
             train(
                 env=env,
+                evaluate_every=None,
                 algorithm="sac",
                 steps=1,
                 dataset=tmp_path / "dataset",

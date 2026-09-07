@@ -95,9 +95,12 @@ loss-of-effectiveness remain the shared optional channel variations.
 ## Quick start and controllers
 
 The HVAC PID configuration is a diagonal PI controller with
-`(Kp, Ki, Kd) = (0.12, 0.002, 0)` for both zones. The MPC uses a 5-second solve
+`(Kp, Ki, Kd) = (0.32, 0.01, 0)` for both zones, with a fixed default-action bias.
+The PI gains were selected on tracking seeds `1000–1007`, then evaluated without
+further tuning on seeds `0–19` of all three Benchmarks.
+The MPC uses a 5-second solve
 interval, a 10-step prediction horizon, the model steady-state input, and the
-same fixed configuration for all three Benchmarks. Their parameters were
+same fixed configuration for all three Benchmarks. Its parameters were
 selected on randomized training episodes with physical disturbances, not on
 the fixed formal Benchmark cases.
 
@@ -115,6 +118,6 @@ result = aiogym.compare_policies(
 env.close()
 ```
 
-Use the common [Quickstart](../quickstart.md) for Dataset collection and RL
+Use the [task guide](../workflows.md) for Dataset collection and RL
 training with `scenario = "hvac"`. Current comparison scores remain in the
 generated `runs/hvac/benchmarks/<benchmark>/comparison.json` files.

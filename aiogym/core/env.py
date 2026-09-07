@@ -210,14 +210,20 @@ class ProcessControlEnv(gym.Env):
             transition_step_index=None,
         )
 
-    def step(self, action):
+    def _validate_action(self, action) -> np.ndarray:
         commanded = np.asarray(action, dtype=np.float32).reshape(-1)
         if commanded.shape != self.action_space.shape:
             raise ValueError(
                 f"action must have shape {self.action_space.shape}, got {commanded.shape}"
             )
+        if not np.isfinite(commanded).all():
+            raise ValueError("action must contain only finite values")
         if not self.action_space.contains(commanded):
             raise ValueError("action must belong to env.action_space")
+        return commanded
+
+    def step(self, action):
+        commanded = self._validate_action(action)
         transition_reference = self._reference()
         transition_disturbance = dict(self.disturbances)
         transition_step_index = self._step_index
@@ -284,9 +290,12 @@ class ProcessControlEnv(gym.Env):
         return self._observation(), reward, terminated, truncated, info
 
     def set_disturbances(self, values: Mapping[str, float]) -> None:
+        if self.benchmark is not None:
+            raise ValueError("set_disturbances cannot override a Benchmark episode")
         resolved = _validate_disturbance_values(self.model, values)
         self._disturbance_overrides = resolved
         self.disturbances.update(resolved)
+        self.runtime_config["disturbance_overrides"] = dict(resolved)
 
     def _apply_action_slew(self, requested: np.ndarray) -> np.ndarray:
         return apply_action_slew(

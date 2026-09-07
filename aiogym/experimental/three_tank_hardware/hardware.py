@@ -9,7 +9,7 @@ from typing import Any, Protocol
 import gymnasium as gym
 import numpy as np
 
-from aiogym.core.env import make_env
+from aiogym import make_env
 
 from .calibration import validate_calibration
 from .real_log import RealLogWriter, build_real_step_record
@@ -21,7 +21,11 @@ DEFAULT_HARDWARE_MAXIMUM_ACTION_STEP = (0.05, 0.08, 0.08, 0.08)
 
 @dataclass(frozen=True)
 class HardwareSample:
-    """One engineering-unit sample returned by an injected transport."""
+    """One calibrated engineering-unit sample from the injected transport.
+
+    Raw-channel conversion belongs to the transport; the environment's
+    calibration record is an admission/provenance record, not a converter.
+    """
 
     measurement: tuple[float, ...]
     flow_measurement: tuple[float, ...]

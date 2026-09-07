@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import importlib
 import json
+import shutil
 import xml.etree.ElementTree as ET
 import zipfile
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -17,7 +20,6 @@ from aiogym import load_policy, make_env, plot_training_curve, train
 from aiogym.rl import algorithms as algorithm_registry
 from aiogym.rl.algorithms import get_algorithm
 from aiogym.workflows._checkpoint import load_training_checkpoint
-from aiogym.workflows.train import _is_better_training_evaluation
 
 
 SMALL_POLICY = {"policy_kwargs": {"net_arch": [8, 8]}}
@@ -38,6 +40,7 @@ def test_off_policy_training_saves_loads_and_predicts(tmp_path):
     try:
         result = train(
             env=env,
+            evaluate_every=None,
             algorithm="sac",
             steps=2,
             seed=4,
@@ -53,7 +56,7 @@ def test_off_policy_training_saves_loads_and_predicts(tmp_path):
     finally:
         env.close()
 
-    assert result["schema_version"] == "aiogym.training.v12"
+    assert result["schema_version"] == "aiogym.training.v14"
     assert result["checkpoint_schema"] == "aiogym.checkpoint.v2"
     assert result["algorithm"] == "sac"
     assert result["steps"] == 2
@@ -85,7 +88,7 @@ def test_off_policy_training_saves_loads_and_predicts(tmp_path):
     assert metadata["algorithm_kwargs"] == get_algorithm("sac").effective_kwargs(
         steps=2, values=SMALL_POLICY
     )
-    assert metadata["environment"]["observation_shape"] == [6]
+    assert metadata["environment"]["observation_shape"] == [8]
     assert metadata["environment"]["action_shape"] == [2]
     curve = json.loads(
         (output / "training_curve.json").read_text(encoding="utf-8")
@@ -123,6 +126,7 @@ def test_sac_training_continues_optimizer_and_replay_state(tmp_path):
     try:
         first = train(
             env=env,
+            evaluate_every=None,
             algorithm="sac",
             steps=3,
             seed=6,
@@ -140,6 +144,7 @@ def test_sac_training_continues_optimizer_and_replay_state(tmp_path):
 
         continued = train(
             env=env,
+            evaluate_every=None,
             algorithm="sac",
             steps=2,
             resume_from=first["checkpoint"],
@@ -148,6 +153,11 @@ def test_sac_training_continues_optimizer_and_replay_state(tmp_path):
         )
         _, _, continued_model, continued_state = load_training_checkpoint(
             continued["checkpoint"], env=env, algorithm="sac"
+        )
+        third = train(
+            env=env, evaluate_every=None, algorithm="sac", steps=1,
+            resume_from=continued["checkpoint"], record_every=1,
+            output=tmp_path / "third",
         )
     finally:
         env.close()
@@ -166,13 +176,140 @@ def test_sac_training_continues_optimizer_and_replay_state(tmp_path):
     assert continued_state["completed_steps"] == 5
     assert continued_model.num_timesteps == 5
     assert continued_model.replay_buffer.size() == 5
-    assert curve["initial_steps"] == 3
-    assert [row["start_step"] for row in curve["records"]] == [3, 4]
-    assert [row["end_step"] for row in curve["records"]] == [4, 5]
+    assert curve["initial_steps"] == 0
+    assert [row["start_step"] for row in curve["records"]] == [0, 2, 3, 4]
+    assert [row["end_step"] for row in curve["records"]] == [2, 3, 4, 5]
+    third_curve = json.loads(Path(third["training_curve"]).read_text())
+    assert third_curve["records"][:-1] == curve["records"]
+    assert third_curve["actual_steps"] == 6
     assert any(
         not np.array_equal(before.numpy(), after.detach().cpu().numpy())
         for before, after in zip(first_parameters, continued_model.actor.parameters())
     )
+
+
+def test_interrupted_training_preserves_checkpoint_history_when_moved(tmp_path, monkeypatch):
+    workflow = importlib.import_module("aiogym.workflows.train")
+    monkeypatch.setattr(workflow, "evaluate", partial(aiogym.evaluate, max_steps=2))
+    monkeypatch.setattr(
+        workflow, "_is_better_training_evaluation",
+        lambda candidate, best: best is None or candidate["step"] == 3,
+    )
+    backend_type = type(get_algorithm("sac"))
+    learn = backend_type.learn
+
+    def interrupted_learn(self, model, *, steps, dataset, on_step):
+        def callback(event):
+            on_step(event)
+            if event.step == 4:
+                raise RuntimeError("simulated interruption")
+        return learn(self, model, steps=steps, dataset=dataset, on_step=callback)
+
+    env = make_env("quadruple")
+    evaluation_env = make_env("quadruple", randomize=True)
+    source = tmp_path / "interrupted"
+    try:
+        with monkeypatch.context() as interruption:
+            interruption.setattr(backend_type, "learn", interrupted_learn)
+            with pytest.raises(RuntimeError, match="simulated interruption"):
+                train(
+                    env=env, algorithm="sac", steps=6, seed=0,
+                    algorithm_kwargs={**SMALL_POLICY, "buffer_size": 32},
+                    evaluation_env=evaluation_env, evaluate_every=3,
+                    record_every=2, output=source,
+                )
+        saved_curve = (source / "training_curve.json").read_bytes()
+        assert json.loads(saved_curve)["actual_steps"] == 4
+        saved_history = json.loads((source / "evaluation_history.json").read_text())
+        assert [row["step"] for row in saved_history["records"]] == [0, 3]
+        portable = tmp_path / "portable/model.zip"
+        portable.parent.mkdir()
+        shutil.copyfile(source / "best/model.zip", portable)
+        continued = train(
+            env=env, algorithm="sac", steps=2, resume_from=portable,
+            evaluation_env=evaluation_env, evaluate_every=3, record_every=2,
+            output=tmp_path / "continued",
+        )
+    finally:
+        env.close()
+        evaluation_env.close()
+    curve = json.loads(Path(continued["training_curve"]).read_text())
+    assert curve["initial_steps"] == 0
+    assert [(r["start_step"], r["end_step"]) for r in curve["records"]] == [(0, 2), (2, 3), (3, 5)]
+    history = json.loads(Path(continued["evaluation_history"]).read_text())
+    assert [r["step"] for r in history["records"]] == [0, 3, 5]
+    assert history["records"][:2] == saved_history["records"]
+    assert (source / "training_curve.json").read_bytes() == saved_curve
+    ET.parse(continued["training_curve_figure"])
+
+
+def test_final_checkpoint_continuation_keeps_historical_best(tmp_path, monkeypatch):
+    workflow = importlib.import_module("aiogym.workflows.train")
+    monkeypatch.setattr(workflow, "evaluate", partial(aiogym.evaluate, max_steps=2))
+    monkeypatch.setattr(
+        workflow, "_is_better_training_evaluation",
+        lambda candidate, best: best is None or candidate["step"] == 1,
+    )
+    env = make_env("quadruple")
+    evaluation_env = make_env("quadruple", randomize=True)
+    try:
+        first = train(
+            env=env, algorithm="sac", steps=3,
+            algorithm_kwargs={**SMALL_POLICY, "buffer_size": 32},
+            evaluation_env=evaluation_env, evaluate_every=1,
+            record_every=2, output=tmp_path / "first",
+        )
+        continued = train(
+            env=env, algorithm="sac", steps=2, resume_from=first["checkpoint"],
+            evaluation_env=evaluation_env, evaluate_every=1,
+            record_every=2, output=tmp_path / "continued",
+        )
+    finally:
+        env.close()
+        evaluation_env.close()
+    first_history = json.loads(Path(first["evaluation_history"]).read_text())
+    history = json.loads(Path(continued["evaluation_history"]).read_text())
+    assert [r["step"] for r in history["records"]] == [0, 1, 2, 3, 4, 5]
+    assert history["records"][:4] == first_history["records"]
+    assert continued["evaluation"]["best_step"] == 1
+    assert Path(continued["best_checkpoint"]).read_bytes() == Path(first["best_checkpoint"]).read_bytes()
+
+
+def test_legacy_checkpoint_uses_sibling_history_and_rejects_missing_records(tmp_path):
+    env = make_env("quadruple")
+    try:
+        first = train(
+            env=env, algorithm="sac", steps=3, evaluate_every=None,
+            algorithm_kwargs={**SMALL_POLICY, "buffer_size": 32},
+            record_every=2, output=tmp_path / "first",
+        )
+        checkpoint = Path(first["checkpoint"])
+        with zipfile.ZipFile(checkpoint) as archive:
+            manifest = json.loads(archive.read("manifest.json"))
+            payload = archive.read("payload.zip")
+        del manifest["policy"]["training_history"]
+        with zipfile.ZipFile(checkpoint, "w") as archive:
+            archive.writestr("manifest.json", json.dumps(manifest))
+            archive.writestr("payload.zip", payload)
+        continued = train(
+            env=env, algorithm="sac", steps=1, evaluate_every=None,
+            resume_from=checkpoint, output=tmp_path / "continued",
+        )
+        standalone = tmp_path / "standalone/model.zip"
+        standalone.parent.mkdir()
+        shutil.copyfile(checkpoint, standalone)
+        with pytest.raises(ValueError, match="no saved training history"):
+            train(
+                env=env, algorithm="sac", steps=1, evaluate_every=None,
+                resume_from=standalone, output=tmp_path / "missing-history",
+            )
+    finally:
+        env.close()
+    curve = json.loads(Path(continued["training_curve"]).read_text())
+    first_curve = json.loads(Path(first["training_curve"]).read_text())
+    assert curve["records"][:2] == first_curve["records"]
+    assert curve["initial_steps"] == 0 and curve["actual_steps"] == 4
+    assert not (tmp_path / "missing-history").exists()
 
 
 def test_continued_training_rejects_changed_seed_or_configuration(tmp_path):
@@ -184,6 +321,7 @@ def test_continued_training_rejects_changed_seed_or_configuration(tmp_path):
     try:
         result = train(
             env=env,
+            evaluate_every=None,
             algorithm="sac",
             steps=1,
             seed=3,
@@ -193,6 +331,7 @@ def test_continued_training_rejects_changed_seed_or_configuration(tmp_path):
         with pytest.raises(ValueError, match="seed must match"):
             train(
                 env=env,
+                evaluate_every=None,
                 algorithm="sac",
                 steps=1,
                 seed=4,
@@ -202,6 +341,7 @@ def test_continued_training_rejects_changed_seed_or_configuration(tmp_path):
         with pytest.raises(ValueError, match="algorithm_kwargs must match"):
             train(
                 env=env,
+                evaluate_every=None,
                 algorithm="sac",
                 steps=1,
                 algorithm_kwargs={"policy_kwargs": {"net_arch": [4, 4]}},
@@ -211,6 +351,7 @@ def test_continued_training_rejects_changed_seed_or_configuration(tmp_path):
         with pytest.raises(ValueError, match="checkpoint algorithm"):
             train(
                 env=env,
+                evaluate_every=None,
                 algorithm="td3",
                 steps=1,
                 resume_from=result["checkpoint"],
@@ -219,6 +360,7 @@ def test_continued_training_rejects_changed_seed_or_configuration(tmp_path):
         with pytest.raises(ValueError, match="checkpoint randomize"):
             train(
                 env=randomized_env,
+                evaluate_every=None,
                 algorithm="sac",
                 steps=1,
                 resume_from=result["checkpoint"],
@@ -226,6 +368,7 @@ def test_continued_training_rejects_changed_seed_or_configuration(tmp_path):
             )
         randomized_result = train(
             env=randomized_env,
+            evaluate_every=None,
             algorithm="sac",
             steps=1,
             seed=3,
@@ -235,6 +378,7 @@ def test_continued_training_rejects_changed_seed_or_configuration(tmp_path):
         with pytest.raises(ValueError, match="checkpoint boundary_probability"):
             train(
                 env=boundary_env,
+                evaluate_every=None,
                 algorithm="sac",
                 steps=1,
                 resume_from=randomized_result["checkpoint"],
@@ -256,6 +400,7 @@ def test_checkpoint_rejects_incompatible_model_parameters(tmp_path):
     try:
         result = train(
             env=training_env,
+            evaluate_every=None,
             algorithm="sac",
             steps=2,
             algorithm_kwargs=SMALL_POLICY,
@@ -270,7 +415,11 @@ def test_checkpoint_rejects_incompatible_model_parameters(tmp_path):
         training_env.close()
 
 
-def test_training_periodically_evaluates_and_saves_best_checkpoint(tmp_path):
+def test_training_periodically_evaluates_and_saves_best_checkpoint(tmp_path, monkeypatch):
+    # Keep all validation seeds, but exercise workflow wiring with short rollouts.
+    module = importlib.import_module("aiogym.workflows.train")
+    monkeypatch.setattr(module, "evaluate", partial(aiogym.evaluate, max_steps=2))
+    monkeypatch.setattr(module, "_evaluate", partial(module._evaluate, max_steps=2))
     env = make_env("quadruple")
     evaluation_env = make_env("quadruple", randomize=True)
     output = tmp_path / "evaluated-sac"
@@ -292,7 +441,7 @@ def test_training_periodically_evaluates_and_saves_best_checkpoint(tmp_path):
     history = json.loads(
         (output / "evaluation_history.json").read_text(encoding="utf-8")
     )
-    assert history["schema_version"] == "aiogym.training_evaluation.v2"
+    assert history["schema_version"] == "aiogym.training_evaluation.v4"
     assert [row["step"] for row in history["records"]] == [0, 1, 2]
     assert history["seeds"] == list(range(1_000, 1_020))
     assert all(len(row["episodes"]) == 20 for row in history["records"])
@@ -311,25 +460,52 @@ def test_training_periodically_evaluates_and_saves_best_checkpoint(tmp_path):
     )
     assert history["ranking_metric"] == {
         "name": "return",
+        "aggregate": "mean",
         "direction": "maximize",
     }
+    assert history["settling_fraction"] == 0.1
     assert history["selection_order"] == [
         {"name": "safe_completion", "direction": "maximize"},
-        {"name": "episode_length", "direction": "maximize"},
-        {
-            "name": "worst_case_quantile",
-            "quantile": 0.1,
-            "direction": "maximize",
-        },
-        {"name": "return", "direction": "maximize"},
+        {"name": "control_success", "direction": "maximize"},
+        {"name": "mean_return", "direction": "maximize"},
     ]
+    assert result["evaluation"]["selection_order"] == history["selection_order"]
+    metadata = json.loads((output / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["evaluation"]["selection_order"] == history["selection_order"]
+    for record in history["records"]:
+        assert record["episode_length"] == pytest.approx(
+            sum(episode["length"] for episode in record["episodes"]) / 20
+        )
+        returns = [episode["return"] for episode in record["episodes"]]
+        assert record["mean_return"] == pytest.approx(np.mean(returns))
+        assert record["median_return"] == pytest.approx(np.median(returns))
+        assert record["p10_return"] == pytest.approx(np.quantile(returns, 0.1))
+        assert 0 <= record["control_success"] <= record["safe_completion"] <= 1
+    best_record = max(
+        history["records"],
+        key=lambda row: (row["safe_completion"], row["control_success"], row["mean_return"]),
+    )
+    assert history["best_step"] == best_record["step"]
+    for name in (
+        "mean_return", "median_return", "p10_return", "safe_completion", "control_success",
+    ):
+        assert history[f"best_{name}"] == best_record[name]
+        assert result["evaluation"][f"best_{name}"] == best_record[name]
+        assert metadata["evaluation"][f"best_{name}"] == best_record[name]
     assert (output / "best" / "model.zip").is_file()
     tracking_figure = output / "best" / "tracking.svg"
     ET.parse(tracking_figure)
     tracking_svg = tracking_figure.read_text(encoding="utf-8")
-    assert "quadruple SAC best policy - validation cases" in tracking_svg
+    assert "QUADRUPLE SAC BEST POLICY - VALIDATION CASES" in tracking_svg
     assert "Output: lower_tank_1_level [cm]" in tracking_svg
     assert "Applied action: pump_1_voltage [normalized_voltage]" in tracking_svg
+    tracking_root = ET.fromstring(tracking_svg)
+    assert [node.text for node in tracking_root.iter() if node.get("class") == "section"] == [
+        "Case tracking", "Absolute performance",
+    ]
+    assert {node.get("data-section") for node in tracking_root.iter() if node.get("data-section")} == {
+        "tracking", "summary",
+    }
     assert result["best_checkpoint"] == str(
         (output / "best" / "model.zip").resolve()
     )
@@ -337,20 +513,41 @@ def test_training_periodically_evaluates_and_saves_best_checkpoint(tmp_path):
     assert result["evaluation"]["seeds"] == list(range(1_000, 1_020))
     assert result["evaluation"]["best_safe_completion"] >= 0.0
     assert result["evaluation"]["tracking_figure"] == "best/tracking.svg"
+    curve_svg = (output / "training_curve.svg").read_text()
+    assert "Fixed-validation episode return" in curve_svg
+    assert "Fixed-validation safety and control success" in curve_svg
+    assert "20 fixed validation cases" in curve_svg
+    assert 'data-series="mean_return"' in curve_svg
+    assert 'data-series="control_success"' in curve_svg
+    curve_root = ET.fromstring(curve_svg)
+    for name in ("mean_return", "p10_return", "safe_completion", "control_success"):
+        plotted = [
+            float(node.attrib["data-value"])
+            for node in curve_root.iter()
+            if node.tag.endswith("circle") and node.get("data-series") == name
+        ]
+        scale = 100 if name in ("safe_completion", "control_success") else 1
+        assert plotted == pytest.approx([row[name] * scale for row in history["records"]])
 
     continuation_env = make_env("quadruple")
+    continuation_evaluation_env = make_env("quadruple", randomize=True)
     try:
         continued = train(
             env=continuation_env,
             algorithm="sac",
             steps=1,
             resume_from=result["best_checkpoint"],
+            evaluation_env=continuation_evaluation_env,
+            evaluate_every=1,
             output=tmp_path / "continued-best",
         )
     finally:
         continuation_env.close()
+        continuation_evaluation_env.close()
     assert continued["initial_steps"] == result["evaluation"]["best_step"]
     assert continued["actual_steps"] == continued["initial_steps"] + 1
+    assert continued["evaluation"]["selection_order"] == history["selection_order"]
+    assert continued["evaluation"]["settling_fraction"] == 0.1
 
 
 def test_training_evaluation_requires_randomized_environment(tmp_path):
@@ -369,40 +566,6 @@ def test_training_evaluation_requires_randomized_environment(tmp_path):
     finally:
         evaluation_env.close()
         env.close()
-
-
-def test_training_evaluation_never_prefers_short_unsafe_episode():
-    safe = {
-        "safe_completion": 1.0,
-        "episode_length": 600.0,
-        "worst_case_value": 200.0,
-        "value": 200.0,
-    }
-    unsafe = {
-        "safe_completion": 0.5,
-        "episode_length": 450.0,
-        "worst_case_value": 50.0,
-        "value": 50.0,
-    }
-    assert not _is_better_training_evaluation(unsafe, safe, "minimize")
-    assert _is_better_training_evaluation(safe, unsafe, "minimize")
-
-
-def test_training_evaluation_uses_worst_quantile_before_median():
-    robust = {
-        "safe_completion": 1.0,
-        "episode_length": 600.0,
-        "worst_case_value": -20.0,
-        "value": -10.0,
-    }
-    brittle = {
-        "safe_completion": 1.0,
-        "episode_length": 600.0,
-        "worst_case_value": -100.0,
-        "value": -5.0,
-    }
-    assert _is_better_training_evaluation(robust, brittle, "maximize")
-    assert not _is_better_training_evaluation(brittle, robust, "maximize")
 
 
 @pytest.mark.parametrize("variation", ("disturbance", "noise"))
@@ -437,6 +600,7 @@ def test_ddpg_training_materializes_json_action_noise(tmp_path):
     try:
         result = train(
             env=env,
+            evaluate_every=None,
             algorithm="ddpg",
             steps=2,
             seed=0,
@@ -457,6 +621,7 @@ def test_ddpg_training_accepts_ornstein_uhlenbeck_noise(tmp_path):
     try:
         result = train(
             env=env,
+            evaluate_every=None,
             algorithm="ddpg",
             steps=2,
             seed=0,
@@ -495,6 +660,7 @@ def test_training_curve_records_fixed_windows_and_can_be_replotted(tmp_path):
     try:
         train(
             env=env,
+            evaluate_every=None,
             algorithm="sac",
             steps=5,
             seed=0,
@@ -527,16 +693,19 @@ def test_on_policy_training_completes(tmp_path):
     try:
         result = train(
             env=env,
+            evaluate_every=None,
             algorithm="ppo",
             steps=2,
             seed=5,
-            algorithm_kwargs=SMALL_POLICY,
+            algorithm_kwargs={
+                "n_steps": 2, "batch_size": 2, "n_epochs": 1, **SMALL_POLICY,
+            },
             output=tmp_path / "ppo",
         )
     finally:
         env.close()
     assert result["algorithm"] == "ppo"
-    assert result["steps"] == 2
+    assert result["actual_steps"] == 2
 
 
 def test_external_sb3_algorithm_class_uses_the_complete_workflow(tmp_path):
@@ -547,6 +716,7 @@ def test_external_sb3_algorithm_class_uses_the_complete_workflow(tmp_path):
     try:
         result = train(
             env=env,
+            evaluate_every=None,
             algorithm="a2c",
             steps=2,
             algorithm_kwargs={"n_steps": 2, **SMALL_POLICY},
@@ -589,7 +759,7 @@ def test_training_rejects_existing_output(tmp_path):
     env = make_env("quadruple")
     try:
         with pytest.raises(FileExistsError, match="non-empty"):
-            train(env=env, algorithm="sac", steps=1, output=output)
+            train(env=env, evaluate_every=None, algorithm="sac", steps=1, output=output)
     finally:
         env.close()
     assert (output / "notes.txt").read_text(encoding="utf-8") == "keep"
@@ -601,6 +771,7 @@ def test_training_rejects_benchmark_environment(tmp_path):
         with pytest.raises(ValueError, match="benchmark environment"):
             train(
                 env=env,
+                evaluate_every=None,
                 algorithm="sac",
                 steps=1,
                 output=tmp_path / "benchmark",
@@ -630,6 +801,47 @@ def test_training_validates_inputs(tmp_path, kwargs, error):
     env = make_env("quadruple")
     try:
         with pytest.raises(error):
-            train(env=env, output=tmp_path / "invalid", **kwargs)
+            train(env=env, evaluate_every=None, output=tmp_path / "invalid", **kwargs)
     finally:
         env.close()
+
+
+def test_resume_old_rule_only_selects_retained_weights(tmp_path):
+    from types import SimpleNamespace
+    from aiogym.workflows.train import _resume_history
+
+    best_path = tmp_path / "best" / "model.zip"
+    final_path = tmp_path / "model.zip"
+    best_path.parent.mkdir()
+    for path, step in ((best_path, 0), (final_path, 20)):
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("manifest.json", json.dumps({
+                "policy": {"training": {"completed_steps": step}},
+            }))
+    records = [{"step": step, "episodes": [{
+        "seed": 1000, "return": reward, "length": 100,
+        "terminated": False, "truncated": True,
+        "episode_spec": {"horizon": 100}, "runtime_variation": {},
+        "metrics": {"settling_time": settling, "constraint_violations": 0},
+    }]} for step, reward, settling in ((0, -1, 100), (10, 0, 0), (20, -3, 0))]
+    curve = {
+        "schema_version": "aiogym.training_curve.v2", "record_every": 20,
+        "initial_steps": 0, "actual_steps": 20, "episodes": [],
+        "records": [{"start_step": 0, "end_step": 20, "transition_count": 20,
+                     "mean_reward": 0, "reward_std": 0, "minimum_reward": 0,
+                     "maximum_reward": 0, "completed_episodes": 0,
+                     "terminated_episodes": 0, "truncated_episodes": 0}],
+    }
+    restored = _resume_history(final_path, {
+        "completed_steps": 20,
+        "history": {"curve": curve, "best_checkpoint": str(best_path),
+                    "evaluation": {"schema_version": "aiogym.training_evaluation.v3",
+                                   "seeds": [1000], "best_step": 0,
+                                   "settling_window": 30, "records": records}},
+    }, evaluation_env=SimpleNamespace(unwrapped=SimpleNamespace(
+        control_dt=1.0, model=SimpleNamespace(time_unit="s"),
+    )))
+    assert restored["evaluation"]["best_step"] == 20
+    assert restored["best_checkpoint"] == final_path
+    assert restored["evaluation"]["records"][1]["selection_eligible"] is False
+    assert restored["evaluation"]["settling_fraction"] == 0.1

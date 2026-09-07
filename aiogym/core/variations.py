@@ -237,11 +237,9 @@ class ActionChannelWrapper(gym.Wrapper):
                 self._delay_rng, self._delay_config["action_steps"]
             )
         )
-        default_action = np.asarray(
-            self.unwrapped.model.default_action(), dtype=np.float32
-        )
+        initial_action = np.asarray(info["previous_applied_action"], dtype=np.float32)
         self._queue = deque(
-            default_action.copy() for _ in range(self._action_delay)
+            initial_action.copy() for _ in range(self._action_delay)
         )
         self._fault = self._sample_fault()
         self._step_index = 0
@@ -252,9 +250,7 @@ class ActionChannelWrapper(gym.Wrapper):
         return observation, updated
 
     def step(self, action):
-        commanded = np.asarray(action, dtype=np.float32).reshape(-1)
-        if commanded.shape != self.action_space.shape:
-            raise ValueError("commanded action shape does not match action space")
+        commanded = self.unwrapped._validate_action(action)
         self._queue.append(commanded.copy())
         channel = self._queue.popleft()
         if self._fault_active():
@@ -341,15 +337,22 @@ class ObservationChannelWrapper(gym.Wrapper):
             kinds = [row["kind"] for row in observation_schema]
             if any(
                 not isinstance(kind, str)
-                or kind not in {"measurement", "reference", "action"}
+                or kind not in {"measurement", "reference", "action", "derived"}
                 for kind in kinds
             ):
                 raise ValueError(
-                    "observation schema kind must be measurement, reference, or action"
+                    "observation schema kind must be measurement, reference, action, "
+                    "or derived"
                 )
             self._noise_mask = np.asarray(
-                [kind != "reference" for kind in kinds], dtype=np.float32
+                [kind in {"measurement", "action"} for kind in kinds],
+                dtype=np.float32,
             )
+        self._recompute_derived = (
+            noise is not None
+            and any(noise.values())
+            and any(row.get("kind") == "derived" for row in observation_schema)
+        )
         scale = np.asarray(
             self.observation_space.high - self.observation_space.low,
             dtype=np.float32,
@@ -406,9 +409,16 @@ class ObservationChannelWrapper(gym.Wrapper):
             * self._noise_mask
         )
         varied = observation + self._bias + white
-        return np.clip(
+        varied = np.clip(
             varied, self.observation_space.low, self.observation_space.high
         ).astype(np.float32)
+        if self._recompute_derived:
+            # Derive from the clipped, delayed sensor values actually returned.
+            varied = np.asarray(
+                self.unwrapped.model.recompute_derived_observation(varied),
+                dtype=np.float32,
+            )
+        return varied
 
 
 __all__ = [

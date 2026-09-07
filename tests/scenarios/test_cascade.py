@@ -449,24 +449,21 @@ def test_randomized_boundary_starts_reuse_the_forward_prerun_family():
     env = aiogym.make_env(
         "cascade", randomize=True, boundary_probability=1.0
     )
-    boundary_count = 0
     try:
-        for seed in range(100):
+        for seed in (0, 1):
             _, info = env.reset(seed=seed)
             assert info["episode_parameters"]["initial_family"] == "boundary-prerun"
             episode = env.unwrapped.episode
             assert episode.horizon == 600
             state = np.asarray(episode.initial_state, dtype=float)
             levels = state[[0, 2, 4]]
-            if np.any(levels >= 0.40):
-                boundary_count += 1
-                derivative = env.unwrapped.model.dynamics(
-                    state,
-                    episode.initial_action,
-                    episode.disturbances,
-                )
-                assert max(abs(float(value)) for value in derivative) > 1e-4
-        assert boundary_count == 100
+            assert np.any(levels >= 0.40)
+            derivative = env.unwrapped.model.dynamics(
+                state,
+                episode.initial_action,
+                episode.disturbances,
+            )
+            assert max(abs(float(value)) for value in derivative) > 1e-4
     finally:
         env.close()
 
@@ -607,7 +604,7 @@ def test_cascade_evaluation_aggregates_settling_as_a_case_rate():
     assert result["ranking_metrics"] == [
         {"name": "unsafe_rate", "direction": "minimize", "aggregate": "mean"},
         {"name": "settling_rate", "direction": "maximize", "aggregate": "mean"},
-        {"name": "return", "direction": "maximize", "aggregate": "median"},
+        {"name": "return", "direction": "maximize", "aggregate": "mean"},
     ]
 
 

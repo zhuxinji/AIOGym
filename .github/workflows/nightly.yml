@@ -1,4 +1,4 @@
-name: Nightly optional and end-to-end checks
+name: Weekly optional and end-to-end checks
 
 on:
   workflow_dispatch:

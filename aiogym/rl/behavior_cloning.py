@@ -11,7 +11,7 @@ BEHAVIOR_CLONING_SCHEMA_VERSION = "aiogym.behavior_cloning.v1"
 BEHAVIOR_CLONING_ALGORITHMS = ("ddpg", "sac", "td3")
 
 
-def load_demonstrations(reader, *, env):
+def load_demonstrations(reader):
     """Load policy observations and commanded actions from a validated Dataset."""
 
     episodes = tuple(reader.iter_episodes())
@@ -22,30 +22,13 @@ def load_demonstrations(reader, *, env):
         [episode.array("commanded_action") for episode in episodes],
         axis=0,
     ).astype(np.float32, copy=False)
-    expected_observation_shape = (reader.transition_count, *env.observation_space.shape)
-    expected_action_shape = (reader.transition_count, *env.action_space.shape)
-    if observations.shape != expected_observation_shape:
-        raise ValueError(
-            "demonstration observations do not match training observation space"
-        )
-    if actions.shape != expected_action_shape:
-        raise ValueError("demonstration actions do not match training action space")
-    if not np.all(np.isfinite(observations)):
-        raise ValueError("demonstration observations must be finite")
-    if not np.all(np.isfinite(actions)):
-        raise ValueError("demonstration actions must be finite")
-    if np.any(observations < env.observation_space.low) or np.any(
-        observations > env.observation_space.high
-    ):
-        raise ValueError("demonstration observations must belong to observation_space")
-    if np.any(actions < env.action_space.low) or np.any(
-        actions > env.action_space.high
-    ):
-        raise ValueError("demonstration commanded actions must belong to action_space")
     metadata = training_dataset_metadata(reader)
+    reader.clear_cache()
     source = {
         "dataset": metadata["path"],
         "dataset_schema": metadata["schema_version"],
+        "dataset_content_sha256": metadata["content_sha256"],
+        "dataset_environment": metadata["environment"],
         "policy": metadata["policy"],
         "episode_count": metadata["episode_count"],
         "transition_count": metadata["transition_count"],

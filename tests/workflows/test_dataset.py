@@ -32,7 +32,7 @@ def test_collect_uses_the_given_env_and_round_trips_episodes(tmp_path):
     reader = DatasetReader(output)
     assert result["episodes"] == len(reader) == 2
     assert result["transitions"] == reader.transition_count == 6
-    assert reader.metadata["schema_version"] == "aiogym.dataset.v2"
+    assert reader.metadata["schema_version"] == "aiogym.dataset.v3"
     assert reader.metadata["environment"]["scenario"] == "three_tank"
     assert reader.metadata["environment"]["benchmark"] is None
     assert reader.metadata["environment"]["randomize"] is False
@@ -157,3 +157,110 @@ def test_reader_rejects_unknown_schema_and_inconsistent_metadata(tmp_path):
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     with pytest.raises(ValueError, match="unsupported dataset schema"):
         DatasetReader(output)
+
+
+@pytest.fixture
+def small_dataset(tmp_path):
+    env = make_env("heater")
+    path = tmp_path / "dataset"
+    try:
+        collect(env=env, policy="hold", max_steps=2, output=path)
+    finally:
+        env.close()
+    return path
+
+
+@pytest.mark.parametrize("field, value, message", [
+    ("reward", np.zeros((2, 1)), "dimensions"),
+    ("observation", np.full((2, 1), np.nan), "finite"),
+    ("terminated", np.zeros(2, dtype=int), "boolean"),
+    ("truncated", np.asarray([True, False]), "after termination or truncation"),
+])
+def test_legacy_reader_enforces_numeric_shapes_and_done_flags(small_dataset, field, value, message):
+    metadata_path = small_dataset / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["schema_version"] = "aiogym.dataset.v2"
+    metadata.pop("content_sha256")
+    for row in metadata["episodes"]:
+        row.pop("sha256")
+    metadata_path.write_text(json.dumps(metadata))
+    path = small_dataset / "episode-000000.npz"
+    with np.load(path) as archive:
+        arrays = dict(archive)
+    arrays[field] = value
+    np.savez_compressed(path, **arrays)
+    with pytest.raises((ValueError, TypeError), match=message):
+        DatasetReader(small_dataset)[0]
+
+
+def test_dataset_fingerprint_survives_move_and_repack_but_detects_tampering(small_dataset, tmp_path):
+    import shutil
+
+    original = DatasetReader(small_dataset).content_sha256
+    moved = tmp_path / "moved"
+    shutil.move(small_dataset, moved)
+    path = moved / "episode-000000.npz"
+    with np.load(path) as archive:
+        arrays = dict(archive)
+    np.savez(path, **dict(reversed(list(arrays.items()))))
+    assert DatasetReader(moved).content_sha256 == original
+    arrays["reward"][0] -= 1
+    np.savez_compressed(path, **arrays)
+    with pytest.raises(ValueError, match="episode content digest mismatch"):
+        DatasetReader(moved)[0]
+    metadata_path = moved / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["environment"]["control_dt"] *= 2
+    metadata_path.write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="metadata content digest mismatch"):
+        DatasetReader(moved)
+
+
+def test_training_dataset_caches_validated_snapshot_and_rejects_next_observation_bounds(
+    small_dataset, monkeypatch,
+):
+    from aiogym.rl.datasets import load_training_dataset, training_dataset_metadata
+    from aiogym.workflows.dataset import _arrays_digest, _metadata_digest
+
+    env = make_env("heater")
+    try:
+        reader = load_training_dataset(small_dataset, env=env)
+        expected = reader.content_sha256
+        with monkeypatch.context() as patch:
+            def unexpected_reload(*args, **kwargs):
+                raise AssertionError("training snapshot should not reopen episodes")
+            patch.setattr(np, "load", unexpected_reload)
+            assert training_dataset_metadata(reader)["content_sha256"] == expected
+            assert tuple(reader.iter_episodes())[0] is reader[0]
+        path = small_dataset / "episode-000000.npz"
+        with np.load(path) as archive:
+            arrays = dict(archive)
+        arrays["next_observation"][0, 0] = -1e6
+        np.savez_compressed(path, **arrays)
+        metadata_path = small_dataset / "metadata.json"
+        metadata = json.loads(metadata_path.read_text())
+        metadata["episodes"][0]["sha256"] = _arrays_digest(arrays)
+        metadata["content_sha256"] = _metadata_digest(metadata)
+        metadata_path.write_text(json.dumps(metadata))
+        with pytest.raises(ValueError, match="next_observation must belong"):
+            load_training_dataset(small_dataset, env=env)
+    finally:
+        env.close()
+
+
+def test_training_dataset_records_different_source_variation(tmp_path):
+    from aiogym.rl.datasets import load_training_dataset, training_dataset_metadata
+
+    source = make_env("heater", randomize=True, noise=True)
+    target = make_env("heater")
+    try:
+        path = tmp_path / "noisy"
+        collect(env=source, policy="hold", max_steps=2, output=path)
+        reader = load_training_dataset(path, env=target)
+        provenance = training_dataset_metadata(reader)
+        assert provenance["environment"]["noise"] == reader.metadata["environment"]["noise"]
+        assert provenance["environment"]["noise"] is not None
+        assert target.unwrapped.runtime_config["noise"] is None
+    finally:
+        source.close()
+        target.close()

@@ -15,7 +15,7 @@ def test_cstr_default_environment_starts_at_an_exact_equilibrium():
         action = model.default_action()
         derivative = model.dynamics(state, action, model.default_disturbances())
 
-        assert env.observation_space.shape == (4,)
+        assert env.observation_space.shape == (6,)
         assert env.action_space.shape == (2,)
         assert env.observation_space.contains(observation)
         assert state == pytest.approx([0.11771023406521823, 60.0])
@@ -26,12 +26,58 @@ def test_cstr_default_environment_starts_at_an_exact_equilibrium():
             "reactant_concentration",
             "reactor_temperature",
         ]
-        assert observation[-2:] == pytest.approx(
+        assert observation[2:4] == pytest.approx(
             [
                 (0.075 - 0.02) / 0.18,
                 (72.0 - 45.0) / 45.0,
             ]
         )
+        assert observation[4:] == pytest.approx(
+            [
+                (state[0] - 0.075) / 0.18,
+                (state[1] - 72.0) / 45.0,
+            ]
+        )
+        assert [row["name"] for row in model.observation_schema()] == [
+            "reactant_concentration",
+            "reactor_temperature",
+            "reactant_concentration_setpoint",
+            "reactor_temperature_setpoint",
+            "reactant_concentration_tracking_error",
+            "reactor_temperature_tracking_error",
+        ]
+        assert [row["kind"] for row in model.observation_schema()] == [
+            "measurement",
+            "measurement",
+            "reference",
+            "reference",
+            "derived",
+            "derived",
+        ]
+    finally:
+        env.close()
+
+
+def test_cstr_tracking_error_observation_is_scaled_and_clipped():
+    env = aiogym.make_env("cstr")
+    try:
+        model = env.unwrapped.model
+        reference = [0.10, 60.0]
+        observation = model.observation(
+            [0.118, 64.5],
+            reference,
+            model.default_action(),
+            model.default_disturbances(),
+        )
+        assert observation[4:] == pytest.approx([0.1, 0.1])
+
+        clipped = model.observation(
+            [1.5, 0.0],
+            reference,
+            model.default_action(),
+            model.default_disturbances(),
+        )
+        assert clipped[4:] == pytest.approx([1.0, -1.0])
     finally:
         env.close()
 

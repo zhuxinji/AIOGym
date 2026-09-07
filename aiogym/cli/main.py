@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Scenario-oriented AIO-Gym 0.17 command-line interface."""
+"""Scenario-oriented AIO-Gym command-line interface."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import sys
+from pathlib import Path
 
 
 _WORKFLOWS = {"collect", "compare", "evaluate", "train"}
@@ -17,6 +18,10 @@ def build_parser():
         description="Run Scenario, Benchmark, and Reward workflows.",
     )
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
+    status = commands.add_parser("status", help="inspect training run status")
+    status.add_argument("paths", nargs="*", help="run directories or status.json files; omit to discover recent runs under ./runs")
+    status.add_argument("--limit", type=int, default=10, help="number of recent runs when paths are omitted (default: 10)")
+    status.add_argument("--json", action="store_true", help="emit structured status and progress instead of a table")
     listing = commands.add_parser("list", help="list registered resources")
     resources = listing.add_subparsers(dest="resource", metavar="RESOURCE")
     resource_help = {
@@ -33,7 +38,7 @@ def build_parser():
             item.add_argument("--scenario", help="registered Scenario id")
     help_text = {
         "collect": "collect an episode-oriented Dataset",
-        "train": "train one registered algorithm policy",
+        "train": "train algorithms across independent seeds",
         "evaluate": "evaluate one policy on explicit seeds",
         "compare": "compare controllers and checkpoints on identical seeds",
     }
@@ -128,6 +133,29 @@ def main(argv=None):
         return workflow_main(raw[0], raw[1:])
     parser = build_parser()
     args = parser.parse_args(raw)
+    if args.command == "status":
+        from ._train_job import print_training_status, training_progress
+
+        try:
+            if args.limit <= 0:
+                raise ValueError("--limit must be positive")
+            paths = args.paths
+            if not paths:
+                paths = sorted(
+                    Path("runs").glob("*/training/**/status.json"),
+                    key=lambda path: max(path.stat().st_mtime,
+                        (path.parent / "training_curve.json").stat().st_mtime
+                        if (path.parent / "training_curve.json").is_file() else 0),
+                    reverse=True,
+                )[:args.limit]
+            jobs = [training_progress(path) for path in paths]
+            if args.json:
+                print(json.dumps(jobs, indent=2))
+            else:
+                print_training_status(jobs)
+        except (OSError, KeyError, ValueError) as error:
+            parser.error(str(error))
+        return 0
     if args.command == "list":
         try:
             return _list(args)
@@ -138,4 +166,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

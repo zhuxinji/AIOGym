@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import zipfile
 
 import numpy as np
@@ -34,6 +35,7 @@ def test_rlpd_requires_dataset_before_creating_output(tmp_path):
         with pytest.raises(ValueError, match="rlpd requires dataset"):
             aiogym.train(
                 env=env,
+                evaluate_every=None,
                 algorithm="rlpd",
                 steps=1,
                 algorithm_kwargs=SMALL_RLPD,
@@ -91,7 +93,7 @@ def test_rlpd_samples_configured_offline_ratio(
         batch = model.sample_batch()
     finally:
         env.close()
-    assert batch["observation"].shape == (batch_size, 6)
+    assert batch["observation"].shape == (batch_size, 8)
     assert batch["action"].shape == (batch_size, 2)
     assert model.offline_samples == offline_count
     assert model.online_samples == online_count
@@ -118,6 +120,7 @@ def test_rlpd_uses_complete_workflow_and_standard_checkpoint(tmp_path):
         )
         result = aiogym.train(
             env=env,
+            evaluate_every=None,
             algorithm="rlpd",
             steps=2,
             seed=7,
@@ -150,7 +153,7 @@ def test_rlpd_uses_complete_workflow_and_standard_checkpoint(tmp_path):
     )
     with zipfile.ZipFile(training_path / "model.zip") as checkpoint:
         manifest = json.loads(checkpoint.read("manifest.json"))
-    assert result["schema_version"] == "aiogym.training.v12"
+    assert result["schema_version"] == "aiogym.training.v14"
     assert result["algorithm"] == "rlpd"
     assert result["dataset"]["transition_count"] == 4
     assert result["behavior_cloning"] is None
@@ -173,8 +176,17 @@ def test_rlpd_training_continues_full_training_state(tmp_path):
             max_steps=4,
             output=dataset_path,
         )
+        # Legacy data remains usable and gains a digest in new checkpoints.
+        metadata_path = dataset_path / "metadata.json"
+        metadata = json.loads(metadata_path.read_text())
+        metadata["schema_version"] = "aiogym.dataset.v2"
+        metadata.pop("content_sha256")
+        for row in metadata["episodes"]:
+            row.pop("sha256")
+        metadata_path.write_text(json.dumps(metadata))
         first = aiogym.train(
             env=env,
+            evaluate_every=None,
             algorithm="rlpd",
             steps=2,
             seed=5,
@@ -188,8 +200,12 @@ def test_rlpd_training_continues_full_training_state(tmp_path):
         first_updates = first_model.gradient_updates
         first_replay_size = len(first_model.online)
 
+        moved = tmp_path / "moved-dataset"
+        shutil.move(dataset_path, moved)
+        dataset_path = moved
         continued = aiogym.train(
             env=env,
+            evaluate_every=None,
             algorithm="rlpd",
             steps=2,
             dataset=dataset_path,
@@ -199,6 +215,39 @@ def test_rlpd_training_continues_full_training_state(tmp_path):
         _, _, continued_model, state = load_training_checkpoint(
             continued["checkpoint"], env=env, algorithm="rlpd"
         )
+        assert first["dataset"]["path"] != continued["dataset"]["path"]
+        assert first["dataset"]["content_sha256"] == continued["dataset"]["content_sha256"]
+
+        legacy_checkpoint = tmp_path / "legacy" / "model.zip"
+        legacy_checkpoint.parent.mkdir()
+        with zipfile.ZipFile(first["checkpoint"]) as source, zipfile.ZipFile(legacy_checkpoint, "w") as target:
+            for name in source.namelist():
+                data = source.read(name)
+                if name == "manifest.json":
+                    manifest = json.loads(data)
+                    manifest["policy"]["training"]["dataset"].pop("content_sha256")
+                    data = json.dumps(manifest).encode()
+                target.writestr(name, data)
+        with pytest.raises(ValueError, match="no Dataset content digest"):
+            aiogym.train(
+                env=env, algorithm="rlpd", steps=1, evaluate_every=None,
+                dataset=dataset_path, resume_from=legacy_checkpoint,
+                output=tmp_path / "legacy-rejected",
+            )
+        assert not (tmp_path / "legacy-rejected").exists()
+
+        episode_path = dataset_path / "episode-000000.npz"
+        with np.load(episode_path) as archive:
+            arrays = dict(archive)
+        arrays["reward"][0] -= 1
+        np.savez_compressed(episode_path, **arrays)
+        with pytest.raises(ValueError, match="Dataset content must match"):
+            aiogym.train(
+                env=env, algorithm="rlpd", steps=1, evaluate_every=None,
+                dataset=dataset_path, resume_from=continued["checkpoint"],
+                output=tmp_path / "changed-rejected",
+            )
+        assert not (tmp_path / "changed-rejected").exists()
     finally:
         env.close()
 
@@ -209,6 +258,36 @@ def test_rlpd_training_continues_full_training_state(tmp_path):
     assert continued_model.environment_steps == 4
     assert len(continued_model.online) == first_replay_size + 2
     assert continued_model.gradient_updates > first_updates
+
+
+@pytest.mark.parametrize("algorithm", ["sac", "rlpd"])
+def test_training_rejects_invalid_dataset_commands_before_output(tmp_path, algorithm):
+    from aiogym.workflows.dataset import _arrays_digest, _metadata_digest
+
+    env = aiogym.make_env("quadruple")
+    path = tmp_path / "dataset"
+    output = tmp_path / "rejected"
+    try:
+        aiogym.collect(env=env, policy="hold", max_steps=2, output=path)
+        episode_path = path / "episode-000000.npz"
+        with np.load(episode_path) as archive:
+            arrays = dict(archive)
+        arrays["commanded_action"][:] = 9
+        np.savez_compressed(episode_path, **arrays)
+        metadata_path = path / "metadata.json"
+        metadata = json.loads(metadata_path.read_text())
+        metadata["episodes"][0]["sha256"] = _arrays_digest(arrays)
+        metadata["content_sha256"] = _metadata_digest(metadata)
+        metadata_path.write_text(json.dumps(metadata))
+        with pytest.raises(ValueError, match="commanded_action must belong"):
+            aiogym.train(
+                env=env, algorithm=algorithm, steps=1, evaluate_every=None,
+                dataset=path, output=output,
+                behavior_cloning_epochs=1 if algorithm == "sac" else None,
+            )
+    finally:
+        env.close()
+    assert not output.exists()
 
 
 @pytest.mark.parametrize(

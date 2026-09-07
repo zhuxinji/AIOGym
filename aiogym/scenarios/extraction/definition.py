@@ -22,8 +22,8 @@ _PID = {
         {
             "actuator": "liquid_feed_flow",
             "output": "stage_5_liquid_concentration",
-            "kp": 2.2,
-            "ki": 6.0,
+            "kp": 1.0,
+            "ki": 10.0,
             "kd": 0.0,
         },
         {

@@ -89,14 +89,16 @@ requires actions to remain in `0.05--0.95`, and verifies a zero ten-state
 derivative before accepting the case. Identical seeds give every compared
 policy identical targets.
 
-Disturbance cases begin at step `140--240` and last `200--320` steps. They
+Disturbance cases begin at step `140--240` and last `200--min(320, 464-start)` steps. They
 sample liquid feed concentration in `0.45--0.75`, gas feed concentration in
 `0.02--0.09`, and mass-transfer coefficient in `3.5--6.5`. Boundary cases
-sample an exact low-concentration equilibrium in `0.01--0.04`. Seeds `0--19`
+use a forward pre-run from the normal state, with minimum liquid and
+near-maximum gas flow, until `CX5` reaches a sampled threshold in `0.01--0.04`.
+The resulting state is reachable but is not required to be an equilibrium. Seeds `0--19`
 select 20 distinct episodes for all three Benchmarks.
 
-The latest possible disturbance restoration is at 56 h, leaving a 2 h response
-window inside the 58 h protocol. Boundary safety uses the same 10 h window as
+The latest disturbance restoration is at step 464 (46.4 h). The 580-step
+protocol then reserves 58 recovery steps before the final 58-step stability window. Boundary safety uses the same 10 h window as
 tracking.
 
 ## Training variation
@@ -107,15 +109,18 @@ by default and immediately tracks one feasible target. Setting
 high-gas forward pre-run used by the `0.01--0.04`
 low-concentration boundary Benchmark. All training episodes use the tracking
 Benchmark's 100-step horizon. `disturbance=True` samples all three
-physical disturbances, begins at step `23--40`, and lasts `33--53` steps. Noise, delay, and
+physical disturbances, begins at step `23--40`, and lasts `33--min(53, 80-start)` steps (restored by step 80). Noise, delay, and
 actuator loss-of-effectiveness remain the shared optional channel variations.
 
 ## Quick start and controllers
 
-The extraction PI configuration uses `(Kp, Ki, Kd) = (2.2, 6.0, 0)` on the liquid-flow
-channel and zero gains on the gas-flow channel. The MPC uses a `0.01 h`
+The extraction PI configuration uses `(Kp, Ki, Kd) = (1.0, 10.0, 0)` on the liquid-flow
+channel and zero gains on the gas-flow channel, with a fixed default-action bias.
+The PI gains were selected on tracking seeds `1000–1007`, then evaluated without
+further tuning on seeds `0–19` of all three Benchmarks.
+The MPC uses a `0.01 h`
 prediction step, a 10-step horizon, model steady-state feedforward, and both
-flow variables. These parameters were selected using five randomized training
+flow variables. Its parameters were selected using five randomized training
 episodes with physical disturbances, not the fixed formal Benchmark cases.
 
 ```python
@@ -132,7 +137,7 @@ result = aiogym.compare_policies(
 env.close()
 ```
 
-Use the common [Quickstart](../quickstart.md) for Dataset collection and RL
+Use the [task guide](../workflows.md) for Dataset collection and RL
 training with `scenario = "extraction"`. Generated comparison figures and
 trajectories use hours, matching this model's native time unit; current scores
 remain in `runs/extraction/benchmarks/<benchmark>/comparison.json`.

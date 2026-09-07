@@ -12,14 +12,18 @@ The model retains its source laboratory units:
   physical voltage through `max_voltage`;
 - area, flow, voltage, and time: `cm^2`, `cm^3/s`, `V`, and `s`.
 
-The policy observation has six values: four normalized tank levels and the two
-normalized lower-tank setpoints. Both states and setpoints use their physical
-`0--20 cm` ranges and therefore appear in `[0, 1]`. The policy learns the
-tracking error from the current levels and setpoints instead of receiving an
-explicit error feature. Default, randomized, and benchmark environments all
-keep this interface. The controller selects a new action every second; the
-plant is integrated internally at 0.1-second intervals while that action is
-held constant.
+The policy observation has eight values, ordered as
+`[h1, h2, h3, h4, r1, r2, e1, e2]`. Levels and setpoints use their physical
+`0--20 cm` ranges and appear in `[0, 1]`. The two derived tracking errors are
+`ei = (hi - ri) / 20`, with bounds `[-1, 1]`; positive error means the liquid
+level is above its target. When observation noise is enabled, errors are
+recomputed from the same clipped, delayed measurements and references returned
+to the policy. Default, randomized, and benchmark environments share this
+interface. Earlier six-dimensional checkpoints and Datasets require retraining
+or recollection for this observation contract.
+
+The controller selects a new action every second; the plant is integrated
+internally at 0.1-second intervals while that action is held constant.
 
 ## Benchmarks
 
@@ -47,17 +51,17 @@ keep all four tanks inside `0–20 cm`, keep both normalized pump actions inside
 once during reset; no precomputed case table or run-time steady-state solve is
 used.
 
-Disturbance cases begin at step `120--220`, last `150--250` steps, and sample a
+Disturbance cases begin at step `120--220`, last `150--min(250, 400-start)` steps, and sample a
 pump-flow factor in `0.78--0.90`. Boundary cases pre-run high legal pump
 voltages from the normal state until one tank reaches `82--90%` of the resolved
 maximum. Seeds `0--19` select 20 distinct episodes for all three
 Benchmarks.
 
-The latest possible disturbance restoration is at step 470, so the 500-step
-protocol keeps a 30-second response tail. Boundary safety uses the same
+The latest disturbance restoration is at step 400, so the 500-step
+protocol reserves 50 recovery steps before the final 50-step stability window. Boundary safety uses the same
 180-second response window as tracking.
 
-The deterministic default training episode starts at the default equilibrium,
+The deterministic episode (`randomize=False`) starts at the default equilibrium,
 immediately requests `(8, 18)` cm, and uses the tracking Benchmark's 180-step
 horizon. The target has a feasible unsaturated steady pump command.
 With `randomize=True`, every reset instead samples a new operating condition
@@ -77,6 +81,10 @@ The tracking Benchmark's `7–16 cm` envelope stays away from the hard bounds.
 The `3 cm` minimum move equals 15% of each output's physical range.
 
 ## RL training
+
+`aiogym train quadruple sac --output <new-directory>` uses randomized training
+episodes by default, with 500,000 steps, seed 0, and validation every 5,000 steps.
+Use `--no-randomize` to train on the fixed `(8, 18)` cm target instead.
 
 The example below trains SAC with the Stable-Baselines3 defaults. Change
 `algorithm` to `"ppo"` or `"ddpg"` to train the other included baselines.

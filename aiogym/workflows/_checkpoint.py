@@ -28,6 +28,7 @@ def save_checkpoint(
     *,
     env,
     training,
+    history=None,
     overwrite=False,
 ) -> Path:
     target = _checkpoint_path(checkpoint)
@@ -49,6 +50,8 @@ def save_checkpoint(
             )
         policy = policy_metadata(backend.policy(model, checkpoint=target))
         policy["training"] = _validated_training_state(training)
+        if history is not None:
+            policy["training_history"] = jsonable(history)
         manifest = {
             "schema_version": CHECKPOINT_SCHEMA_VERSION,
             "algorithm": backend.id,
@@ -86,7 +89,10 @@ def load_training_checkpoint(checkpoint, *, env, algorithm):
     training = manifest["policy"].get("training")
     if training is None:
         raise ValueError("checkpoint does not contain training state")
-    return path, backend, model, _validated_training_state(training)
+    state = _validated_training_state(training)
+    if "training_history" in manifest["policy"]:
+        state["history"] = manifest["policy"]["training_history"]
+    return path, backend, model, state
 
 
 def _load_checkpoint_model(checkpoint, *, env, training_algorithm=None):

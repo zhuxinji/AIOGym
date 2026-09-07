@@ -5,9 +5,9 @@ Kostrikov, and Levine, "Efficient Online Reinforcement Learning with Offline
 Data" (ICML 2023): https://arxiv.org/abs/2302.02948. The reference code is
 https://github.com/ikostrikov/rlpd.
 
-AIO-Gym keeps the paper's symmetric replay sampling, high update-to-data ratio,
-LayerNorm critic ensemble, and randomized minimum-Q target. It deliberately
-uses AIO-Gym Dataset v2, one environment, and the common ``model.zip`` workflow
+AIO-Gym keeps the paper's symmetric replay sampling, LayerNorm critic ensemble,
+and randomized minimum-Q target, with a configurable update-to-data ratio.
+It uses AIO-Gym Dataset, one environment, and the common ``model.zip`` workflow
 instead of the reference JAX runner and checkpoint format.
 """
 from __future__ import annotations
@@ -44,10 +44,10 @@ _DEFAULTS = {
     "initial_alpha": 0.1,
     "learning_rate": 3e-4,
     "learning_starts": 10_000,
-    "n_critics": 10,
+    "n_critics": 2,
     "offline_ratio": 0.5,
     "tau": 0.005,
-    "utd_ratio": 20,
+    "utd_ratio": 1,
 }
 
 
@@ -134,7 +134,6 @@ class RLPDAlgorithmBackend:
             env=env,
             seed=seed,
             config=dict(algorithm_kwargs),
-            training=True,
         )
 
     def learn(
@@ -238,7 +237,6 @@ class RLPDAlgorithmBackend:
             env=env,
             seed=_nonnegative_integer("checkpoint seed", state["seed"]),
             config=config,
-            training=True,
         )
         model.load_training_state(state)
         return model
@@ -283,7 +281,7 @@ class RLPDCheckpointPolicy:
 
 
 class _RLPDModel:
-    def __init__(self, *, env, seed: int, config: dict[str, Any], training: bool):
+    def __init__(self, *, env, seed: int, config: dict[str, Any]):
         torch, _functional, Actor, Critic = _torch_components()
         self.env = env
         self.seed = _nonnegative_integer("seed", seed)
@@ -301,15 +299,11 @@ class _RLPDModel:
             self.action_dim,
             tuple(config["hidden_sizes"]),
         ).to(self.device)
-        self.training = bool(training)
         self.offline = None
-        self.online = None
         self.offline_samples = 0
         self.online_samples = 0
         self.gradient_updates = 0
         self.environment_steps = 0
-        if not self.training:
-            return
         self.critics = torch.nn.ModuleList(
             [
                 Critic(
@@ -342,8 +336,6 @@ class _RLPDModel:
         )
 
     def load_offline_dataset(self, reader) -> None:
-        if not self.training:
-            raise RuntimeError("inference-only RLPD model cannot load training data")
         episodes = tuple(reader.iter_episodes())
         observation = np.concatenate(
             [episode.array("observation") for episode in episodes], axis=0
@@ -360,19 +352,6 @@ class _RLPDModel:
         terminated = np.concatenate(
             [episode.array("terminated") for episode in episodes], axis=0
         ).astype(np.bool_, copy=False)
-        expected_transitions = reader.transition_count
-        expected_observation = (expected_transitions, self.observation_dim)
-        expected_action = (expected_transitions, self.action_dim)
-        if observation.shape != expected_observation:
-            raise ValueError("RLPD Dataset observation shape is incompatible")
-        if next_observation.shape != expected_observation:
-            raise ValueError("RLPD Dataset next_observation shape is incompatible")
-        if physical_action.shape != expected_action:
-            raise ValueError("RLPD Dataset commanded_action shape is incompatible")
-        if reward.shape != (expected_transitions,):
-            raise ValueError("RLPD Dataset reward shape is incompatible")
-        if terminated.shape != (expected_transitions,):
-            raise ValueError("RLPD Dataset terminated shape is incompatible")
         normalized_action = self.normalize_action(physical_action)
         arrays = {
             "observation": observation,
@@ -381,11 +360,10 @@ class _RLPDModel:
             "next_observation": next_observation,
             "bootstrap_mask": np.logical_not(terminated).astype(np.float32),
         }
-        for name, value in arrays.items():
-            if not np.isfinite(value).all():
-                raise ValueError(f"RLPD Dataset {name} must be finite")
+        for value in arrays.values():
             value.setflags(write=False)
         self.offline = arrays
+        reader.clear_cache()
 
     def random_action(self) -> np.ndarray:
         return self.rng.uniform(self.action_low, self.action_high).astype(np.float32)
@@ -395,7 +373,7 @@ class _RLPDModel:
         normalized = 2.0 * (value - self.action_low) / (
             self.action_high - self.action_low
         ) - 1.0
-        return np.clip(normalized, -1.0, 1.0).astype(np.float32, copy=False)
+        return normalized.astype(np.float32, copy=False)
 
     def physical_action(self, normalized) -> np.ndarray:
         value = np.asarray(normalized, dtype=np.float32)
@@ -543,8 +521,6 @@ class _RLPDModel:
         }
 
     def training_state(self) -> dict[str, Any]:
-        if not self.training:
-            raise RuntimeError("RLPD training state requires a trainable model")
         torch, _functional, _Actor, _Critic = _torch_components()
         return {
             "schema_version": RLPD_CHECKPOINT_SCHEMA_VERSION,
@@ -587,8 +563,6 @@ class _RLPDModel:
         }
 
     def load_training_state(self, state) -> None:
-        if not self.training:
-            raise RuntimeError("RLPD training state requires a trainable model")
         torch, _functional, _Actor, _Critic = _torch_components()
         self.validate_checkpoint_dimensions(state)
         self.environment_steps = _nonnegative_integer(

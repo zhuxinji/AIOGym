@@ -1,197 +1,187 @@
-# Features and workflow
+# Core concepts and results
 
-AIO-Gym brings process simulation, classical control, reinforcement learning,
-and evaluation into one Python workflow. A policy trained in the package can be
-loaded and compared with PID or MPC without a separate evaluation program.
+This page explains the concepts needed to choose a workflow and interpret its
+results. Start with the [Quickstart](quickstart.md); use the
+[task guide](workflows.md) for commands, output paths, and troubleshooting.
 
 ```text
-make_env -> reset/step -> controller -> collect -> train
-         -> save/load -> evaluate/compare
+Online RL:  Environment ----------------------> train -> checkpoint
+BC / RLPD:  Environment + collected Dataset ---> train -> checkpoint
+Comparison: Evaluation environment + policies -> evaluate / compare
 ```
 
-The [Quickstart](quickstart.md) provides runnable examples. This page explains
-what each stage means and where its boundaries are.
+Online SAC, DDPG, PPO, and TD3 need no Dataset. Collect data when using behavior
+cloning or RLPD. Built-in controllers and loaded checkpoints share the same
+evaluation interface.
 
 ## Choose a process-control scenario
 
-Each scenario provides a physical model, observations, actions, control targets,
-rewards, safety limits, and fixed test protocols. Use:
+A Scenario defines the physical model, observations, actions, targets, rewards,
+safety limits, and fixed Benchmarks. Its [scenario guide](../README.md#included-scenarios)
+provides physical units, parameter overrides, and controller settings.
 
-- `aiogym.list_scenarios()` to see available processes;
-- `aiogym.list_parameters(id)` to inspect adjustable model parameters;
-- `aiogym.list_rewards(id)` to see available rewards;
-- `aiogym.list_benchmarks(id)` to see available fixed tests;
-- `aiogym.make_env(id, ...)` to create a Gymnasium environment.
+| Environment mode | Purpose | Episode settings |
+|---|---|---|
+| Ordinary | Simulation, collection, or training | Default, explicit, or randomized episodes |
+| Benchmark | Reproducible evaluation | Fixed plant settings and protocol; the seed selects a case |
 
-The scenario guides define the state order, physical units, supported parameter
-overrides, disturbance names, and controller settings for each process.
-
-An ordinary environment is for simulation, data collection, or training. It may
-start from a user-supplied physical state through `initial_state=`. This changes
-only the initial state; it does not infer a matching steady action or target.
-
-A randomized environment generates a new feasible training episode at each
-reset. A Benchmark environment is evaluation-only: it owns the complete test
-case, fixes the plant settings and protocol, and rejects training variation or
-manual initial-state overrides. This keeps policies directly comparable.
+For an ordinary environment, `randomize=True` samples a new feasible episode on
+each reset. With `randomize=False`, `initial_state=` sets the starting state where
+supported, without inferring a matching target or steady action.
+Benchmarks own their complete cases and reject manual initial states and runtime
+variation. See [training variation](workflows.md#add-training-variation) for
+randomization, disturbances, noise, delay, and actuator faults.
 
 ## Run classical or learned controllers
 
-The built-in controllers are PID, successive-linearization MPC, hold, and
-random. DDPG, PPO, SAC, TD3, and RLPD are available with the `rl` installation
-extra. Loaded models and built-in controllers use the same policy interface, so
-the same evaluation and comparison functions work for both.
+PID, MPC, hold, random, and loaded policies receive the observation plus the
+current step, physical time, and public reference. Noise and delay apply
+consistently to every policy. Derived observation features use the policy-visible
+measurements and references, without independent sensor noise.
 
-Every policy receives the environment observation plus only the current step,
-physical time, and public reference. Configured measurement noise and delay are
-therefore applied consistently to PID, MPC, and learned policies.
+`info` contains diagnostics such as true state, applied action, safety margins,
+and the complete episode schedule. These are saved for analysis and are not
+additional policy inputs. MPC uses its nominal model without access to hidden
+runtime disturbances.
 
-The `info` mapping is diagnostic output, not an additional policy input. It may
-record true state, applied action, safety margins, physical disturbances, and
-the complete episode schedule for users and saved results without exposing
-hidden simulator values to a controller.
+The MPC baseline linearizes that model and predicts `P` steps, but optimizes
+only one action adjustment (`M=1`), held throughout the prediction. It solves an
+unconstrained quadratic objective and then clips actions to `[0, 1]`; clipping
+may be suboptimal for coupled inputs. It imposes no predicted state safety
+constraints. Increasing `P` extends prediction, not the number of optimized moves.
+Environment safety checks still apply during simulation.
 
-MPC retains its configured nominal process model, but it does not receive hidden
-runtime disturbance values. Any external condition intended for control must be
-an explicit observation channel so every policy receives the same measurement.
+## Dataset and checkpoint compatibility
 
-## Collect data and train policies
+Datasets retain policy commands, actions after delay/faults, and the physical
+actions applied to the model. Before BC or RLPD training, their scenario, reward,
+parameters, control interval, and observation/action shapes must match the
+training environment. Observation and action arrays must be finite and within
+its spaces. Source randomization and variation may differ; their settings remain
+recorded as data provenance.
 
-`collect()` records complete trajectories from a controller or learned policy.
-The resulting Dataset includes observations, rewards, safety information, and
-the distinction between:
+RLPD continuation requires the same Dataset content used for the original run;
+the directory may change.
 
-- the action requested by the policy;
-- the action after optional delay or actuator faults;
-- the physical action ultimately applied to the model.
+A trainable checkpoint retains the optimizer and algorithm-owned replay state.
+Continuation requires compatible scenario, reward, parameters, variation,
+control interval, and interface shapes, and reuses the recorded seed and
+algorithm settings. Histories are retained through the resumed checkpoint;
+resuming an earlier best checkpoint excludes later training. The best policy is
+selected across retained and new validation records. Validation stays enabled
+or disabled consistently across segments.
 
-A Dataset can be inspected directly, used for behavior cloning with supported
-online algorithms, or supplied to RLPD. Dataset compatibility includes the
-scenario, reward, physical parameters, training variation, control interval,
-and observation/action shapes.
+For commands and files to retain, see [continuation](workflows.md#continue-training).
 
-`train()` is the single training and continuation entry point. A completed run
-writes:
+## Understand evaluation metrics
 
-- `model.zip`: the final trainable checkpoint;
-- `training_curve.json` and `training_curve.svg`;
-- `metadata.json` with the run settings;
-- `best/model.zip`, `best/tracking.svg`, and `evaluation_history.json` when
-  periodic validation is enabled.
+| Metric | Meaning | Preferred direction |
+|---|---|---|
+| Unsafe rate | Fraction of evaluated steps with a constraint violation, averaged across cases | Lower |
+| Safe completion | Full planned horizon, no safety termination, and zero constraint violations | Higher |
+| Control success | Safe completion plus continuous tracking within the settling window below | Higher |
+| Settling rate | Fraction of cases that enter and remain in the settling band before the evaluated episode ends | Higher |
+| Episode return | Sum of rewards; comparable under the same Reward | Higher |
+| Tracking IAE / ISE | Time-integrated absolute / squared normalized tracking error | Lower |
+| Final error | Largest absolute normalized tracking error at the episode endpoint | Lower |
 
-Use `load_policy()` to run a checkpoint. Use `resume_from=` with `train()` to
-continue optimization in a new output directory; `steps` is the additional
-environment-step budget. The source checkpoint remains unchanged.
+The settling window is the **final 10% of planned control steps**, rounded up:
+`ceil(episode_spec.horizon * 0.1)`. Every controlled output must stay inside its
+scenario's settling tolerance at every sample in that window. Early termination
+does not shorten the planned horizon. The same definition applies to training
+validation and Benchmark reports; it does not change rewards or episode endings.
 
-A trainable checkpoint retains the optimizer and algorithm-owned replay state
-needed for continuation. Before restoring them, AIO-Gym verifies the scenario,
-reward, parameters, training variation, control interval, and interface shapes.
-Continuation reuses the recorded algorithm settings and seed instead of
-starting a second training workflow.
+Rates include all evaluated cases. JSON stores fractions from 0 to 1; figures
+show percentages. Scenario guides define physical tolerances independently of
+observation normalization and reward weights. Unsupported control-success
+calculations display `N/A`.
 
-## Train across varied conditions
-
-An ordinary training environment can randomize feasible operating points and
-add physical disturbances, measurement noise, observation or action delay, and
-temporary actuator loss of effectiveness. These options do not change the
-number or physical meaning of observation and action channels.
-
-- `randomize=True` samples a scenario-owned feasible operating condition;
-- `boundary_probability` chooses how often randomized training starts from a
-  reachable state near a safety boundary;
-- `disturbance` changes the simulated process or load;
-- `noise` and `delay` change the policy measurement or command path;
-- `fault` changes actuator effectiveness after the policy command.
-
-Scenario guides document the physical meaning and timing of their randomized
-conditions. An ordinary environment may also accept a piecewise-constant
-schedule for disturbances declared by that scenario. Custom schedules cannot
-be combined with the scenario's automatic disturbance sampler or a fixed
-Benchmark.
-
-## Evaluate fairly
-
-Built-in Benchmarks answer three common questions:
-
-- `tracking`: can the controller follow a target?
-- `disturbance-rejection`: can it recover after the process changes?
-- `boundary-safety`: can it remain safe near an operating limit?
-
-For a Benchmark, a seed selects one complete reproducible physical case. Every
-policy in `compare_policies()` receives the same ordered seeds. The standard
-formal comparison uses seeds `0--19`.
-
-Each scenario owns the physical construction of its Benchmark cases and its
-settling or recovery bands. Boundary cases are generated from reachable process
-conditions rather than arbitrary state vectors. These acceptance bands are
-separate from observation normalization and reward weighting.
-
-Comparison ranks the mean safety metrics across all cases before performance
-metrics. Remaining metrics use the aggregate and direction declared by the
-Benchmark, commonly a median. The exact order is stored in
-`comparison.json["ranking_metrics"]`; a favorable median performance score
-cannot hide an unsafe case.
-
-Use `evaluate()` for one policy and `compare_policies()` for two or more. Both
-save per-case metrics and trajectories; comparison additionally produces one
-common ranking and figure.
+Time axes use each model's physical unit. Tracking integrals respect that unit;
+energy metrics integrate kW after converting elapsed time to hours. Built-in
+disturbance Benchmarks and default training samplers restore disturbances before
+the settling window. Explicit user schedules retain their requested timings.
 
 ## Select the best checkpoint
 
-Periodic validation is separate from formal Benchmark evaluation. It uses a
-second `randomize=True` environment and the shared fixed seeds `1000--1019`.
-Disturbance, noise, delay, and actuator faults remain disabled so checkpoint
-selection compares the shared randomized operating cases directly.
+Training validation uses a separate `randomize=True` environment and fixed
+seeds `1000–1019`. Disturbance, noise, delay, and actuator faults are disabled.
+This selection set is separate from the formal Benchmark cases.
 
-Every checkpoint candidate is ordered by:
+Candidates are compared in this order, using the [metrics above](#understand-evaluation-metrics):
 
-1. higher mean safe-completion rate;
-2. longer mean episode length, so later unsafe termination is preferred;
-3. better worst 10th-percentile value of the primary validation metric;
-4. better median value of that metric.
+1. Higher safe completion rate.
+2. Higher control success rate.
+3. Higher mean episode return across all validation cases.
 
-The selected candidate is saved as `best/model.zip`. The top-level `model.zip`
-always remains the final learner for continuation and late-training diagnosis.
-Formal learned-policy comparisons use `best/model.zip` uniformly across
-algorithms and use held-out Benchmark cases rather than validation cases.
+A later metric only breaks an exact tie; a complete tie retains the existing
+best candidate. P10 return, median return, and episode lengths are diagnostics.
+The selection order and selected step are recorded in validation history.
 
-## Keep experiments repeatable
-
-For results that other users can inspect or rerun:
-
-- compare policies on the same scenario, Benchmark, and ordered seeds;
-- keep the reward and model parameters unchanged within one comparison;
-- retain `comparison.json` and `trajectories.npz`, not only the SVG;
-- keep the training settings, Dataset information, library versions, and source
-  revision with the result;
-- report safety separately from tracking quality.
-
-Training metadata records the algorithm, seed, completed steps, environment
-settings, training variation, and relevant library versions. When available it
-also records the Git commit, but that value does not describe uncommitted source
-changes.
-
-## Understand the output files
-
-| Workflow | Main output |
+| Checkpoint | Role |
 |---|---|
-| Data collection | `metadata.json` and compressed episode files |
-| Training | `model.zip`, metadata, learning-curve JSON/SVG, and optional `best/` output |
-| Evaluation | JSON with per-case results and trajectories |
-| Comparison | `comparison.json`, `comparison.svg`, `trajectories.npz` |
+| `best/model.zip` | Validation-selected policy for formal comparison |
+| `model.zip` | Final learner for continuation and late-training diagnosis |
 
-Without an explicit comparison output, Benchmark results are written under
-`runs/<scenario>/benchmarks/<benchmark>/` and replace the three result
-files. Provide a separate empty output directory when retaining another
-comparison.
+Disabling validation leaves no selected best checkpoint. Formal Benchmark
+ranking follows its own metric priorities, described next.
 
-The SVG shows trajectories for the first seed and returns for all evaluated
-seeds. The NPZ archive keeps every numeric trajectory for further analysis.
-Time axes use the selected scenario's documented physical unit.
+## Evaluate fairly
 
-## Know the scope
+Benchmarks cover target tracking (`tracking`), recovery after process changes
+(`disturbance-rejection`), and safety near operating limits (`boundary-safety`).
+Each seed identifies a complete physical case; boundary cases start from
+reachable conditions. The standard formal comparison uses seeds `0–19`.
 
-AIO-Gym's safety metrics describe the included simulation models and fixed test
-protocols. They are not a substitute for plant calibration, hardware
-interlocks, commissioning, or operational risk assessment. Any experimental
-hardware support is opt-in and documented by its owning scenario.
+Use `evaluate()` for one policy and `compare_policies()` for two or more.
+Compare policies on the same Scenario, Benchmark, Reward, parameters, and ordered
+seeds. These evaluation seeds are separate from independent training seeds.
+
+Formal ranking prioritizes safety before performance. `unsafe_rate`,
+`safe_completion`, `settling_rate`, and `return` use the mean across equally
+weighted cases; other metrics use the median. The exact priority, direction,
+and aggregation are stored
+in `comparison.json["ranking_metrics"]`. Tracking-cost plots do not change this
+ranking or include other reward costs.
+
+For reproducibility, retain the comparison JSON and numeric trajectories along
+with training settings, Dataset information, library versions, and source revision.
+Report safety separately from tracking quality and compare multiple training
+seeds when assessing RL performance. A recorded Git commit does not capture
+uncommitted source changes.
+
+## Read a training curve
+
+`training_curve.svg` shows fixed-validation mean return and P10, followed by safe
+completion and control success, with the selected checkpoint marked. P10 is the
+lower return percentile across cases, not uncertainty across independently
+trained models. The return axis is symmetric-logarithmic, linear within
+`[-1, 1]`, with labels showing raw return values.
+
+Training rewards and episode lengths remain in `training_curve.json`; individual
+validation cases remain in `evaluation_history.json`. With validation disabled,
+the figure indicates that validation data is unavailable. Replotting with a
+different settling fraction changes the displayed success rate without
+reselecting checkpoints; [replotting instructions](workflows.md#replot-an-existing-learning-curve)
+use the run's recorded control interval.
+
+## Read a comparison figure
+
+The figure shows output/reference and action traces for the first shared seed,
+a summary across all cases, and paired tracking-ISE boxplots. Each ratio divides
+the policy's ISE by the baseline's on the **same seed**: `0.5` is half its error,
+`1` is equal, and `2` is twice the error. The first included PID controller is
+the baseline; otherwise the first supplied policy is used and named.
+
+Boxes show the middle 50% of ratios and the median. Whiskers reach observed
+values within 1.5 interquartile ranges; outliers and the largest ratio's seed
+remain visible. Positive ratios use a log axis; a valid zero policy cost uses a
+linear axis. Small baseline errors can amplify ratios, so also read absolute
+tracking metrics and the safety summary.
+
+Unsafe, incomplete, unsupported, or zero-baseline-cost pairs are excluded from
+box statistics. Affected rows show valid/total counts and exclusion reasons;
+no valid pairs produces `N/A`. Exclusion from a box does not remove those cases
+from aggregate safety rates. A single-policy training report has no paired boxplot.
+
+Simulation safety results apply to the documented models and protocols. Hardware
+integration and experimental support are covered by their owning scenario guides.

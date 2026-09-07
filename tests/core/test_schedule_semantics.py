@@ -258,7 +258,7 @@ def test_dataset_records_both_transition_and_next_contexts(schedule_scenario, tm
         env.close()
     reader = DatasetReader(result["path"])
     episode = reader.load_episode(0)
-    assert reader.metadata["schema_version"] == "aiogym.dataset.v2"
+    assert reader.metadata["schema_version"] == "aiogym.dataset.v3"
     assert np.allclose(episode.array("transition_reference"), [[0.2], [0.4], [0.6]])
     assert np.allclose(episode.array("reference"), [[0.4], [0.6], [0.6]])
     assert episode.array("transition_disturbance").tolist() == [
@@ -282,7 +282,7 @@ def test_evaluation_metrics_use_the_same_transition_reference_as_reward(
         )
     finally:
         env.close()
-    assert result["schema_version"] == "aiogym.evaluation.v4"
+    assert result["schema_version"] == "aiogym.evaluation.v5"
     assert result["episodes"][0]["metrics"]["tracking_iae"] == pytest.approx(8.8)
 
 

@@ -85,7 +85,8 @@ def _sample_tracking_equilibrium(model, rng, *, previous_reference=None):
 def _disturbance_episode(model, rng) -> EpisodeSpec:
     defaults = model.default_disturbances()
     start = int(rng.integers(140, 241))
-    duration = int(rng.integers(200, 321))
+    # Restore by 80%: leave 10% recovery before the final 10% stability window.
+    duration = int(rng.integers(200, min(320, 464 - start) + 1))
     return EpisodeSpec(
         initial_state=tuple(model.initial_state()),
         initial_action=tuple(model.default_action()),
@@ -158,7 +159,8 @@ def sample_training_episode(
 def sample_training_disturbance(model, rng):
     defaults = model.default_disturbances()
     start = int(rng.integers(23, 41))
-    duration = int(rng.integers(33, 54))
+    # Reserve recovery before the final 10% of the training episode.
+    duration = int(rng.integers(33, min(53, 80 - start) + 1))
     return {
         start: {
             "liquid_feed_concentration": float(rng.uniform(0.45, 0.75)),

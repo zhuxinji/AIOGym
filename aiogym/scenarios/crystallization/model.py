@@ -157,7 +157,10 @@ class CrystallizationModel(PhysicsModelBase):
         return [(nominal - minimum) / (maximum - minimum)]
 
     def cooling_temperature(self, action):
-        fraction = float(self.action_vector(action)[0])
+        return self._cooling_temperature(self.action_vector(action))
+
+    def _cooling_temperature(self, action):
+        fraction = float(action[0])
         return float(self.p["minimum_cooling_temperature"]) + fraction * (
             float(self.p["maximum_cooling_temperature"])
             - float(self.p["minimum_cooling_temperature"])
@@ -167,10 +170,12 @@ class CrystallizationModel(PhysicsModelBase):
         context = self._resolve_disturbances(
             {} if disturbances is None else disturbances
         )
-        values = self.state_vector(state)
+        return self._kinetics(self.state_vector(state), self.action_vector(action), context)
+
+    def _kinetics(self, values, action, context):
         third_moment = float(values[3])
         concentration = float(values[4])
-        cooling_temperature = self.cooling_temperature(action)
+        cooling_temperature = self._cooling_temperature(action)
         absolute_temperature = cooling_temperature + 273.15
         equilibrium_concentration = (
             -686.2686
@@ -222,7 +227,7 @@ class CrystallizationModel(PhysicsModelBase):
 
     def _dynamics(self, state, action, disturbances):
         zeroth, first, second, third, _concentration = (float(value) for value in state)
-        rates = self.kinetics(state, action, disturbances)
+        rates = self._kinetics(state, action, self._resolve_disturbances(disturbances))
         nucleation = float(rates["nucleation_rate"])
         growth = float(rates["growth_rate"])
         independent = float(self.p["size_independent_growth_weight"])

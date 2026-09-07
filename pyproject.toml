@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aiogym"
-version = "0.30.0"
+version = "0.33.1"
 description = "Scenario-oriented process-control models, rewards, datasets, and workflows."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -26,10 +26,8 @@ rl = [
 test = [
   "pytest>=8.0",
 ]
-all = [
-  "stable-baselines3>=2.3",
-  "torch>=2.2",
-]
+# Compatibility alias; maintain RL dependencies in one place.
+all = ["aiogym[rl]"]
 dev = [
   "build>=1.2",
   "pytest>=8.0",
@@ -38,10 +36,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/zhuxinji/AIOGym"
-Documentation = "https://github.com/zhuxinji/AIOGym/blob/main/docs/quickstart.md"
-Repository = "https://github.com/zhuxinji/AIOGym"
-Issues = "https://github.com/zhuxinji/AIOGym/issues"
+Homepage = "https://github.com/supcon-international/aiogym"
+Documentation = "https://github.com/supcon-international/aiogym/blob/main/docs/quickstart.md"
+Repository = "https://github.com/supcon-international/aiogym"
+Issues = "https://github.com/supcon-international/aiogym/issues"
 
 [tool.ruff]
 target-version = "py310"

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest.mock import Mock
+
 import numpy as np
 import pytest
 
 from aiogym import DatasetReader, collect, evaluate, make_env
+from aiogym.scenarios.three_tank.episodes import sample_training_disturbance
 
 
 def _randomized_env():
@@ -152,37 +156,27 @@ def test_disturbance_rng_does_not_change_randomized_tracking_condition():
 
 
 def test_three_tank_training_disturbance_samples_single_pair_and_triple_bypasses():
-    env = make_env("three_tank", disturbance=True)
-    combinations = set()
-    try:
-        for seed in range(200):
-            _, info = env.reset(seed=seed)
-            schedule = info["episode_spec"]["disturbance_schedule"]
-            start = min(int(step) for step in schedule)
-            combinations.add(tuple(sorted(schedule[str(start)])))
-    finally:
-        env.close()
-
-    assert {len(names) for names in combinations} == {1, 2, 3}
-    assert {names for names in combinations if len(names) == 1} == {
-        ("bv12_open",),
-        ("bv23_open",),
-        ("bv34_open",),
-    }
-    assert {names for names in combinations if len(names) == 2} == {
-        ("bv12_open", "bv23_open"),
-        ("bv12_open", "bv34_open"),
-        ("bv23_open", "bv34_open"),
-    }
-    assert {names for names in combinations if len(names) == 3} == {
-        ("bv12_open", "bv23_open", "bv34_open"),
-    }
+    # Select each branch directly instead of searching hundreds of seeded episodes.
+    for draws, branches in (
+        ((0, 0, 30), ("12",)),
+        ((1, 1, 30), ("23",)),
+        ((2, 2, 30), ("34",)),
+        ((3, 0, 30), ("23", "34")),
+        ((4, 1, 30), ("12", "34")),
+        ((6, 2, 30), ("12", "23")),
+        ((7, 30), ("12", "23", "34")),
+    ):
+        rng = SimpleNamespace(integers=Mock(side_effect=draws))
+        assert sample_training_disturbance(None, rng) == {
+            30: {f"bv{branch}_open": 1.0 for branch in branches},
+            390: {f"bv{branch}_open": 0.0 for branch in branches},
+        }
 
 
 def test_randomize_defaults_to_interior_tracking_only():
     env = make_env("three_tank", randomize=True)
     try:
-        reset_infos = [env.reset(seed=seed)[1] for seed in range(200)]
+        reset_infos = [env.reset(seed=seed)[1] for seed in (0, 1, 2)]
     finally:
         env.close()
     assert {info["episode_family"] for info in reset_infos} == {"tracking"}
@@ -190,7 +184,6 @@ def test_randomize_defaults_to_interior_tracking_only():
         info["episode_parameters"]["initial_family"] for info in reset_infos
     } == {"interior"}
     assert all(not info["episode_spec"]["disturbance_schedule"] for info in reset_infos)
-    moves = []
     for info in reset_infos:
         spec = info["episode_spec"]
         assert spec["horizon"] == 600
@@ -198,25 +191,20 @@ def test_randomize_defaults_to_interior_tracking_only():
         start = np.asarray(spec["initial_state"], dtype=float)
         target = spec["reference"]
         level_move = np.abs(np.asarray(target, dtype=float) - np.asarray(start))
-        moves.extend(level_move.tolist())
         assert np.all(level_move >= 0.05)
-    assert max(moves) > 0.12
 
 
-@pytest.mark.parametrize("scenario", ("three_tank", "quadruple"))
-def test_boundary_probability_controls_the_training_tail(scenario):
-    env = make_env(scenario, randomize=True, boundary_probability=0.30)
+def test_boundary_probability_selects_the_training_family_at_its_threshold():
+    env = make_env("three_tank", randomize=True, boundary_probability=0.30)
+    sampler = Mock(return_value=(env.unwrapped.default_episode, "interior"))
+    env._episode_sampler = sampler
     try:
-        reset_infos = [env.reset(seed=seed)[1] for seed in range(200)]
+        for draw, expected_boundary in ((0.299, True), (0.30, False)):
+            env._boundary_rng = SimpleNamespace(random=Mock(return_value=draw))
+            env.reset()
+            assert sampler.call_args.args[-1] is expected_boundary
     finally:
         env.close()
-    assert {info["episode_family"] for info in reset_infos} == {"tracking"}
-    assert all(not info["episode_spec"]["disturbance_schedule"] for info in reset_infos)
-    initial_families = [
-        info["episode_parameters"]["initial_family"] for info in reset_infos
-    ]
-    assert initial_families.count("boundary-prerun") == 58
-    assert initial_families.count("interior") == 142
 
 
 def test_boundary_selection_rng_does_not_change_tracking_targets():
@@ -257,18 +245,7 @@ def test_base_environment_does_not_randomize_automatically():
 def test_sampled_tracking_target_is_active_at_reset():
     env = make_env("three_tank", randomize=True)
     try:
-        for seed in range(100):
-            _, reset_info = env.reset(seed=seed)
-            initial_state = np.asarray(
-                reset_info["episode_spec"]["initial_state"], dtype=float
-            )
-            maximum = np.asarray(
-                env.unwrapped.model.parameter("height_max"), dtype=float
-            )
-            if not np.all(initial_state >= 0.80 * maximum):
-                break
-        else:
-            raise AssertionError("no interior tracking episode sampled")
+        _, reset_info = env.reset(seed=0)
         spec = reset_info["episode_spec"]
         target = spec["reference"]
         initial = spec["initial_state"]

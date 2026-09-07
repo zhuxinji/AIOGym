@@ -113,7 +113,7 @@ low-oxygen/high-temperature boundary Benchmark. Every training episode uses
 the tracking Benchmark's 300-step horizon.
 
 `disturbance=True` independently samples all four physical disturbances plus
-an event at step `70--120` and a `100--160` step duration. Noise, delay, and
+an event at step `70--120` and a `100--min(160, 240-start)` step duration (restored by step 240). Noise, delay, and
 actuator loss-of-effectiveness remain the shared optional channel variations.
 
 ## Quick start and controllers
@@ -140,6 +140,6 @@ result = aiogym.compare_policies(
 env.close()
 ```
 
-Use the common [Quickstart](../quickstart.md) for Dataset collection and RL
+Use the [task guide](../workflows.md) for Dataset collection and RL
 training with `scenario = "heater"`. Current scores and safety metrics remain
 in `runs/heater/benchmarks/<benchmark>/comparison.json`.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from functools import cached_property
 
 import numpy as np
 
@@ -46,7 +47,7 @@ def integrate_process_state(
         raise ValueError("integration duration must be finite and positive")
     result = np.asarray(state, dtype=float).reshape(-1)
     applied = np.asarray(action, dtype=float).reshape(-1)
-    if result.shape != (len(model.initial_state()),) or not np.isfinite(result).all():
+    if result.shape != (len(model.state_schema()),) or not np.isfinite(result).all():
         raise ValueError("integration state must match the model state dimension")
     if not np.isfinite(applied).all():
         raise ValueError("integration action must contain finite values")
@@ -54,9 +55,15 @@ def integrate_process_state(
     substeps = max(1, math.ceil(interval / maximum_step - 1e-12))
     step = interval / substeps
 
+    dynamics = lambda values: model.dynamics(values, applied, disturbances=disturbances)
+    if isinstance(model, PhysicsModelBase) and type(model).dynamics is PhysicsModelBase.dynamics:
+        # Built-in numeric kernels consume the canonical action once per interval.
+        applied = model.action_vector(applied)
+        dynamics = lambda values: model._dynamics(values, applied, disturbances)
+
     def derivative(values):
         output = np.asarray(
-            model.dynamics(values, applied, disturbances=disturbances),
+            dynamics(values),
             dtype=float,
         ).reshape(-1)
         if output.shape != result.shape:
@@ -114,6 +121,10 @@ class PhysicsModelBase:
         }
 
     def state_schema(self):
+        return [dict(row) for row in self._cached_state_schema]
+
+    @cached_property
+    def _cached_state_schema(self):
         names = self._vector_names(self.state_names, "x", len(self.initial_state()))
         return [
             self._schema_row(name, self.state_units, self.state_bounds)
@@ -121,6 +132,10 @@ class PhysicsModelBase:
         ]
 
     def action_schema(self):
+        return [dict(row) for row in self._cached_action_schema]
+
+    @cached_property
+    def _cached_action_schema(self):
         names = self._action_names()
         counters = {}
         rows = []
@@ -142,7 +157,7 @@ class PhysicsModelBase:
         return rows
 
     def action_dim(self):
-        return len(self._action_names())
+        return len(self.action_names or self.action_bounds)
 
     def _action_names(self):
         if self.action_names:
@@ -182,6 +197,10 @@ class PhysicsModelBase:
         return self._dynamics(self.state_vector(x), self.action_vector(u), context)
 
     def output_schema(self):
+        return [dict(row) for row in self._cached_output_schema]
+
+    @cached_property
+    def _cached_output_schema(self):
         y0 = list(self.outputs(self.initial_state()))
         names = self._vector_names(self.output_names, "y", len(y0))
         return [
@@ -190,6 +209,10 @@ class PhysicsModelBase:
         ]
 
     def output_scales(self):
+        return list(self._cached_output_scales)
+
+    @cached_property
+    def _cached_output_scales(self):
         scales = []
         for row in self.output_schema():
             low = float(row["low"])
@@ -199,6 +222,10 @@ class PhysicsModelBase:
         return scales
 
     def observation_schema(self):
+        return [dict(row) for row in self._cached_observation_schema]
+
+    @cached_property
+    def _cached_observation_schema(self):
         return [
             *(
                 {**row, "kind": "measurement", "low": 0.0, "high": 1.0}
@@ -219,9 +246,16 @@ class PhysicsModelBase:
     def observation(self, state, reference, previous_action, disturbances):
         del previous_action, disturbances
         return [
-            *self._normalize(state, self.state_schema()),
-            *self._normalize(reference, self.output_schema()),
+            *self._normalize(state, self._cached_state_schema),
+            *self._normalize(reference, self._cached_output_schema),
         ]
+
+    def recompute_derived_observation(self, observation):
+        """Models declaring derived channels must rebuild them after sensor noise."""
+        raise NotImplementedError(
+            f"{self.scenario} must implement recompute_derived_observation "
+            "for derived observation channels"
+        )
 
     def measurement_from_observation(self, observation, disturbances=None):
         values = np.asarray(observation, dtype=float).reshape(-1)

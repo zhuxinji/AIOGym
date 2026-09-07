@@ -150,7 +150,9 @@ class ExtractionModel(PhysicsModelBase):
         return action
 
     def physical_flows(self, action):
-        values = self.action_vector(action)
+        return self._physical_flows(self.action_vector(action))
+
+    def _physical_flows(self, values):
         liquid = float(self.p["minimum_liquid_flow"]) + values[0] * (
             float(self.p["maximum_liquid_flow"]) - float(self.p["minimum_liquid_flow"])
         )
@@ -161,7 +163,7 @@ class ExtractionModel(PhysicsModelBase):
 
     def _dynamics(self, state, action, disturbances):
         context = self._resolve_disturbances(disturbances)
-        liquid_flow, gas_flow = self.physical_flows(action)
+        liquid_flow, gas_flow = self._physical_flows(action)
         liquid_volume = float(self.p["liquid_stage_volume"])
         gas_volume = float(self.p["gas_stage_volume"])
         equilibrium_constant = float(self.p["equilibrium_constant"])
@@ -204,7 +206,7 @@ class ExtractionModel(PhysicsModelBase):
         context = self._resolve_disturbances(
             {} if disturbances is None else disturbances
         )
-        liquid_flow, gas_flow = self.physical_flows(action)
+        liquid_flow, gas_flow = self._physical_flows(action)
 
         def residual(first_gas):
             _state, terminal_gas = self._propagate_equilibrium(

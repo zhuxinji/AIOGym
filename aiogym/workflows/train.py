@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import copy
+import json
+import logging
 import math
 import shutil
 import subprocess
+import zipfile
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -28,36 +31,51 @@ from ._checkpoint import (
     load_training_checkpoint,
     save_checkpoint,
 )
-from .evaluate import evaluate
+from .evaluate import (
+    DEFAULT_VALIDATION_SETTLING_FRACTION,
+    _evaluate,
+    _validation_summary,
+    evaluate,
+)
 from .training_curve import (
     TRAINING_CURVE_SCHEMA_VERSION,
+    _load_curve,
+    _validate_curve,
+    _validation_rows,
     plot_training_curve,
 )
 
 
-TRAINING_SCHEMA_VERSION = "aiogym.training.v12"
-TRAINING_EVALUATION_SCHEMA_VERSION = "aiogym.training_evaluation.v2"
+TRAINING_SCHEMA_VERSION = "aiogym.training.v14"
+TRAINING_EVALUATION_SCHEMA_VERSION = "aiogym.training_evaluation.v4"
 DEFAULT_VALIDATION_SEEDS = tuple(range(1_000, 1_020))
+_LOGGER = logging.getLogger(__name__)
 
 
 def train(
     *,
     env,
     algorithm: str,
-    steps: int,
+    steps: int = 500_000,
     output: str | Path,
     seed: int | None = None,
     algorithm_kwargs: Mapping | None = None,
     record_every: int = 500,
     evaluation_env=None,
-    evaluate_every: int | None = None,
+    evaluate_every: int | None = 5_000,
     dataset: str | Path | None = None,
     behavior_cloning_epochs: int | None = None,
     behavior_cloning_batch_size: int = 256,
     behavior_cloning_learning_rate: float = 3e-4,
     resume_from: str | Path | None = None,
 ):
-    """Train or continue one algorithm without taking ownership of ``env``."""
+    """Train or continue for 500k steps, validating every 5k by default.
+
+    Supply a separate ``evaluation_env`` or set ``evaluate_every=None`` to
+    disable validation. The caller retains ownership of both environments.
+    The output must be new or empty apart from CLI logs, status, and frozen
+    JSON inputs; existing training artifacts are never overwritten.
+    """
 
     if env.unwrapped.benchmark is not None:
         raise ValueError("train does not accept a benchmark environment")
@@ -145,24 +163,40 @@ def train(
         else training_dataset_metadata(training_dataset)
     )
     if resume_path is not None and backend.requires_dataset:
-        if dataset_metadata != checkpoint_training["dataset"]:
+        expected_dataset = checkpoint_training["dataset"]
+        if expected_dataset is None or "content_sha256" not in expected_dataset:
             raise ValueError(
-                "continued training Dataset must match the checkpoint Dataset"
+                "checkpoint has no Dataset content digest; original data identity "
+                "cannot be verified for continuation"
             )
+        if dataset_metadata["content_sha256"] != expected_dataset["content_sha256"]:
+            raise ValueError("continued training Dataset content must match the checkpoint Dataset")
+    history = (
+        None if resume_path is None else _resume_history(
+            resume_path, checkpoint_training, evaluation_env=evaluation_env,
+        )
+    )
     demonstration_data = (
         None
         if cloning is None
-        else load_demonstrations(training_dataset, env=env)
+        else load_demonstrations(training_dataset)
     )
 
     directory = Path(output)
     if directory.exists() and not directory.is_dir():
         raise FileExistsError(f"training output is not a directory: {directory}")
-    if directory.exists() and any(directory.iterdir()):
+    cli_files = {"train.log", "status.json", "parameters.json", "algorithm-kwargs.json"}
+    if directory.exists() and any(
+        path.name not in cli_files or not path.is_file() or path.is_symlink()
+        for path in directory.iterdir()
+    ):
         raise FileExistsError(
             f"refusing to create training output in non-empty directory: {directory}"
         )
     directory.mkdir(parents=True, exist_ok=True)
+    _LOGGER.info("Training initialized", extra={
+        "phase": "setup", "initial_steps": initial_steps, "seed": resolved_seed,
+    })
 
     model = (
         resumed_model
@@ -175,6 +209,7 @@ def train(
     )
     behavior_cloning_report = None
     if cloning is not None:
+        _LOGGER.info("Cloning demonstrations", extra={"phase": "behavior-cloning"})
         observations, actions, source = demonstration_data
         behavior_cloning_report = backend.behavior_cloning(
             model,
@@ -191,6 +226,7 @@ def train(
     curve_recorder = _TrainingCurveRecorder(
         resolved_record_every,
         initial_steps=initial_steps,
+        history=None if history is None else history["curve"],
     )
     checkpoint_dataset = dataset_metadata if backend.requires_dataset else None
 
@@ -203,7 +239,24 @@ def train(
         }
 
     evaluation_recorder = None
+
+    def checkpoint_history(*, is_best=False):
+        return {
+            "curve": curve_recorder.snapshot(),
+            "evaluation": (
+                None if evaluation_recorder is None else evaluation_recorder.payload()
+            ),
+            "best_checkpoint": (
+                None if is_best or evaluation_recorder is None
+                else str((directory / "best/model.zip").resolve())
+            ),
+        }
+
     if resolved_evaluate_every is not None:
+        best_checkpoint = directory / "best/model.zip"
+        if history is not None and history["evaluation"] is not None:
+            best_checkpoint.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(history["best_checkpoint"], best_checkpoint)
         evaluation_recorder = _TrainingEvaluationRecorder(
             backend=backend,
             model=model,
@@ -211,11 +264,15 @@ def train(
             checkpoint_env=env,
             evaluate_every=resolved_evaluate_every,
             seeds=DEFAULT_VALIDATION_SEEDS,
-            best_checkpoint=directory / "best" / "model.zip",
+            best_checkpoint=best_checkpoint,
             initial_steps=initial_steps,
             checkpoint_state=checkpoint_state,
+            checkpoint_history=checkpoint_history,
+            history=None if history is None else history["evaluation"],
         )
         evaluation_recorder.start()
+    if curve_recorder.snapshot() is not None:
+        write_json(directory / "training_curve.json", curve_recorder.snapshot())
 
     def record_step(step: TrainingStep) -> None:
         cumulative = TrainingStep(
@@ -224,10 +281,19 @@ def train(
             terminated=step.terminated,
             truncated=step.truncated,
         )
-        curve_recorder.on_step(cumulative)
+        flushed = curve_recorder.on_step(cumulative)
+        if flushed or (
+            resolved_evaluate_every is not None
+            and cumulative.step % resolved_evaluate_every == 0
+        ):
+            write_json(
+                directory / "training_curve.json", curve_recorder.snapshot(),
+                overwrite=True,
+            )
         if evaluation_recorder is not None:
             evaluation_recorder.on_step(cumulative)
 
+    _LOGGER.info("Learning from environment", extra={"phase": "training"})
     actual_steps = backend.learn(
         model,
         steps=resolved_steps,
@@ -239,6 +305,7 @@ def train(
     curve_recorder.finish(total_steps)
     if evaluation_recorder is not None:
         evaluation_recorder.finish(total_steps)
+    _LOGGER.info("Saving final checkpoint", extra={"phase": "saving"})
     curve = curve_recorder.payload()
     checkpoint = directory / "model.zip"
     save_checkpoint(
@@ -247,6 +314,7 @@ def train(
         checkpoint,
         env=env,
         training=checkpoint_state(total_steps),
+        history=checkpoint_history(),
     )
 
     git_executable = shutil.which("git")
@@ -263,6 +331,7 @@ def train(
             git_commit = completed.stdout.strip()
 
     evaluation_metadata = None
+    evaluation_history = None
     evaluation_history_path = None
     best_checkpoint = None
     best_tracking_figure = None
@@ -271,6 +340,7 @@ def train(
         evaluation_history_path = write_json(
             directory / "evaluation_history.json",
             evaluation_history,
+            overwrite=True,
         )
         best_checkpoint = directory / "best" / "model.zip"
         if not best_checkpoint.is_file():
@@ -278,11 +348,13 @@ def train(
                 f"training evaluation did not create checkpoint: {best_checkpoint}"
             )
         best_policy = load_policy(best_checkpoint, env=evaluation_env)
+        _LOGGER.info("Evaluating best checkpoint", extra={"phase": "validation"})
         best_evaluation = evaluate(
             env=evaluation_env,
             policy=best_policy,
             seeds=DEFAULT_VALIDATION_SEEDS,
         )
+        _LOGGER.info("Writing training artifacts", extra={"phase": "saving"})
         best_tracking_figure = best_checkpoint.parent / "tracking.svg"
         trajectory_report = {
             "environment": best_evaluation["environment"],
@@ -307,13 +379,16 @@ def train(
             "seeds": list(DEFAULT_VALIDATION_SEEDS),
             "ranking_metric": evaluation_history["ranking_metric"],
             "selection_order": evaluation_history["selection_order"],
+            "settling_fraction": evaluation_history["settling_fraction"],
             "best_step": evaluation_history["best_step"],
-            "best_value": evaluation_history["best_value"],
+            "best_mean_return": evaluation_history["best_mean_return"],
+            "best_median_return": evaluation_history["best_median_return"],
+            "best_p10_return": evaluation_history["best_p10_return"],
             "best_safe_completion": evaluation_history[
                 "best_safe_completion"
             ],
-            "best_worst_case_value": evaluation_history[
-                "best_worst_case_value"
+            "best_control_success": evaluation_history[
+                "best_control_success"
             ],
             "tracking_figure": "best/tracking.svg",
         }
@@ -359,10 +434,12 @@ def train(
             directory / "behavior_cloning.json", behavior_cloning_report
         )
     )
-    curve_path = write_json(directory / "training_curve.json", curve)
+    curve_path = write_json(directory / "training_curve.json", curve, overwrite=True)
     curve_figure = plot_training_curve(
         curve,
         output=directory / "training_curve.svg",
+        evaluation_history=evaluation_history,
+        control_dt=float(env.unwrapped.control_dt),
     )
     return {
         **metadata,
@@ -389,6 +466,107 @@ def train(
         "training_curve": str(curve_path.resolve()),
         "training_curve_figure": str(curve_figure.resolve()),
     }
+
+
+def _resume_history(path, training, *, evaluation_env):
+    """Restore the history belonging to this checkpoint, including older runs."""
+    step = training["completed_steps"]
+    if "history" in training:
+        history = copy.deepcopy(training["history"])
+    else:
+        # Older containers keep records next to the final checkpoint.
+        directory = path.parent.parent if path.parent.name == "best" else path.parent
+        curve = None
+        if step:
+            curve_path = directory / "training_curve.json"
+            if not curve_path.is_file():
+                raise ValueError(
+                    "checkpoint has no saved training history; keep the original "
+                    f"training_curve.json at {curve_path} to continue without losing records"
+                )
+            curve = _load_curve(curve_path)
+            _validate_curve(curve)
+            curve["records"] = [r for r in curve["records"] if r["end_step"] <= step]
+            curve["episodes"] = [r for r in curve["episodes"] if r["end_step"] <= step]
+            curve["actual_steps"] = step
+        evaluation_path = directory / "evaluation_history.json"
+        evaluation = _load_curve(evaluation_path) if evaluation_path.is_file() else None
+        if evaluation is not None:
+            evaluation["records"] = [r for r in evaluation["records"] if r["step"] <= step]
+            if not any(r["step"] == evaluation["best_step"] for r in evaluation["records"]):
+                evaluation["best_step"] = step
+        history = {
+            "curve": curve,
+            "evaluation": evaluation,
+            "best_checkpoint": (
+                None if path.parent.name == "best"
+                else str(directory / "best/model.zip")
+            ),
+        }
+    if not isinstance(history, dict) or set(history) != {"curve", "evaluation", "best_checkpoint"}:
+        raise ValueError("checkpoint training history requires curve, evaluation and best_checkpoint")
+    curve, evaluation = history["curve"], history["evaluation"]
+    if curve is None:
+        if step:
+            raise ValueError("checkpoint is missing its training curve history")
+    else:
+        _validate_curve(curve)
+        if curve["actual_steps"] != step:
+            raise ValueError("training history must end at the checkpoint step")
+    if (evaluation is None) != (evaluation_env is None):
+        if step == 0 and evaluation is None:
+            return history
+        raise ValueError("continued training must preserve whether validation is enabled")
+    if evaluation is not None:
+        if evaluation.get("schema_version") not in {
+            "aiogym.training_evaluation.v2", "aiogym.training_evaluation.v3",
+            TRAINING_EVALUATION_SCHEMA_VERSION,
+        }:
+            raise ValueError("unsupported checkpoint validation history schema")
+        _validation_rows(
+            evaluation, curve or {"initial_steps": 0, "actual_steps": 0},
+            control_dt=float(evaluation_env.unwrapped.control_dt),
+            settling_fraction=DEFAULT_VALIDATION_SETTLING_FRACTION,
+        )
+        source = history["best_checkpoint"]
+        if source is None:
+            source = path
+        else:
+            local_best = path.parent / "best/model.zip"
+            source = local_best if local_best.is_file() else Path(source)
+        if not source.is_file():
+            raise ValueError(f"saved best checkpoint is required to preserve selection: {source}")
+        with zipfile.ZipFile(source) as archive:
+            manifest = json.loads(archive.read("manifest.json"))
+        if manifest["policy"]["training"]["completed_steps"] != evaluation["best_step"]:
+            raise ValueError("saved best checkpoint does not match the validation history")
+        if evaluation.get("settling_fraction") != DEFAULT_VALIDATION_SETTLING_FRACTION:
+            # Old validation points remain diagnostics. Only retained weights can
+            # compete under a new rule; a metric history cannot restore a model.
+            available = {evaluation["best_step"]: source, step: path}
+            best = None
+            for record in evaluation["records"]:
+                if (
+                    evaluation.get("schema_version") != TRAINING_EVALUATION_SCHEMA_VERSION
+                    and getattr(evaluation_env.unwrapped.model, "time_unit", "s") == "h"
+                ):
+                    for episode in record["episodes"]:
+                        episode["metrics"]["energy"] *= 3600
+                record.update(_validation_summary(
+                    record["episodes"], control_dt=float(evaluation_env.unwrapped.control_dt),
+                ))
+                record["selection_eligible"] = record["step"] in available
+                if _is_better_training_evaluation(record, best):
+                    best = record
+            source = available[best["step"]]
+            evaluation["best_step"] = best["step"]
+            for name in ("mean_return", "median_return", "p10_return", "safe_completion", "control_success"):
+                evaluation[f"best_{name}"] = best[name]
+            evaluation["schema_version"] = TRAINING_EVALUATION_SCHEMA_VERSION
+            evaluation.pop("settling_window", None)
+            evaluation["settling_fraction"] = DEFAULT_VALIDATION_SETTLING_FRACTION
+        history["best_checkpoint"] = source
+    return history
 
 
 def _dataset_inputs(*, backend, dataset, epochs, batch_size, learning_rate):
@@ -462,7 +640,10 @@ def _validate_evaluation_env(training_env, evaluation_env, evaluate_every):
             raise ValueError("evaluation_env requires evaluate_every")
         return
     if evaluation_env is None:
-        raise ValueError("evaluate_every requires evaluation_env")
+        raise ValueError(
+            "evaluate_every requires evaluation_env; provide a separate randomized "
+            "environment or set evaluate_every=None to disable validation"
+        )
     if evaluation_env is training_env:
         raise ValueError("evaluation_env must be separate from the training env")
     if evaluation_env.unwrapped.benchmark is not None:
@@ -496,6 +677,8 @@ class _TrainingEvaluationRecorder:
         best_checkpoint,
         initial_steps,
         checkpoint_state,
+        checkpoint_history,
+        history=None,
     ):
         self._backend = backend
         self._model = model
@@ -506,15 +689,20 @@ class _TrainingEvaluationRecorder:
         self._best_checkpoint = best_checkpoint
         self._initial_steps = initial_steps
         self._checkpoint_state = checkpoint_state
-        self._records = []
-        self._best_step = None
-        self._best_value = None
+        self._checkpoint_history = checkpoint_history
+        self._records = [] if history is None else copy.deepcopy(history["records"])
         self._best_index = None
-        self._ranking_metric = None
-        self._direction = None
+        for index, record in enumerate(self._records):
+            if _is_better_training_evaluation(
+                record, None if self._best_index is None else self._records[self._best_index],
+            ):
+                self._best_index = index
 
     def start(self):
-        self._evaluate(self._initial_steps)
+        if not self._records:
+            self._evaluate(self._initial_steps)
+        else:
+            self._persist()
 
     def on_step(self, event: TrainingStep):
         if event.step % self._evaluate_every == 0:
@@ -525,39 +713,20 @@ class _TrainingEvaluationRecorder:
             self._evaluate(actual_steps)
 
     def _evaluate(self, step):
+        _LOGGER.info("Validating checkpoint", extra={"phase": "validation"})
         policy = self._backend.policy(
             self._model,
             checkpoint=self._best_checkpoint,
         )
-        result = evaluate(env=self._env, policy=policy, seeds=self._seeds)
-        ranking = result["ranking_metrics"][0]
-        metric = ranking["name"]
-        direction = ranking["direction"]
-        if self._ranking_metric is None:
-            self._ranking_metric = metric
-            self._direction = direction
-        elif metric != self._ranking_metric or direction != self._direction:
-            raise ValueError("training evaluation ranking metric changed")
-        value = float(result["aggregate"][metric]["median"])
+        result = _evaluate(env=self._env, policy=policy, seeds=self._seeds,
+                           include_trajectories=False)
         episodes = result["episodes"]
-        metric_values = np.asarray(
-            [episode["metrics"][metric] for episode in episodes],
-            dtype=float,
-        )
-        worst_quantile = 0.90 if direction == "minimize" else 0.10
-        worst_case_value = float(np.quantile(metric_values, worst_quantile))
-        safe_completion = float(
-            np.mean([not episode["terminated"] for episode in episodes])
-        )
-        episode_length = float(
-            np.mean([episode["length"] for episode in episodes])
+        summary = _validation_summary(
+            episodes, control_dt=float(self._env.unwrapped.control_dt),
         )
         record = {
             "step": int(step),
-            "value": value,
-            "worst_case_value": worst_case_value,
-            "safe_completion": safe_completion,
-            "episode_length": episode_length,
+            **summary,
             "episodes": [
                 {
                     "seed": int(episode["seed"]),
@@ -581,9 +750,11 @@ class _TrainingEvaluationRecorder:
         self._records.append(record)
         improved = _is_better_training_evaluation(
             record,
-            None if self._best_step is None else self._records[self._best_index],
-            direction,
+            None if self._best_index is None else self._records[self._best_index],
         )
+        if improved:
+            self._best_index = len(self._records) - 1
+        self._persist()
         if improved:
             self._best_checkpoint.parent.mkdir(parents=True, exist_ok=True)
             save_checkpoint(
@@ -592,74 +763,63 @@ class _TrainingEvaluationRecorder:
                 self._best_checkpoint,
                 env=self._checkpoint_env,
                 training=self._checkpoint_state(step),
+                history=self._checkpoint_history(is_best=True),
                 overwrite=True,
             )
-            self._best_step = int(step)
-            self._best_value = value
-            self._best_index = len(self._records) - 1
+
+        _LOGGER.info("Validation complete", extra={"phase": "training"})
+
+    def _persist(self):
+        write_json(
+            self._best_checkpoint.parent.parent / "evaluation_history.json",
+            self.payload(), overwrite=True,
+        )
 
     def payload(self):
-        if not self._records or self._best_step is None:
+        if not self._records or self._best_index is None:
             raise RuntimeError("training evaluation produced no records")
+        best = self._records[self._best_index]
         return {
             "schema_version": TRAINING_EVALUATION_SCHEMA_VERSION,
             "evaluate_every": int(self._evaluate_every),
             "seeds": list(self._seeds),
+            "settling_fraction": DEFAULT_VALIDATION_SETTLING_FRACTION,
             "ranking_metric": {
-                "name": self._ranking_metric,
-                "direction": self._direction,
+                "name": "return",
+                "aggregate": "mean",
+                "direction": "maximize",
             },
             "selection_order": [
                 {"name": "safe_completion", "direction": "maximize"},
-                {"name": "episode_length", "direction": "maximize"},
-                {
-                    "name": "worst_case_quantile",
-                    "quantile": 0.90 if self._direction == "minimize" else 0.10,
-                    "direction": self._direction,
-                },
-                {
-                    "name": self._ranking_metric,
-                    "direction": self._direction,
-                },
+                {"name": "control_success", "direction": "maximize"},
+                {"name": "mean_return", "direction": "maximize"},
             ],
-            "best_step": int(self._best_step),
-            "best_value": float(self._best_value),
-            "best_safe_completion": float(
-                self._records[self._best_index]["safe_completion"]
-            ),
-            "best_worst_case_value": float(
-                self._records[self._best_index]["worst_case_value"]
-            ),
+            "best_step": best["step"],
+            "best_mean_return": best["mean_return"],
+            "best_median_return": best["median_return"],
+            "best_p10_return": best["p10_return"],
+            "best_safe_completion": best["safe_completion"],
+            "best_control_success": best["control_success"],
             "records": list(self._records),
         }
 
 
-def _is_better_training_evaluation(candidate, best, metric_direction):
+def _is_better_training_evaluation(candidate, best):
+    if not candidate.get("selection_eligible", True):
+        return False
     if best is None:
         return True
     if candidate["safe_completion"] != best["safe_completion"]:
         return candidate["safe_completion"] > best["safe_completion"]
-    if candidate["episode_length"] != best["episode_length"]:
-        return candidate["episode_length"] > best["episode_length"]
-    if candidate["worst_case_value"] != best["worst_case_value"]:
-        if metric_direction == "minimize":
-            return candidate["worst_case_value"] < best["worst_case_value"]
-        if metric_direction == "maximize":
-            return candidate["worst_case_value"] > best["worst_case_value"]
-        raise ValueError(
-            "training evaluation metric direction must be minimize or maximize"
-        )
-    if metric_direction == "minimize":
-        return candidate["value"] < best["value"]
-    if metric_direction == "maximize":
-        return candidate["value"] > best["value"]
-    raise ValueError("training evaluation metric direction must be minimize or maximize")
+    if candidate["control_success"] != best["control_success"]:
+        return candidate["control_success"] > best["control_success"]
+    return candidate["mean_return"] > best["mean_return"]
 
 
 class _TrainingCurveRecorder:
-    def __init__(self, record_every, *, initial_steps=0):
+    def __init__(self, record_every, *, initial_steps=0, history=None):
         self._record_every = record_every
-        self._initial_steps = initial_steps
+        self._initial_steps = initial_steps if history is None else history["initial_steps"]
         self._window_start = initial_steps
         self._window_rewards = []
         self._window_completed = 0
@@ -667,8 +827,8 @@ class _TrainingCurveRecorder:
         self._window_truncated = 0
         self._episode_return = 0.0
         self._episode_length = 0
-        self._records = []
-        self._episodes = []
+        self._records = [] if history is None else copy.deepcopy(history["records"])
+        self._episodes = [] if history is None else copy.deepcopy(history["episodes"])
         self._last_step = initial_steps
         self._actual_steps = None
 
@@ -711,6 +871,8 @@ class _TrainingCurveRecorder:
             self._episode_length = 0
         if event.step - self._window_start == self._record_every:
             self._flush_window(event.step)
+            return True
+        return False
 
     def finish(self, actual_steps):
         if actual_steps != self._last_step:
@@ -757,6 +919,16 @@ class _TrainingCurveRecorder:
             "records": list(self._records),
             "episodes": list(self._episodes),
         }
+
+    def snapshot(self):
+        if self._last_step == self._initial_steps:
+            return None
+        snapshot = copy.copy(self)
+        snapshot._records = list(self._records)
+        if self._window_rewards:
+            snapshot._flush_window(self._last_step)
+        snapshot._actual_steps = self._last_step
+        return snapshot.payload()
 
 
 __all__ = ["TRAINING_SCHEMA_VERSION", "load_policy", "train"]

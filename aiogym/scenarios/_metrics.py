@@ -94,6 +94,7 @@ def _episode_trace(
         if np.any(selected < 0) or np.any(selected >= len(first_output)):
             raise ValueError("output_indices contains an index outside the outputs")
     dt = float(env.unwrapped.control_dt)
+    hours_per_step = dt * {"s": 1 / 3600, "h": 1}[getattr(env.unwrapped.model, "time_unit", "s")]
     metrics = {
         "return": float(episode.episode_return),
         "constraint_violations": 0.0,
@@ -102,7 +103,8 @@ def _episode_trace(
         "constraint_violation_cost": 0.0,
     }
     errors = []
-    selected_scale = None
+    scale = _output_scale(env, len(first_output), output_scale=output_scale)
+    selected_scale = scale if selected is None else scale[selected]
     minimum_safety_margin = math.inf
     first_violation_step = None
     for transition in transitions:
@@ -118,15 +120,11 @@ def _episode_trace(
         )
         if violated and first_violation_step is None:
             first_violation_step = transition.step_index + 1
-        metrics["energy"] += float(info["energy_kw"]) * dt / 3600.0
+        metrics["energy"] += float(info["energy_kw"]) * hours_per_step
         output, reference = _output_reference(transition)
-        scale = _output_scale(env, len(reference), output_scale=output_scale)
         normalized_error = (output - reference) / scale
         if selected is not None:
             normalized_error = normalized_error[selected]
-            selected_scale = scale[selected]
-        else:
-            selected_scale = scale
         errors.append(normalized_error)
     step_count = len(transitions)
     metrics.update(

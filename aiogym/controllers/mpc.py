@@ -1,4 +1,4 @@
-"""Successive-linearization fixed-setpoint MPC baseline."""
+"""Successive-linearization fixed-setpoint MPC baseline with action clipping."""
 
 from __future__ import annotations
 
@@ -42,7 +42,12 @@ def positive_int(name, value):
 
 
 class SuccessiveLinearizationMPC:
-    """Successive-linearization, velocity-form (M=1) constrained MPC."""
+    """Successive-linearization, velocity-form MPC with control horizon M=1.
+
+    Predict P steps with one constant action adjustment. Solve the unconstrained
+    quadratic objective, then clip each action to [0, 1]. This does not solve a
+    box-constrained optimum or impose predicted state constraints.
+    """
 
     def __init__(
         self,
@@ -106,6 +111,10 @@ class SuccessiveLinearizationMPC:
             "scenario": self.m.scenario,
             "Ts": self.Ts,
             "horizon": self.P,
+            "control_horizon": 1,
+            "action_bound_handling": "post_solve_clip",
+            "action_bounds": [0.0, 1.0],
+            "prediction_state_constraints": False,
             "move_supp": self.move_supp,
             "steady_input_weight": self.steady_input_weight,
             "initialization": "tracking_steady_state_action",
@@ -235,9 +244,8 @@ class SuccessiveLinearizationMPC:
         except np.linalg.LinAlgError:
             # With zero move suppression, unobservable/redundant actuator
             # directions can make the positive-semidefinite Hessian singular.
-            # The minimum-norm least-squares solution is the corresponding
-            # well-defined MPC move and avoids inventing a metric penalty solely
-            # for numerical regularization.
+            # Use the minimum-norm unconstrained solution before action clipping,
+            # without adding a penalty solely for numerical regularization.
             du = np.linalg.lstsq(H, -g, rcond=None)[0]
         self.u = np.clip(u0 + du, 0.0, 1.0)
 

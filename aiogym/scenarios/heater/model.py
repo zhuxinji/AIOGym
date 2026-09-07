@@ -169,7 +169,9 @@ class HeaterModel(PhysicsModelBase):
         context = self._resolve_disturbances(
             {} if disturbances is None else disturbances
         )
-        values = self.action_vector(action)
+        return self._combustion(self.action_vector(action), context)
+
+    def _combustion(self, values, context):
         fuel_flow = values[1] * float(self.p["maximum_fuel_flow"])
         air_flow = values[0] * float(self.p["maximum_air_flow"])
         stoichiometric_air = float(self.p["stoichiometric_air_fuel_ratio"]) * fuel_flow
@@ -209,7 +211,7 @@ class HeaterModel(PhysicsModelBase):
         firebox_temperature = float(state[0])
         outlet_temperature = float(state[1])
         flue_oxygen = float(state[2])
-        combustion = self.combustion(action, context)
+        combustion = self._combustion(action, context)
         feed_temperature = float(context["feed_temperature"])
         ambient_temperature = float(context["ambient_temperature"])
         feed_flow = float(context["feed_flow"])

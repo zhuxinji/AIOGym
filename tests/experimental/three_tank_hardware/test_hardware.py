@@ -336,3 +336,20 @@ def test_hardware_rejects_an_infeasible_reference_before_writing_an_action():
         assert not info["transition_reference_feasibility"]["accepted"]
     finally:
         env.close()
+
+
+def test_hardware_constructs_after_independent_import():
+    import subprocess
+    import sys
+
+    subprocess.run([sys.executable, "-c", """
+import sys
+import aiogym
+assert 'torch' not in sys.modules and 'stable_baselines3' not in sys.modules
+from aiogym.experimental.three_tank_hardware import ThreeTankHardwareEnv, calibration_template
+class Transport:
+    def close(self): pass
+env = ThreeTankHardwareEnv(Transport(), calibration=calibration_template(rig_id='test'))
+assert env.scenario.id == 'three_tank'
+env.close()
+"""], check=True, capture_output=True, text=True, timeout=15)

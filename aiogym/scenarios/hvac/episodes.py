@@ -5,6 +5,7 @@ import numpy as np
 
 from aiogym.core.specs import Benchmark, EpisodeSpec
 from aiogym.scenarios._boundary import forward_preroll
+from aiogym.scenarios._episodes import tracking_episode
 from aiogym.scenarios._metrics import regulation_episode_metrics
 
 
@@ -27,18 +28,9 @@ def make_default_episode(model) -> EpisodeSpec:
 
 
 def _tracking_episode(model, rng) -> EpisodeSpec:
-    start = _sample_tracking_equilibrium(model, rng)
-    target = _sample_tracking_equilibrium(
-        model,
-        rng,
-        previous_reference=start["reference"],
-    )
-    return EpisodeSpec(
-        initial_state=start["state"],
-        initial_action=start["action"],
-        reference=target["reference"],
+    return tracking_episode(
+        model, rng, sample_equilibrium=_sample_tracking_equilibrium,
         horizon=_TRACKING_HORIZON,
-        disturbances=model.default_disturbances(),
     )
 
 

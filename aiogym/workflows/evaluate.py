@@ -17,7 +17,8 @@ from aiogym.core.rollout import rollout
 
 from ._metadata import environment_metadata
 
-EVALUATION_SCHEMA_VERSION = "aiogym.evaluation.v4"
+EVALUATION_SCHEMA_VERSION = "aiogym.evaluation.v5"
+DEFAULT_VALIDATION_SETTLING_FRACTION = 0.1
 
 
 def evaluate(
@@ -30,6 +31,14 @@ def evaluate(
 ) -> dict[str, Any]:
     """Evaluate ``policy`` without taking ownership of ``env``."""
 
+    result = _evaluate(env=env, policy=policy, seeds=seeds, max_steps=max_steps,
+                       include_trajectories=True)
+    if output is not None:
+        write_json(output, result)
+    return result
+
+
+def _evaluate(*, env, policy, seeds, max_steps=None, include_trajectories):
     resolved_seeds = _validate_seeds(seeds)
     rollout_limit = _max_steps(max_steps)
     resolved_policy = (
@@ -87,7 +96,7 @@ def evaluate(
                 ),
                 "runtime_variation": jsonable(episode.reset_info["runtime_variation"]),
                 "metrics": metrics,
-                "trajectory": _trajectory(episode),
+                **({"trajectory": _trajectory(episode)} if include_trajectories else {}),
             }
         )
 
@@ -114,14 +123,13 @@ def evaluate(
         "policy": resolved_policy_metadata,
         "seeds": list(resolved_seeds),
         "max_steps": rollout_limit,
-        "trajectory_schema": _trajectory_schema(base_env, episodes),
         "ranking_metrics": [
             {
                 "name": name,
                 "direction": direction,
                 "aggregate": (
                     "mean"
-                    if name in {"unsafe_rate", "safe_completion", "settling_rate"}
+                    if name in {"unsafe_rate", "safe_completion", "settling_rate", "return"}
                     else "median"
                 ),
             }
@@ -129,12 +137,55 @@ def evaluate(
         ],
         "episodes": episodes,
         "return_distribution": [row["return"] for row in episodes],
-        "trajectory_summary": _trajectory_summary(episodes),
         "aggregate": aggregate,
     }
-    if output is not None:
-        write_json(output, result)
+    if include_trajectories:
+        result["trajectory_schema"] = _trajectory_schema(base_env, episodes)
+        result["trajectory_summary"] = _trajectory_summary(episodes)
     return result
+
+
+def _validation_summary(
+    episodes, *, control_dt, settling_fraction=DEFAULT_VALIDATION_SETTLING_FRACTION,
+):
+    """Summarize validated cases for checkpoint selection and its learning curve."""
+    returns, safe, successful = [], [], []
+    for episode in episodes:
+        metrics = episode["metrics"]
+        for name in ("constraint_violations", "settling_time"):
+            if name not in metrics:
+                raise ValueError(f"validation episodes require metric {name!r}")
+            value = metrics[name]
+            if (
+                isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+            ):
+                raise ValueError(f"validation metric {name!r} must be a finite number")
+        if (
+            not 0 <= metrics["settling_time"] <= episode["length"] * control_dt
+            or metrics["constraint_violations"] < 0
+        ):
+            raise ValueError("validation settling time or violation count is invalid")
+        horizon = episode["episode_spec"]["horizon"]
+        completed = (
+            not episode["terminated"] and episode["truncated"]
+            and episode["length"] == horizon
+            and metrics["constraint_violations"] == 0
+        )
+        safe.append(completed)
+        successful.append(
+            completed and metrics["settling_time"]
+            <= (horizon - math.ceil(horizon * settling_fraction)) * control_dt
+        )
+        returns.append(episode["return"])
+    return {
+        "mean_return": float(np.mean(returns)),
+        "median_return": float(np.median(returns)),
+        "p10_return": float(np.quantile(returns, 0.1)),
+        "safe_completion": float(np.mean(safe)),
+        "control_success": float(np.mean(successful)),
+        "episode_length": float(np.mean([episode["length"] for episode in episodes])),
+    }
 
 
 def _episode_metrics(metric_function, env, episode) -> dict[str, float]:

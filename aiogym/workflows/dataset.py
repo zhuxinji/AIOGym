@@ -1,6 +1,7 @@
 """Small episode-oriented NumPy dataset format."""
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
@@ -9,10 +10,10 @@ from typing import Any
 
 import numpy as np
 
-from aiogym.core.io import write_json
+from aiogym.core.io import canonical_json_bytes, write_json
 
 
-DATASET_SCHEMA_VERSION = "aiogym.dataset.v2"
+DATASET_SCHEMA_VERSION = "aiogym.dataset.v3"
 REQUIRED_ARRAYS = (
     "observation",
     "action",
@@ -80,6 +81,7 @@ class DatasetWriter:
             "transition_count": 0,
             "episodes": [],
         }
+        self.metadata["content_sha256"] = _metadata_digest(self.metadata)
         write_json(self.metadata_path, self.metadata)
 
     def append(
@@ -93,6 +95,10 @@ class DatasetWriter:
         expected = len(self.metadata["episodes"])
         if isinstance(index, bool) or not isinstance(index, int) or index != expected:
             raise ValueError(f"episode index must be contiguous; expected {expected}")
+        extra = {} if metadata is None else dict(metadata)
+        reserved = {"episode_id", "episode_index", "file", "seed", "transitions", "sha256"}
+        if reserved.intersection(extra):
+            raise ValueError("episode metadata cannot override identity fields")
         normalized = _validated_arrays(arrays)
         episode_id = f"episode-{index:06d}"
         filename = f"{episode_id}.npz"
@@ -106,25 +112,29 @@ class DatasetWriter:
             "file": filename,
             "seed": _nonnegative_int("seed", seed),
             "transitions": int(normalized["reward"].shape[0]),
-            **({} if metadata is None else dict(metadata)),
+            "sha256": _arrays_digest(normalized),
+            **extra,
         }
         self.metadata["episodes"].append(record)
         self.metadata["episode_count"] = len(self.metadata["episodes"])
         self.metadata["transition_count"] = sum(
             row["transitions"] for row in self.metadata["episodes"]
         )
+        self.metadata["content_sha256"] = _metadata_digest(self.metadata)
         write_json(self.metadata_path, self.metadata, overwrite=True)
         return record
 
 
 class DatasetReader:
-    """Read the current dataset format directly."""
+    """Read Dataset v2/v3, optionally caching validated episodes for training."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, cache_episodes: bool = False) -> None:
         self.path = Path(path)
         self.metadata = _read_metadata(self.path / "metadata.json")
         self._records = tuple(self.metadata["episodes"])
         self._by_id = {row["episode_id"]: row for row in self._records}
+        self._cache = {} if cache_episodes else None
+        self._episode_hashes: dict[str, str] = {}
 
     def __len__(self) -> int:
         return len(self._records)
@@ -138,6 +148,8 @@ class DatasetReader:
 
     def load_episode(self, episode: int | str) -> DatasetEpisode:
         record = self._record(episode)
+        if self._cache is not None and record["episode_id"] in self._cache:
+            return self._cache[record["episode_id"]]
         path = self.path / record["file"]
         if not path.is_file():
             raise FileNotFoundError(f"dataset episode file is missing: {path}")
@@ -148,16 +160,42 @@ class DatasetReader:
             raise ValueError(
                 f"dataset episode transition count is inconsistent: {record['episode_id']}"
             )
+        digest = _arrays_digest(arrays)
+        if "sha256" in record and record["sha256"] != digest:
+            raise ValueError(f"dataset episode content digest mismatch: {record['episode_id']}")
+        self._episode_hashes[record["episode_id"]] = digest
         for array in arrays.values():
             array.setflags(write=False)
         episode_metadata = {
             key: value for key, value in record.items() if key != "file"
         }
-        return DatasetEpisode(metadata=episode_metadata, arrays=arrays)
+        result = DatasetEpisode(metadata=episode_metadata, arrays=arrays)
+        if self._cache is not None:
+            self._cache[record["episode_id"]] = result
+        return result
+
+    @property
+    def content_sha256(self) -> str:
+        """Identify metadata and validated array content, independent of directory/ZIP encoding."""
+        for _ in self.iter_episodes():
+            pass
+        metadata = {
+            **self.metadata,
+            "episodes": [
+                {**record, "sha256": self._episode_hashes[record["episode_id"]]}
+                for record in self._records
+            ],
+        }
+        return _metadata_digest(metadata)
 
     def iter_episodes(self) -> Iterator[DatasetEpisode]:
         for index in range(len(self)):
             yield self.load_episode(index)
+
+    def clear_cache(self) -> None:
+        """Release episode arrays after a consumer has built its training buffers."""
+        if self._cache is not None:
+            self._cache.clear()
 
     def _record(self, episode: int | str) -> Mapping[str, Any]:
         if isinstance(episode, bool):
@@ -184,11 +222,37 @@ def _validated_arrays(arrays: Mapping[str, Any]) -> dict[str, np.ndarray]:
     for name, array in normalized.items():
         if array.ndim == 0 or array.shape[0] != length:
             raise ValueError(f"dataset array {name!r} has inconsistent length")
-        if array.dtype == object:
-            raise TypeError(f"dataset array {name!r} must not use object dtype")
+        if array.dtype.kind not in "biuf":
+            raise TypeError(f"dataset array {name!r} must use real numeric or boolean dtype")
+        if not np.isfinite(array).all():
+            raise ValueError(f"dataset array {name!r} must contain finite values")
+    scalar_fields = {
+        "reward", "terminated", "truncated", "step_index", "physical_time",
+        "minimum_safety_margin",
+    }
+    for name in REQUIRED_ARRAYS:
+        expected_ndim = 1 if name in scalar_fields else 2
+        if normalized[name].ndim != expected_ndim:
+            raise ValueError(f"dataset array {name!r} must have {expected_ndim} dimensions")
+    for group in (
+        ("observation", "next_observation"),
+        ("action", "commanded_action", "channel_action", "applied_action"),
+        ("reference", "transition_reference"),
+        ("disturbance", "transition_disturbance"),
+    ):
+        if any(normalized[name].shape != normalized[group[0]].shape for name in group[1:]):
+            raise ValueError(f"dataset array shapes must match for {group}")
+    for name in ("terminated", "truncated"):
+        if normalized[name].dtype.kind != "b":
+            raise TypeError(f"dataset {name} must use boolean dtype")
+        if normalized[name][:-1].any():
+            raise ValueError("dataset episode cannot contain transitions after termination or truncation")
+    if normalized["step_index"].dtype.kind not in "iu":
+        raise TypeError("dataset step_index must use integer dtype")
     if not np.array_equal(normalized["step_index"], np.arange(length)):
         raise ValueError("dataset step_index must be contiguous from zero")
-    if np.any(np.diff(normalized["physical_time"]) <= 0):
+    times = normalized["physical_time"]
+    if times[0] <= 0 or np.any(times[1:] <= times[:-1]):
         raise ValueError("dataset physical_time must be strictly increasing")
     return normalized
 
@@ -200,7 +264,7 @@ def _read_metadata(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"), parse_constant=reject_constant)
     if not isinstance(payload, dict):
         raise ValueError("dataset metadata must contain a JSON object")
-    if payload.get("schema_version") != DATASET_SCHEMA_VERSION:
+    if payload.get("schema_version") not in {"aiogym.dataset.v2", DATASET_SCHEMA_VERSION}:
         raise ValueError(f"unsupported dataset schema; expected {DATASET_SCHEMA_VERSION}")
     for field in (
         "environment",
@@ -242,7 +306,37 @@ def _read_metadata(path: Path) -> dict[str, Any]:
         raise ValueError("dataset episode_count is inconsistent")
     if payload["transition_count"] != transition_count:
         raise ValueError("dataset transition_count is inconsistent")
+    _nonnegative_int("base_seed", payload["base_seed"])
+    for field in ("episode_count", "transition_count"):
+        _nonnegative_int(field, payload[field])
+    if payload["schema_version"] == DATASET_SCHEMA_VERSION:
+        for record in episodes:
+            digest = record.get("sha256")
+            if (
+                not isinstance(digest, str) or len(digest) != 64
+                or any(c not in "0123456789abcdef" for c in digest)
+            ):
+                raise ValueError("dataset episode requires a SHA-256 content digest")
+        if payload.get("content_sha256") != _metadata_digest(payload):
+            raise ValueError("dataset metadata content digest mismatch")
     return payload
+
+
+def _arrays_digest(arrays: Mapping[str, np.ndarray]) -> str:
+    digest = hashlib.sha256()
+    for name in sorted(arrays):
+        array = np.ascontiguousarray(arrays[name])
+        digest.update(canonical_json_bytes({
+            "name": name, "dtype": array.dtype.str, "shape": array.shape,
+        }))
+        digest.update(array.tobytes())
+    return digest.hexdigest()
+
+
+def _metadata_digest(metadata: Mapping[str, Any]) -> str:
+    return hashlib.sha256(canonical_json_bytes({
+        key: value for key, value in metadata.items() if key != "content_sha256"
+    })).hexdigest()
 
 
 def _nonnegative_int(name: str, value: int) -> int:

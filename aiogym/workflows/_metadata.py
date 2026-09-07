@@ -39,6 +39,8 @@ def environment_metadata(env):
         metadata["disturbance_schedule"] = jsonable(
             config["disturbance_schedule"]
         )
+    if "disturbance_overrides" in config:
+        metadata["disturbance_overrides"] = jsonable(config["disturbance_overrides"])
     return metadata
 
 

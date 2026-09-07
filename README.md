@@ -47,35 +47,37 @@ To include reinforcement-learning training, use this instead:
 pip install '.[rl]'
 ```
 
-## Five-minute start
+## Start with heater
 
-Choose a scenario, reset it, and take one action:
+Run a small PID/MPC comparison from the repository root:
 
-```python
-import aiogym
-
-scenarios = aiogym.list_scenarios()
-scenario = scenarios[0]  # Replace this with any returned scenario id.
-
-env = aiogym.make_env(scenario)
-observation, info = env.reset(seed=0)
-observation, reward, terminated, truncated, info = env.step(
-    env.action_space.sample()
-)
-env.close()
+```bash
+aiogym compare heater --benchmark tracking --controllers pid mpc --seeds 0 1 2 --output runs/heater/demos/pid-mpc
 ```
 
-Continue with the [Quickstart](docs/quickstart.md) to compare PID and MPC,
-collect a Dataset, train a learned policy, continue from a checkpoint, and read
-the generated results.
+Open `runs/heater/demos/pid-mpc/comparison.svg`. The same directory contains
+`comparison.json` for metrics and `trajectories.npz` for numeric trajectories.
+Choose a new output directory when repeating this example.
+
+With the RL dependencies installed, check the training workflow with:
+
+```bash
+aiogym train heater sac --steps 1000 --record-every 250 --no-evaluation
+aiogym status
+```
+
+This is a workflow smoke run. Use the [Quickstart](docs/quickstart.md) to move
+on to validation, best-checkpoint comparison, and a longer training budget.
+Online SAC, DDPG, PPO, and TD3 training does not need a Dataset.
 
 ## Documentation
 
-- [Quickstart](docs/quickstart.md): the complete Python workflow from
-  environment creation through collection, training, continuation, and
-  comparison;
-- [Features and workflow](docs/architecture.md): what ordinary environments,
-  randomized training, fixed Benchmarks, checkpoints, and result files mean;
+- [Quickstart](docs/quickstart.md): install, see a heater comparison, run a
+  short training job, then start a validated experiment;
+- [Task guide](docs/workflows.md): parallel training, status, continuation,
+  Python examples, optional Dataset/BC/RLPD workflows, and output paths;
+- [Concepts and reference](docs/architecture.md): environments, fixed Benchmarks,
+  checkpoint selection, metrics, chart interpretation, and artifact contracts;
 - [RLPD training](docs/rlpd.md): Dataset requirements and offline-to-online
   training;
 - the scenario table above links directly to every process guide.
@@ -84,5 +86,5 @@ Short training runs verify that the workflow executes; they are not performance
 evidence. For a meaningful comparison, use a fixed Benchmark, identical seeds,
 and report safety separately from tracking quality.
 
-The same workflows are also available through the optional `aiogym` command.
-Use `aiogym --help` when shell automation is more convenient.
+Use `aiogym --help` to discover commands. The same workflows are available
+through the Python API for integration with your own code.

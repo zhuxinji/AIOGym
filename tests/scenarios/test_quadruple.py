@@ -29,18 +29,45 @@ def test_quadruple_default_training_episode_tracks_one_feasible_target_at_reset(
         env.close()
 
 
-def test_quadruple_observation_contains_normalized_setpoint_not_error():
-    env = make_env("quadruple")
+@pytest.mark.parametrize("randomize", (False, True))
+def test_quadruple_observation_contains_normalized_setpoints_and_errors(randomize):
+    env = make_env("quadruple", randomize=randomize)
     try:
-        observation, _ = env.reset(seed=0)
-        initial_reference = np.asarray(env.unwrapped.default_episode.reference)
-        assert observation[-2:] == pytest.approx(initial_reference / 20.0)
+        observation, info = env.reset(seed=0)
+        initial_reference = np.asarray(info["episode_spec"]["reference"])
+        assert env.observation_space.shape == (8,)
+        assert env.observation_space.low[-2:] == pytest.approx([-1.0, -1.0])
+        assert env.observation_space.high[-2:] == pytest.approx([1.0, 1.0])
+        action = np.asarray([0.1, 0.5], dtype=np.float32)
+        for _ in range(2):
+            assert env.observation_space.contains(observation)
+            assert observation[4:6] == pytest.approx(initial_reference / 20.0)
+            expected_error = (np.asarray(info["y"]) - initial_reference) / 20.0
+            assert observation[6:] == pytest.approx(expected_error, abs=6e-8)
+            measurement = env.unwrapped.model.measurement_from_observation(observation)
+            assert measurement["y"] == pytest.approx(info["y"])
+            observation, _, terminated, truncated, info = env.step(action)
+            assert not terminated
+            assert not truncated
+    finally:
+        env.close()
 
+
+@pytest.mark.parametrize("noise", (True, {"std": 5.0, "bias_std": 0.0}))
+def test_quadruple_noisy_errors_use_returned_measurements(noise):
+    env = make_env("quadruple", randomize=True, noise=noise)
+    try:
+        observation, info = env.reset(seed=17)
         action = np.asarray(env.unwrapped.model.default_action(), dtype=np.float32)
-        observation, _, terminated, truncated, _ = env.step(action)
-        assert not terminated
-        assert not truncated
-        assert observation[-2:] == pytest.approx(initial_reference / 20.0)
+        for _ in range(2):
+            assert env.observation_space.contains(observation)
+            np.testing.assert_allclose(
+                observation[6:], observation[:2] - observation[4:6], rtol=0, atol=6e-8
+            )
+            np.testing.assert_array_equal(
+                info["runtime_variation"]["observation_bias"][6:], [0.0, 0.0]
+            )
+            observation, _, _, _, info = env.step(action)
     finally:
         env.close()
 

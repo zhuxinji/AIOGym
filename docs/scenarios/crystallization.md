@@ -139,7 +139,7 @@ result = aiogym.compare_policies(
 env.close()
 ```
 
-Use the common [Quickstart](../quickstart.md) for Dataset collection and RL
+Use the [task guide](../workflows.md) for Dataset collection and RL
 training with `scenario = "crystallization"`. Read current controller results
 from the generated `runs/crystallization/benchmarks/<benchmark>/comparison.json`
 instead of treating a copied score as part of the model definition.

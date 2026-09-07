@@ -116,12 +116,12 @@ def test_randomized_validation_cases_are_fixed_by_seed_for_every_scenario(scenar
     ("scenario", "expected_observation", "expected_action"),
     [
         ("cascade", (16,), (7,)),
-        ("cstr", (4,), (2,)),
+        ("cstr", (6,), (2,)),
         ("crystallization", (7,), (1,)),
         ("extraction", (11,), (2,)),
         ("heater", (5,), (2,)),
         ("hvac", (4,), (2,)),
-        ("quadruple", (6,), (2,)),
+        ("quadruple", (8,), (2,)),
         ("three_tank", (10,), (4,)),
     ],
 )
@@ -354,7 +354,7 @@ def test_training_disturbance_events_fit_unified_tracking_horizon(scenario):
             spec = info["episode_spec"]
             schedule = spec["disturbance_schedule"]
             assert schedule
-            assert max(int(step) for step in schedule) < spec["horizon"]
+            assert max(int(step) for step in schedule) < spec["horizon"] - int(np.ceil(spec["horizon"] * 0.1))
     finally:
         env.close()
 
@@ -393,3 +393,39 @@ def test_benchmarks_use_fixed_parameters_and_declared_reward(scenario):
             assert dict(env.unwrapped.model.resolved_parameters) == expected_parameters
         finally:
             env.close()
+
+
+def test_latest_formal_disturbances_leave_a_recovery_interval():
+    import math
+
+    class LatestEventRng:
+        def __init__(self):
+            self.rng = np.random.default_rng(0)
+
+        def integers(self, low, high=None):
+            return (low if high is None else high) - 1
+
+        def __getattr__(self, name):
+            return getattr(self.rng, name)
+
+    # Exercise upper bounds, including rare event times absent from seeds 0--19.
+    for scenario in list_scenarios():
+        env = make_env(scenario, benchmark="disturbance-rejection")
+        try:
+            episode = env.unwrapped.benchmark.episode_factory(env.unwrapped.model, LatestEventRng())
+            end = max(episode.disturbance_schedule)
+            assert end < episode.horizon - math.ceil(episode.horizon * 0.1), scenario
+            if scenario in {"cstr", "extraction", "quadruple"}:
+                assert end <= int(episode.horizon * 0.8), scenario
+        finally:
+            env.close()
+
+        training_env = make_env(scenario, randomize=True)
+        try:
+            _, info = training_env.reset(seed=0)
+            base = training_env.unwrapped
+            schedule = base.scenario.sample_training_disturbance(base.model, LatestEventRng())
+            horizon = info["episode_spec"]["horizon"]
+            assert max(schedule) < horizon - math.ceil(horizon * 0.1), scenario
+        finally:
+            training_env.close()

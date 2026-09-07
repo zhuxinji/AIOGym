@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import aiogym
@@ -9,7 +10,12 @@ import aiogym.workflows
 
 
 def test_public_api_is_scenario_reward_oriented_and_small():
-    assert aiogym.__version__ == "0.30.0"
+    for name in ("collect", "compare_policies", "evaluate", "train", "load_policy", "plot_training_curve"):
+        assert getattr(aiogym, name) is getattr(aiogym.workflows, name)
+    parameters = inspect.signature(aiogym.train).parameters
+    assert parameters["steps"].default == 500_000
+    assert parameters["evaluate_every"].default == 5_000
+    assert parameters["record_every"].default == 500
     assert set(aiogym.__all__) == {
         "__version__",
         "AlgorithmBackend",

@@ -45,6 +45,7 @@ def test_data_train_load_evaluate_and_compare_pipeline(
         )
         trained = aiogym.train(
             env=env,
+            evaluate_every=None,
             algorithm="sac",
             steps=2,
             seed=4,

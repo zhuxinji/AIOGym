@@ -9,6 +9,7 @@ from collections.abc import Mapping
 import numpy as np
 
 from ._svg import map_value, plot_range
+from .evaluate import DEFAULT_VALIDATION_SETTLING_FRACTION, _validation_summary
 
 
 _COLORS = (
@@ -25,345 +26,317 @@ _COLORS = (
 
 def render_trajectory_svg(result, *, title: str | None = None) -> str:
     labels = tuple(result["evaluations"])
+    settling_fraction = result.get("settling_fraction", DEFAULT_VALIDATION_SETTLING_FRACTION)
     schema = result["trajectory_schema"]
     time_unit = str(schema["time_unit"])
-    resolved_title = (
-        f"{result['environment']['scenario']} policy comparison"
-        if title is None
-        else str(title)
+    resolved_title = title or (
+        f"{result['environment']['scenario']} / "
+        f"{result['environment']['benchmark'] or result['environment']['reward']} comparison"
     )
-    temperature_indices = tuple(
-        index
-        for index, row in enumerate(schema["output"])
-        if row.get("unit") == "degC"
+    baseline = next(
+        (label for label in labels if result["evaluations"][label]["policy"].get("id") == "pid"),
+        labels[0],
     )
+    paired_labels = tuple(label for label in labels if label != baseline)
+    episodes = {
+        label: {episode["seed"]: episode for episode in result["evaluations"][label]["episodes"]}
+        for label in labels
+    }
+    case_summaries = {
+        label: {
+            seed: _validation_summary(
+                [episode], control_dt=result["environment"]["control_dt"],
+                settling_fraction=settling_fraction,
+            ) if {
+                "constraint_violations", "settling_time"
+            } <= episode["metrics"].keys() else None
+            for seed, episode in cases.items()
+        }
+        for label, cases in episodes.items()
+    }
+    temperature_indices = [
+        index for index, row in enumerate(schema["output"]) if row.get("unit") == "degC"
+    ]
     temperature_limits = None
     if temperature_indices:
-        temperature_values = []
+        values = []
         for label in labels:
             trajectory = _plotted_trajectory(result, label)
-            output = _finite_array("trajectory output", trajectory["output"])
-            for index in temperature_indices:
-                temperature_values.extend(output[:, index].tolist())
-        reference = _finite_array(
-            "trajectory reference",
-            _plotted_trajectory(result, labels[0])["reference"],
+            values.extend(np.asarray(trajectory["output"])[:, temperature_indices].ravel())
+        values.extend(
+            np.asarray(_plotted_trajectory(result, labels[0])["reference"])[:, temperature_indices].ravel()
         )
-        for index in temperature_indices:
-            temperature_values.extend(reference[:, index].tolist())
-        temperature_limits = _plot_range(
-            temperature_values,
-            include_zero=False,
+        temperature_limits = _plot_range(values, include_zero=False)
+    output_panels = [
+        _series_panel(
+            result, labels, title=f"Output: {_schema_label(row)}",
+            field="output", index=index, reference_field="reference",
+            y_limits=_schema_bounds(row) if "level" in row["name"].lower()
+            else temperature_limits if index in temperature_indices else None,
         )
-    output_panels = []
-    for index, row in enumerate(schema["output"]):
-        if "level" in str(row["name"]).lower():
-            y_limits = _schema_bounds(row)
-        elif index in temperature_indices:
-            y_limits = temperature_limits
-        else:
-            y_limits = None
-        output_panels.append(
-            _series_panel(
-                result,
-                labels,
-                title=f"Output: {_schema_label(row)}",
-                field="output",
-                index=index,
-                reference_field="reference",
-                y_limits=y_limits,
-            )
+        for index, row in enumerate(schema["output"])
+    ]
+    action_panels = [
+        _series_panel(
+            result, labels, title=f"Applied action: {_schema_label(row)}",
+            field="applied_action", index=index, y_limits=_schema_bounds(row),
         )
-    action_panels = []
-    for index, row in enumerate(schema["action"]):
-        action_panels.append(
-            _series_panel(
-                result,
-                labels,
-                title=f"Applied action: {_schema_label(row)}",
-                field="applied_action",
-                index=index,
-                y_limits=_schema_bounds(row),
-            )
-        )
-    action_panels.append(
-        _boundary_distance_panel(result, labels, schema, time_unit=time_unit)
-    )
+        for index, row in enumerate(schema["action"])
+    ]
     disturbance_panels = []
     first_trajectory = _plotted_trajectory(result, labels[0])
     for name in schema["disturbance_names"]:
-        values = _mapping_values(
-            first_trajectory["disturbance"],
-            name,
-        )
-        if values.size and float(np.max(values) - np.min(values)) > 1e-12:
-            disturbance_panels.append(
-                _single_series_panel(
-                    result,
-                    labels[0],
-                    title=f"Disturbance: {name}",
-                    field="disturbance",
-                    mapping_name=name,
-                    y_limits=_disturbance_y_limits(values),
-                )
-            )
-
-    for panel in (*output_panels, *action_panels, *disturbance_panels):
-        panel["time_unit"] = time_unit
-
-    width = 1440
-    header_height = 100
-    panel_height = 225
-    return_panel_height = max(285, 100 + 34 * len(labels))
-    panel_rows = max(len(output_panels), len(action_panels))
-    compact_hydraulic_layout = (
-        not disturbance_panels
-        and result["environment"]["scenario"] == "three_tank"
-        and result["environment"]["benchmark"]
-        in {"tracking", "boundary-safety"}
-        and len(output_panels) == 3
-        and len(action_panels) == 5
-    )
-    compact_single_output_layout = (
-        not disturbance_panels
-        and len(output_panels) == 1
-        and len(action_panels) == 3
-    )
-    compact_cascade_layout = (
-        result["environment"]["scenario"] == "cascade"
-        and len(output_panels) == 6
-        and len(action_panels) == 8
-    )
-    cascade_panel_groups = (
-        *((disturbance_panels,) if disturbance_panels else ()),
-        output_panels[:3],
-        output_panels[3:],
-        action_panels[:4],
-        action_panels[4:7],
-        action_panels[7:],
-    )
-    if compact_cascade_layout:
-        height = (
-            header_height
-            + panel_height * len(cascade_panel_groups)
-            + return_panel_height
-        )
+        values = _mapping_values(first_trajectory["disturbance"], name)
+        if values.size and float(np.ptp(values)) > 1e-12:
+            disturbance_panels.append(_single_series_panel(
+                result, labels[0], title=f"Disturbance: {name}",
+                field="disturbance", mapping_name=name,
+                y_limits=_disturbance_y_limits(values),
+            ))
+    # Preserve physical-role grouping for the multi-tank interfaces.
+    groups = [disturbance_panels[i:i + 3] for i in range(0, len(disturbance_panels), 3)]
+    if result["environment"]["scenario"] == "cascade":
+        groups.extend((output_panels[:3], output_panels[3:], action_panels[:4], action_panels[4:]))
+    elif len(output_panels) == 3 and len(action_panels) == 4:
+        groups.extend((output_panels, action_panels))
+    elif len(output_panels) == 1:
+        groups.extend((output_panels, action_panels))
     elif disturbance_panels:
-        output_panels.sort(
-            key=lambda panel: "level" not in panel["title"].lower()
-        )
-        compact_groups = (disturbance_panels, output_panels, action_panels)
-        compact_rows = sum(
-            math.ceil(len(panels) / min(3, len(panels)))
-            for panels in compact_groups
-        )
-        height = header_height + panel_height * compact_rows + return_panel_height
-    elif compact_hydraulic_layout or compact_single_output_layout:
-        height = header_height + 3 * panel_height + return_panel_height
+        for panels in (output_panels, action_panels):
+            groups.extend(panels[i:i + 3] for i in range(0, len(panels), 3))
     else:
-        height = header_height + panel_height * panel_rows + return_panel_height
+        groups.extend([
+            output_panels[index:index + 1] + action_panels[index:index + 1]
+            for index in range(max(len(output_panels), len(action_panels)))
+        ])
+
+    seeds = result["seeds"]
+    # Keep plot geometry intact inside the inset section bodies.
+    width = max(1440, 360 + 150 * len(labels))
+    canvas_width = width + 88
+    header_height = max(128, 76 + 26 * math.ceil((len(labels) + 1) / 4))
+    summary_top = header_height + 225 * len(groups)
+    paired_top = summary_top + 220
+    height = paired_top + (312 + 48 * len(paired_labels) if paired_labels else 120)
+    sections = [
+        (header_height, "Shared-case tracking" if paired_labels else "Case tracking",
+         f"Seed {result['trajectory_seed']} · outputs, references and applied actions"),
+        (summary_top + 78, "Absolute performance", f"All {len(seeds)} evaluation cases"),
+    ]
     parts = [
         '<?xml version="1.0" encoding="UTF-8"?>',
-        (
-            f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" '
-            f'height="{height}" viewBox="0 0 {width} {height}">'
-        ),
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{canvas_width}" height="{height}" viewBox="0 0 {canvas_width} {height}">',
         "<style>",
         "text{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;fill:#202124}",
-        ".title{font-size:24px;font-weight:650}.panel-title{font-size:15px;font-weight:600}",
+        ".title{font-size:34px;font-weight:700}.panel-title{font-size:15px;font-weight:600}",
         ".axis{stroke:#5f6368;stroke-width:1}.grid{stroke:#dadce0;stroke-width:1}",
         ".tick{font-size:11px;fill:#5f6368}.legend{font-size:12px}",
+        ".header-legend{font-size:14px;font-weight:550}",
+        ".section{font-size:24px;font-weight:700;fill:#263649}.body{font-size:14px}",
+        ".section-number{font-size:18px;font-weight:650;fill:#6d7f92}",
+        ".section-divider{stroke:#8a99aa;stroke-width:2}",
+        ".metric{font-size:16px;font-variant-numeric:tabular-nums}",
         "</style>",
         '<rect width="100%" height="100%" fill="#ffffff"/>',
-        (
-            f'<text class="title" x="64" y="38">'
-            f"{html.escape(resolved_title)}"
-            "</text>"
-        ),
-        (
-            f'<text class="tick" x="64" y="62">trajectory seed: '
-            f"{html.escape(str(result['trajectory_seed']))}; return seeds: "
-            f"{html.escape(', '.join(str(seed) for seed in result['seeds']))}"
-            "</text>"
-        ),
+        f'<text class="title" x="64" y="60">{html.escape(resolved_title.upper())}</text>',
+        f'<text class="tick" x="64" y="96">trajectory seed: {result["trajectory_seed"]}; evaluation cases: {len(seeds)}; '
+        f'baseline: {html.escape(baseline) if paired_labels else "single policy"}</text>',
     ]
-    legend_x = 720
-    for index, label in enumerate(labels):
-        x = legend_x + (index % 4) * 145
-        y = 34 + (index // 4) * 22
-        color = _COLORS[index % len(_COLORS)]
-        parts.extend(
-            [
-                f'<line x1="{x}" y1="{y}" x2="{x + 24}" y2="{y}" stroke="{color}" stroke-width="3"/>',
-                f'<text class="legend" x="{x + 30}" y="{y + 4}">{html.escape(label)}</text>',
-            ]
-        )
-    reference_index = len(labels)
-    reference_x = legend_x + (reference_index % 4) * 145
-    reference_y = 34 + (reference_index // 4) * 22
-    parts.extend(
-        [
-            f'<line x1="{reference_x}" y1="{reference_y}" x2="{reference_x + 24}" y2="{reference_y}" stroke="#111111" stroke-width="2" stroke-dasharray="7 5"/>',
-            f'<text class="legend" x="{reference_x + 30}" y="{reference_y + 4}">reference</text>',
-        ]
+    for index, label in enumerate((*labels, "reference")):
+        x = width - 664 + index % 4 * 165
+        y = 76 + index // 4 * 26
+        color = _COLORS[index % len(_COLORS)] if index < len(labels) else "#111111"
+        dash = ' stroke-dasharray="7 5"' if index == len(labels) else ""
+        parts.extend((
+            f'<line x1="{x}" y1="{y}" x2="{x + 28}" y2="{y}" stroke="{color}" stroke-width="3.5"{dash}/>',
+            f'<text class="header-legend" x="{x + 36}" y="{y + 5}">{html.escape(label)}</text>',
+        ))
+    parts.append('<g data-section="tracking" transform="translate(56 48)">')
+    panel_index = 0
+    for row, panels in enumerate(groups):
+        gap = 24 if len(panels) == 4 else 48
+        panel_width = (width - 116 - gap * (len(panels) - 1)) / len(panels)
+        for column, panel in enumerate(panels):
+            panel["time_unit"] = time_unit
+            left = 76.0 + column * (panel_width + gap)
+            parts.extend(_draw_series_panel(
+                panel, header_height + row * 225, panel_index,
+                left=left, right=left + panel_width,
+            ))
+            panel_index += 1
+
+    parts.extend((
+        '</g>',
+        '<g data-section="summary" transform="translate(56 102)">',
+        f'<rect x="64" y="{summary_top + 44}" width="{width - 104}" height="145" rx="8" fill="#f5f7fa"/>',
+    ))
+    metric_labels = (
+        ("safe_completion", "Safe full-horizon completion"),
+        ("control_success", f"Control success (last {settling_fraction:.0%} of steps)"),
+        ("mean_return", "Mean return (higher is better)"),
     )
-    if compact_cascade_layout:
-        group_top = header_height
-        panel_index = 0
-        grid_left = 76.0
-        grid_right = float(width - 40)
-        for panels in cascade_panel_groups:
-            columns = len(panels)
-            grid_gap = 24.0 if columns == 4 else 48.0
-            panel_width = (
-                grid_right - grid_left - grid_gap * (columns - 1)
-            ) / columns
-            for column, panel in enumerate(panels):
-                left = grid_left + column * (panel_width + grid_gap)
-                parts.extend(
-                    _draw_series_panel(
-                        panel,
-                        group_top,
-                        panel_index,
-                        left=left,
-                        right=left + panel_width,
-                    )
-                )
-                panel_index += 1
-            group_top += panel_height
-        return_top = group_top
-    elif disturbance_panels:
-        group_top = header_height
-        panel_index = 0
-        grid_left = 76.0
-        grid_right = float(width - 40)
-        grid_gap = 48.0
-        for panels in compact_groups:
-            columns = min(3, len(panels))
-            panel_width = (
-                grid_right - grid_left - grid_gap * (columns - 1)
-            ) / columns
-            for index, panel in enumerate(panels):
-                row, column = divmod(index, columns)
-                left = grid_left + column * (panel_width + grid_gap)
-                right = left + panel_width
-                parts.extend(
-                    _draw_series_panel(
-                        panel,
-                        group_top + row * panel_height,
-                        panel_index,
-                        left=left,
-                        right=right,
-                    )
-                )
-                panel_index += 1
-            group_top += math.ceil(len(panels) / columns) * panel_height
-        return_top = group_top
-    elif compact_hydraulic_layout:
-        grid_left = 76.0
-        grid_right = float(width - 40)
-        grid_gap = 48.0
-        panel_index = 0
-        output_width = (
-            grid_right - grid_left - 2 * grid_gap
-        ) / len(output_panels)
-        for column, panel in enumerate(output_panels):
-            left = grid_left + column * (output_width + grid_gap)
-            parts.extend(
-                _draw_series_panel(
-                    panel,
-                    header_height,
-                    panel_index,
-                    left=left,
-                    right=left + output_width,
-                )
+    for row, (_key, label) in enumerate(metric_labels):
+        parts.append(f'<text class="body" x="80" y="{summary_top + 102 + row * 35}">{label}</text>')
+    column_width = (width - 370) / len(labels)
+    for index, label in enumerate(labels):
+        x = 330 + (index + 0.5) * column_width
+        color = _COLORS[index % len(_COLORS)]
+        parts.append(f'<text class="body" x="{x}" y="{summary_top + 68}" text-anchor="middle" '
+                     f'style="fill:{color};font-weight:650">{html.escape(label)}</text>')
+        for row, (key, _caption) in enumerate(metric_labels):
+            if key == "mean_return":
+                value = result["evaluations"][label]["aggregate"]["episode_return"]["mean"]
+                display = _number(value)
+            elif all(case is not None for case in case_summaries[label].values()):
+                count = sum(case[key] for case in case_summaries[label].values())
+                value = count / len(seeds)
+                display = f"{value:.0%} ({int(count)}/{len(seeds)})"
+            else:
+                value = None
+                display = "N/A"
+            parts.append(
+                f'<text class="metric" data-policy="{html.escape(label, quote=True)}" data-metric="{key}" '
+                f'data-value="{value}" x="{x}" y="{summary_top + 102 + row * 35}" text-anchor="middle">{display}</text>'
             )
-            panel_index += 1
-        actuator_panels = action_panels[:-1]
-        action_width = (
-            grid_right - grid_left - 3 * grid_gap
-        ) / len(actuator_panels)
-        for column, panel in enumerate(actuator_panels):
-            left = grid_left + column * (action_width + grid_gap)
-            parts.extend(
-                _draw_series_panel(
-                    panel,
-                    header_height + panel_height,
-                    panel_index,
-                    left=left,
-                    right=left + action_width,
+    parts.append(f'<text class="tick" x="76" y="{summary_top + 210}">'
+                 f'Safe = full horizon without violations; control success also holds every scenario settling tolerance for the last {settling_fraction:.0%} of planned control steps (rounded up). '
+                 'N/A = required metrics unavailable.</text></g>')
+
+    if paired_labels:
+        pairs = {}
+        excluded = {}
+        for label in paired_labels:
+            pairs[label], excluded[label] = [], []
+            for seed in seeds:
+                episode, reference = episodes[label][seed], episodes[baseline][seed]
+                stats, ref_stats = case_summaries[label][seed], case_summaries[baseline][seed]
+                if stats is None or ref_stats is None:
+                    excluded[label].append(f"seed {seed}: required control metrics unavailable")
+                elif not stats["safe_completion"] or not ref_stats["safe_completion"]:
+                    excluded[label].append(f"seed {seed}: unsafe or incomplete pair")
+                elif "tracking_ise" not in episode["metrics"] or "tracking_ise" not in reference["metrics"]:
+                    excluded[label].append(f"seed {seed}: tracking ISE unavailable")
+                elif reference["metrics"]["tracking_ise"] == 0:
+                    excluded[label].append(f"seed {seed}: ref=0, undefined ratio")
+                else:
+                    pairs[label].append((
+                        seed, episode["metrics"]["tracking_ise"] / reference["metrics"]["tracking_ise"],
+                    ))
+        all_values = [1.0, *(ratio for rows in pairs.values() for _seed, ratio in rows)]
+        logarithmic = min(all_values) > 0
+        if logarithmic:
+            lower, upper = math.log2(min(all_values)), math.log2(max(all_values))
+            span = upper - lower
+            if span == 0:
+                lower, upper = -1.0, 1.0
+                ticks = [0.5, 1.0, 2.0]
+            elif span >= 1:
+                lower, upper = min(-0.25, math.floor(lower)), max(0.25, math.ceil(upper))
+                stride = max(1, math.ceil((upper - lower) / 8))
+                ticks = sorted({1.0, *(2.0 ** power for power in range(
+                    math.ceil(lower), math.floor(upper) + 1, stride,
+                ))})
+            else:
+                padding = span * 0.12
+                lower, upper = lower - padding, upper + padding
+                ticks = sorted({1.0, *(2.0 ** value for value in np.linspace(lower, upper, 5))})
+                ticks = [tick for tick in ticks if tick == 1 or abs(math.log2(tick)) > (upper - lower) * 0.07]
+            axis_label = "Relative ISE · log scale"
+        else:
+            lower, upper = 0.0, max(all_values) * 1.05
+            ticks = sorted({1.0, *np.linspace(lower, upper, 5)})
+            # Zero is a valid cost, not a value to discard or replace with epsilon.
+            axis_label = "Relative ISE · linear scale (includes zero cost)"
+        sections.append((
+            paired_top + 128, f"Paired tracking cost vs {'PID' if baseline == 'pid' else baseline}",
+            f"{len(seeds)} cases · {axis_label} · largest ratio labeled",
+        ))
+        left, right = 190.0, float(width - 240)
+        precision = max(3, 2 - math.floor(math.log10(upper - lower)))
+        chart_top = paired_top + 71
+        bottom = chart_top + 48 * len(paired_labels)
+        pid_x = _map_x(0.0 if logarithmic else 1.0, lower, upper, left, right)
+        parts.extend((
+            '<g data-section="paired" transform="translate(56 155)">',
+            f'<text class="legend" x="{pid_x - 14}" y="{paired_top + 57}" text-anchor="end" style="fill:#237354">← Better</text>',
+            f'<text class="legend" x="{pid_x + 14}" y="{paired_top + 57}" style="fill:#9a5134">Worse →</text>',
+        ))
+        for tick in ticks:
+            x = _map_x(math.log2(tick) if logarithmic else tick, lower, upper, left, right)
+            stroke = "#5f6368" if tick == 1 else "#e9edf1"
+            dash = ' stroke-dasharray="4 4"' if tick == 1 else ""
+            parts.append(f'<line x1="{x}" x2="{x}" y1="{chart_top}" y2="{bottom}" stroke="{stroke}"{dash}/>')
+            # Keep nearly identical ratios legible and avoid overlapping zero/one ticks.
+            if tick != 1 and abs(x - pid_x) < 45:
+                continue
+            display = f"{tick:.{precision}g}" if logarithmic and upper - lower < 1 else _number(tick)
+            parts.append(f'<text class="legend" x="{x}" y="{bottom + 23}" text-anchor="middle">{display}×</text>')
+        for row, label in enumerate(paired_labels):
+            center = chart_top + (row + 0.5) * 48
+            color = _COLORS[labels.index(label) % len(_COLORS)]
+            rows = pairs[label]
+            omissions = excluded[label]
+            parts.extend((
+                f'<g data-policy="{html.escape(label, quote=True)}" data-valid-count="{len(rows)}" data-excluded-count="{len(omissions)}">',
+                f'<title>{html.escape("; ".join(omissions)) if omissions else "All cases included"}</title>',
+                f'<text class="body" x="76" y="{center + (0 if omissions else 5)}" style="fill:{color};font-weight:650">{html.escape(label)}</text>',
+            ))
+            if omissions:
+                parts.append(f'<text class="tick" x="76" y="{center + 15}">{len(rows)}/{len(seeds)} valid pairs</text>')
+            if not rows:
+                parts.extend((
+                    f'<text class="body" x="{left + 16}" y="{center + 5}" style="fill:#5f6368">N/A — no comparable pairs</text>',
+                    "</g>",
+                ))
+                continue
+            values = np.array([ratio for _seed, ratio in rows])
+            q1, median, q3 = np.quantile(values, [0.25, 0.5, 0.75], method="linear")
+            iqr = q3 - q1
+            within = values[(values >= q1 - 1.5 * iqr) & (values <= q3 + 1.5 * iqr)]
+            low, high = float(within.min()), float(within.max())
+            x_low, x_q1, x_median, x_q3, x_high = [
+                _map_x(math.log2(value) if logarithmic else value, lower, upper, left, right)
+                for value in (low, q1, median, q3, high)
+            ]
+            parts.extend((
+                f'<g data-box-policy="{html.escape(label, quote=True)}" data-q1="{q1:.15g}" data-median="{median:.15g}" data-q3="{q3:.15g}" data-whisker-low="{low:.15g}" data-whisker-high="{high:.15g}">',
+                f'<title>{html.escape(label)}: Q1={q1:.6g}×; median={median:.6g}×; Q3={q3:.6g}×; whiskers={low:.6g}–{high:.6g}×; {len(rows)} valid cases</title>',
+                f'<line x1="{x_low}" x2="{x_high}" y1="{center}" y2="{center}" stroke="{color}" stroke-width="1.7"/>',
+                f'<path d="M {x_low},{center - 7} V {center + 7} M {x_high},{center - 7} V {center + 7}" stroke="{color}" stroke-width="1.7"/>',
+                f'<rect x="{x_q1}" y="{center - 11}" width="{x_q3 - x_q1}" height="22" fill="{color}" fill-opacity="0.22" stroke="{color}" stroke-width="1.7"/>',
+                f'<line x1="{x_median}" x2="{x_median}" y1="{center - 11}" y2="{center + 11}" stroke="{color}" stroke-width="3"/>',
+                "</g>",
+            ))
+            worst = int(np.argmax(values))
+            for index, (seed, ratio) in enumerate(rows):
+                outlier = ratio < low or ratio > high
+                if not outlier and index != worst:
+                    continue
+                x = _map_x(math.log2(ratio) if logarithmic else ratio, lower, upper, left, right)
+                episode, reference = episodes[label][seed], episodes[baseline][seed]
+                detail = (f"{label}, seed {seed}: {ratio:.8g}× baseline ISE; "
+                          f"return={episode['return']:.8g}; baseline return={reference['return']:.8g}")
+                parts.append(
+                    f'<circle data-policy="{html.escape(label, quote=True)}" data-seed="{seed}" data-ratio="{ratio:.15g}" data-outlier="{str(outlier).lower()}" '
+                    f'cx="{x}" cy="{center}" r="3.5" fill="{color}" fill-opacity="0.65"><title>{html.escape(detail)}</title></circle>'
                 )
-            )
-            panel_index += 1
-        parts.extend(
-            _draw_series_panel(
-                action_panels[-1],
-                header_height + 2 * panel_height,
-                panel_index,
-                left=grid_left,
-                right=grid_right,
-            )
+                if index == worst:
+                    display = f"{ratio:.{precision}g}" if logarithmic and upper - lower < 1 else _number(ratio)
+                    parts.extend((
+                        f'<circle cx="{x}" cy="{center}" r="5.5" fill="none" stroke="{color}" stroke-width="1.2" pointer-events="none"/>',
+                        f'<text class="legend" x="{x + 14}" y="{center + 4}" style="fill:{color}">seed {seed} · {display}×</text>',
+                    ))
+            parts.append("</g>")
+        parts.append(
+            f'<text class="legend" x="76" y="{bottom + 58}">Box: middle 50% · Line: median · Whiskers: within 1.5×IQR · Dots: outliers · Ring: largest ratio · 1× = baseline; lower is better</text></g>'
         )
-        return_top = header_height + 3 * panel_height
-    elif compact_single_output_layout:
-        grid_left = 76.0
-        grid_right = float(width - 40)
-        grid_gap = 48.0
-        panel_index = 0
-        parts.extend(
-            _draw_series_panel(
-                output_panels[0],
-                header_height,
-                panel_index,
-                left=grid_left,
-                right=grid_right,
-            )
-        )
-        panel_index += 1
-        actuator_panels = action_panels[:-1]
-        action_width = (
-            grid_right - grid_left - grid_gap
-        ) / len(actuator_panels)
-        for column, panel in enumerate(actuator_panels):
-            left = grid_left + column * (action_width + grid_gap)
-            parts.extend(
-                _draw_series_panel(
-                    panel,
-                    header_height + panel_height,
-                    panel_index,
-                    left=left,
-                    right=left + action_width,
-                )
-            )
-            panel_index += 1
-        parts.extend(
-            _draw_series_panel(
-                action_panels[-1],
-                header_height + 2 * panel_height,
-                panel_index,
-                left=grid_left,
-                right=grid_right,
-            )
-        )
-        return_top = header_height + 3 * panel_height
-    else:
-        for column, panels in enumerate((output_panels, action_panels)):
-            for row, panel in enumerate(panels):
-                top = header_height + row * panel_height
-                left = 76.0 + column * 720.0
-                right = 680.0 + column * 720.0
-                panel_index = row * 2 + column
-                parts.extend(
-                    _draw_series_panel(
-                        panel,
-                        top,
-                        panel_index,
-                        left=left,
-                        right=right,
-                    )
-                )
-        return_top = header_height + panel_rows * panel_height
-    parts.extend(_draw_return_distribution(result, labels, return_top, width=width))
+    for number, (top, heading, detail) in enumerate(sections, start=1):
+        parts.extend((
+            f'<line class="section-divider" x1="64" x2="{canvas_width - 64}" y1="{top}" y2="{top}"/>',
+            f'<text class="section-number" x="64" y="{top + 34}">{number:02d}</text>',
+            f'<text class="section" x="104" y="{top + 34}">{html.escape(heading)}</text>',
+            f'<text class="legend" x="{canvas_width - 64}" y="{top + 32}" text-anchor="end" style="fill:#5f6d7c">{html.escape(detail)}</text>',
+        ))
     parts.append("</svg>")
     return "\n".join(parts) + "\n"
 
@@ -415,7 +388,6 @@ def _series_panel(
     field,
     index=None,
     reference_field=None,
-    horizontal=None,
     y_limits=None,
 ):
     series = []
@@ -442,134 +414,8 @@ def _series_panel(
         "title": title,
         "series": series,
         "reference": reference,
-        "horizontal": horizontal,
         "y_limits": y_limits,
-        "annotations": [],
     }
-
-
-def _boundary_distance_panel(result, labels, schema, *, time_unit):
-    level_states = []
-    for index, row in enumerate(schema["state"]):
-        name = str(row["name"])
-        lower_name = name.lower()
-        is_level = "level" in lower_name or (
-            lower_name.startswith("h") and lower_name[1:].isdigit()
-        )
-        if is_level:
-            bounds = _schema_bounds(row)
-            if bounds is None:
-                raise ValueError("level state schema must declare finite bounds")
-            low, high = bounds
-            if "unit" not in row:
-                raise ValueError("level state schema must declare a physical unit")
-            level_states.append((index, name, str(row["unit"]), low, high, 1.0))
-    if level_states:
-        units = {
-            unit for _index, _name, unit, _low, _high, _scale in level_states
-        }
-        if len(units) != 1:
-            raise ValueError("level state schema must use one physical unit")
-        selected_states = level_states
-        unit = next(iter(units))
-        title = f"Closest level-boundary distance [{unit}]"
-    else:
-        selected_states = []
-        for index, row in enumerate(schema["state"]):
-            bounds = _schema_bounds(row)
-            if bounds is None:
-                continue
-            low, high = bounds
-            selected_states.append(
-                (
-                    index,
-                    str(row["name"]),
-                    "fraction",
-                    low,
-                    high,
-                    1.0 / (high - low),
-                )
-            )
-        if not selected_states:
-            raise ValueError("trajectory schema must contain bounded states")
-        unit = "fraction"
-        title = "Closest state-boundary distance [fraction]"
-
-    series = []
-    annotations = []
-    all_closest = []
-    for label_index, label in enumerate(labels):
-        trajectory = _plotted_trajectory(result, label)
-        time = _finite_array("trajectory time", trajectory["physical_time"])
-        state = _finite_array("trajectory true_state", trajectory["true_state"])
-        if state.ndim != 2 or state.shape[1] != len(schema["state"]):
-            raise ValueError("trajectory true_state does not match its schema")
-        _matching_lengths(time, state)
-        distances = []
-        constraints = []
-        for state_index, name, _unit, low, high, scale in selected_states:
-            distances.extend(
-                (
-                    (state[:, state_index] - low) * scale,
-                    (high - state[:, state_index]) * scale,
-                )
-            )
-            tank = _level_state_label(name)
-            constraints.extend((f"{tank} lower", f"{tank} upper"))
-        distance_matrix = np.column_stack(distances)
-        closest = np.min(distance_matrix, axis=1)
-        all_closest.extend(closest.tolist())
-        time_index, constraint_index = np.unravel_index(
-            int(np.argmin(distance_matrix)),
-            distance_matrix.shape,
-        )
-        color = _COLORS[label_index % len(_COLORS)]
-        series.append(
-            {
-                "label": label,
-                "color": color,
-                "time": time,
-                "values": closest,
-                "index": None,
-                "marker": {
-                    "time": float(time[time_index]),
-                    "value": float(closest[time_index]),
-                    "label": constraints[constraint_index],
-                },
-            }
-        )
-        annotations.append(
-            {
-                "color": color,
-                "text": (
-                    f"{label}: {constraints[constraint_index]}, "
-                    f"{_number(closest[time_index])} {unit} @ "
-                    f"{_number(time[time_index])} {time_unit}"
-                ),
-            }
-        )
-    minimum = float(np.min(all_closest))
-    maximum = float(np.max(all_closest))
-    y_limits = (
-        (0.0, 1.0 if maximum == 0.0 else 1.05 * maximum)
-        if minimum >= 0.0
-        else _plot_range(all_closest, include_zero=True)
-    )
-    return {
-        "title": title,
-        "series": series,
-        "reference": None,
-        "horizontal": 0.0,
-        "y_limits": y_limits,
-        "annotations": annotations,
-    }
-
-
-def _level_state_label(name):
-    lower = str(name).lower()
-    if lower.startswith("h") and lower[1:].isdigit():
-        return f"tank {int(lower[1:])}"
-    return str(name).replace("_", " ")
 
 
 def _single_series_panel(
@@ -594,9 +440,7 @@ def _single_series_panel(
             }
         ],
         "reference": None,
-        "horizontal": None,
         "y_limits": y_limits,
-        "annotations": [],
     }
 
 
@@ -629,9 +473,6 @@ def _draw_series_panel(panel, top, panel_index, *, left, right):
         all_x.extend(time.tolist())
         all_y.extend(values.tolist())
         resolved_reference = (time, values)
-    horizontal = panel["horizontal"]
-    if horizontal is not None:
-        all_y.append(float(horizontal))
     time_values = _finite_array("trajectory time", all_x).reshape(-1)
     if np.any(time_values < 0.0):
         raise ValueError("trajectory time must be non-negative")
@@ -678,11 +519,6 @@ def _draw_series_panel(panel, top, panel_index, *, left, right):
             f'<g clip-path="url(#{clip_id})">',
         ]
     )
-    if horizontal is not None:
-        y = _map_y(float(horizontal), y_min, y_max, chart_top, bottom)
-        parts.append(
-            f'<line x1="{left}" y1="{y:.2f}" x2="{right}" y2="{y:.2f}" stroke="#c62828" stroke-width="1.5" stroke-dasharray="6 5"/>'
-        )
     if resolved_reference is not None:
         time, values = resolved_reference
         points = _polyline_points(
@@ -717,112 +553,7 @@ def _draw_series_panel(panel, top, panel_index, *, left, right):
         parts.append(
             f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="2.2"/>'
         )
-        marker = series.get("marker")
-        if marker is not None:
-            marker_x = _map_x(marker["time"], x_min, x_max, left, right)
-            marker_y = _map_y(marker["value"], y_min, y_max, chart_top, bottom)
-            parts.append(
-                f'<circle cx="{marker_x:.2f}" cy="{marker_y:.2f}" r="4.5" '
-                f'fill="{color}" stroke="#ffffff" stroke-width="1.5">'
-                f'<title>{html.escape(series["label"])}: '
-                f'{html.escape(marker["label"])}, {_number(marker["value"])} '
-                f'@ {_number(marker["time"])} {html.escape(time_unit)}</title></circle>'
-            )
     parts.append("</g>")
-    annotations = panel["annotations"]
-    if annotations:
-        line_height = 14.0
-        box_width = min(330.0, 0.58 * (right - left))
-        box_height = 8.0 + line_height * len(annotations)
-        box_left = right - box_width
-        parts.append(
-            f'<rect x="{box_left:.2f}" y="{chart_top + 4:.2f}" '
-            f'width="{box_width:.2f}" height="{box_height:.2f}" rx="4" '
-            'fill="#ffffff" fill-opacity="0.88" stroke="#dadce0"/>'
-        )
-        for index, annotation in enumerate(annotations):
-            y = chart_top + 17.0 + index * line_height
-            parts.append(
-                f'<text class="tick" text-anchor="end" x="{right - 7:.2f}" '
-                f'y="{y:.2f}" style="fill:{annotation["color"]}">'
-                f'{html.escape(annotation["text"])}</text>'
-            )
-    return parts
-
-
-def _draw_return_distribution(result, labels, top, *, width):
-    left = 160.0
-    right = float(width - 40)
-    chart_top = float(top + 42)
-    row_height = 34.0
-    bottom = chart_top + row_height * len(labels)
-    distributions = {
-        label: _finite_array(
-            "return distribution",
-            result["evaluations"][label]["return_distribution"],
-        )
-        for label in labels
-    }
-    if any(len(values) != len(result["seeds"]) for values in distributions.values()):
-        raise ValueError("return distributions must match the comparison seeds")
-    all_values = np.concatenate(tuple(distributions.values()))
-    value_min, value_max = _plot_range(all_values.tolist(), include_zero=False)
-    parts = [
-        f'<text class="panel-title" x="76" y="{top + 22}">Cumulative return by policy</text>',
-        f'<text class="tick" x="720" y="{top + 22}">circles: all return seeds; diamond: median</text>',
-    ]
-    for tick in range(5):
-        fraction = tick / 4
-        x = left + fraction * (right - left)
-        value = value_min + fraction * (value_max - value_min)
-        parts.extend(
-            [
-                f'<line class="grid" x1="{x:.2f}" y1="{chart_top:.2f}" x2="{x:.2f}" y2="{bottom:.2f}"/>',
-                f'<text class="tick" text-anchor="middle" x="{x:.2f}" y="{bottom + 18:.2f}">{_number(value)}</text>',
-            ]
-        )
-    for label_index, label in enumerate(labels):
-        values = distributions[label]
-        y = chart_top + (label_index + 0.5) * row_height
-        color = _COLORS[label_index % len(_COLORS)]
-        parts.extend(
-            [
-                f'<line class="grid" x1="{left}" y1="{y:.2f}" x2="{right}" y2="{y:.2f}"/>',
-                f'<text class="legend" text-anchor="end" x="{left - 12}" y="{y + 4:.2f}">{html.escape(label)}</text>',
-            ]
-        )
-        offsets = (
-            np.linspace(-6.0, 6.0, len(values))
-            if len(values) > 1
-            else np.zeros(1)
-        )
-        for seed, value, offset in zip(result["seeds"], values, offsets):
-            x = _map_x(value, value_min, value_max, left, right)
-            parts.append(
-                f'<circle cx="{x:.2f}" cy="{y + offset:.2f}" r="4" '
-                f'fill="{color}" fill-opacity="0.48">'
-                f'<title>seed {seed}: {_number(value)}</title></circle>'
-            )
-        median_x = _map_x(
-            float(np.median(values)), value_min, value_max, left, right
-        )
-        diamond = " ".join(
-            (
-                f"{median_x:.2f},{y - 7:.2f}",
-                f"{median_x + 7:.2f},{y:.2f}",
-                f"{median_x:.2f},{y + 7:.2f}",
-                f"{median_x - 7:.2f},{y:.2f}",
-            )
-        )
-        parts.append(
-            f'<polygon points="{diamond}" fill="{color}" stroke="#202124" stroke-width="1"/>'
-        )
-    parts.extend(
-        [
-            f'<line class="axis" x1="{left}" y1="{bottom}" x2="{right}" y2="{bottom}"/>',
-            f'<text class="tick" text-anchor="middle" x="{(left + right) / 2:.2f}" y="{bottom + 36}">episode return (higher is better)</text>',
-        ]
-    )
     return parts
 
 

@@ -39,10 +39,9 @@ dataset = aiogym.collect(
 env.close()
 ```
 
-The Dataset must match the training environment's scenario, reward, physical
-parameters, training variation, control interval, and observation/action
-shapes. Collecting more episodes improves coverage but does not replace
-held-out evaluation.
+The Dataset follows the shared
+[training requirements](architecture.md#dataset-and-checkpoint-compatibility).
+Collecting more episodes improves coverage but does not replace held-out evaluation.
 
 ## Train RLPD
 
@@ -68,31 +67,36 @@ RLPD samples from both the fixed Dataset and the growing online replay during
 training. The default split is 50/50. Set `offline_ratio` in
 `algorithm_kwargs` to a value from 0 to 1 when another balance is needed.
 
-The reference-style defaults are computationally demanding: batch size 256,
-10 critics, update-to-data ratio 20, and 10,000 random online transitions before
-gradient updates. Lower `utd_ratio` and `n_critics` for a local smoke test, but
-do not treat that short run as performance evidence.
+The defaults use batch size 256, 2 critics (`n_critics=2`), update-to-data ratio
+1 (`utd_ratio=1`), and 10,000 random online transitions before gradient updates.
+For a larger critic ensemble and more updates, explicitly set
+`algorithm_kwargs={"n_critics": 10, "utd_ratio": 20}`; this increases computation.
+These defaults apply to new training. Continued training retains the
+configuration recorded in its checkpoint.
 
 ## Continue training
 
 ```python
 continued_path = root / "training" / "rlpd" / "rlpd-150k" / "seed-0"
 training_env = aiogym.make_env(scenario, randomize=True)
+evaluation_env = aiogym.make_env(scenario, randomize=True)
 continued = aiogym.train(
     env=training_env,
     algorithm="rlpd",
     dataset=dataset_path,
     steps=50_000,
+    evaluation_env=evaluation_env,
     resume_from=run_path / "model.zip",
     output=continued_path,
 )
 training_env.close()
+evaluation_env.close()
 ```
 
 Use the same Dataset and training settings. `steps` is the additional online
 environment-step budget, and the source run remains unchanged. Continuation
-restores the recorded seed, critics, optimizers, online replay, and fixed
-offline data reference.
+restores the recorded seed, critics, optimizers, and online replay, and appends
+to the histories retained through the checkpoint.
 
 ## Evaluate the result
 

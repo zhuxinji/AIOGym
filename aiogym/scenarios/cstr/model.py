@@ -127,6 +127,51 @@ class CSTRModel(PhysicsModelBase):
     def action_slew_limits(self):
         return None
 
+    def observation_schema(self):
+        error_rows = [
+            {
+                "name": f"{row['name']}_tracking_error",
+                "kind": "derived",
+                "unit": "normalized_error",
+                "low": -1.0,
+                "high": 1.0,
+            }
+            for row in self.output_schema()
+        ]
+        return [*super().observation_schema(), *error_rows]
+
+    def observation(self, state, reference, previous_action, disturbances):
+        base = super().observation(
+            state,
+            reference,
+            previous_action,
+            disturbances,
+        )
+        error = (
+            np.asarray(self.outputs(state), dtype=float)
+            - np.asarray(reference, dtype=float)
+        ) / np.asarray(self.output_scales(), dtype=float)
+        return [*base, *np.clip(error, -1.0, 1.0).tolist()]
+
+    def recompute_derived_observation(self, observation):
+        values = np.asarray(observation, dtype=float).copy()
+        measurement = np.asarray(
+            [
+                row["low"] + value * (row["high"] - row["low"])
+                for value, row in zip(values[:2], self.state_schema())
+            ]
+        )
+        reference = np.asarray(
+            [
+                row["low"] + value * (row["high"] - row["low"])
+                for value, row in zip(values[2:4], self.output_schema())
+            ]
+        )
+        values[4:] = np.clip(
+            (measurement - reference) / self.output_scales(), -1.0, 1.0
+        )
+        return values
+
     def default_setpoint_vector(self):
         temperature = 60.0
         dilution_rate = float(self.p["nominal_feed_action"]) * float(

@@ -434,7 +434,7 @@ def test_seeded_tracking_benchmark_is_reproducible_without_measurement_noise(
         env.close()
 
 
-@pytest.mark.parametrize("scenario", ("quadruple", "three_tank"))
+@pytest.mark.parametrize("scenario", ("cstr", "quadruple", "three_tank"))
 def test_observation_noise_does_not_change_reference_channels(scenario):
     clean = aiogym.make_env(scenario)
     noisy = aiogym.make_env(scenario, noise=True)
@@ -479,3 +479,89 @@ def test_observation_noise_does_not_change_reference_channels(scenario):
     finally:
         clean.close()
         noisy.close()
+
+
+def test_benchmark_rejects_runtime_disturbance_overrides_without_mutation():
+    import copy
+
+    env = aiogym.make_env("heater", benchmark="tracking")
+    try:
+        observation, _ = env.reset(seed=0)
+        disturbances = dict(env.unwrapped.disturbances)
+        config = copy.deepcopy(env.unwrapped.runtime_config)
+        with pytest.raises(ValueError, match="cannot override a Benchmark"):
+            env.unwrapped.set_disturbances({"feed_flow": 70.4})
+        assert env.unwrapped.disturbances == disturbances
+        assert env.unwrapped.runtime_config == config
+        repeated, _ = env.reset(seed=0)
+        np.testing.assert_array_equal(repeated, observation)
+        assert env.unwrapped.disturbances == disturbances
+    finally:
+        env.close()
+
+
+def test_ordinary_runtime_disturbance_overrides_are_recorded_and_survive_reset():
+    from aiogym.workflows._metadata import environment_metadata
+
+    env = aiogym.make_env("heater")
+    try:
+        assert "disturbance_overrides" not in environment_metadata(env)
+        env.set_disturbances({"feed_flow": 70.4})
+        metadata = environment_metadata(env)
+        assert metadata["disturbance_overrides"] == {"feed_flow": 70.4}
+        assert env.disturbances["feed_flow"] == 70.4
+        env.reset(seed=0)
+        assert env.disturbances["feed_flow"] == 70.4
+        env.set_disturbances({"feed_flow": 80.0})
+        assert metadata["disturbance_overrides"] == {"feed_flow": 70.4}
+        assert environment_metadata(env)["disturbance_overrides"] == {"feed_flow": 80.0}
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize("scenario", ("crystallization", "heater"))
+def test_action_delay_holds_episode_initial_action_and_resets_queue(scenario):
+    env = aiogym.make_env(
+        scenario, randomize=True, delay={"action_steps": 2, "observation_steps": 0},
+    )
+    try:
+        _, reset_info = env.reset(seed=0)
+        initial = reset_info["previous_applied_action"]
+        assert not np.allclose(initial, env.unwrapped.model.default_action())
+        command = np.full(env.action_space.shape, 0.6, dtype=np.float32)
+        for _ in range(2):
+            _, _, _, _, info = env.step(command)
+            np.testing.assert_array_equal(info["channel_action"], initial)
+            np.testing.assert_array_equal(info["applied_action"], initial)
+        _, _, _, _, info = env.step(command)
+        np.testing.assert_array_equal(info["channel_action"], command)
+        _, reset_info = env.reset(seed=1)
+        _, _, _, _, info = env.step(command)
+        np.testing.assert_array_equal(
+            info["channel_action"], reset_info["previous_applied_action"],
+        )
+    finally:
+        env.close()
+
+
+def test_invalid_delayed_commands_do_not_enter_queue_or_get_masked_by_faults():
+    env = aiogym.make_env(
+        "crystallization", randomize=True,
+        delay={"action_steps": 2, "observation_steps": 0},
+        fault={"probability": 1, "severity": (0.5, 0.5), "duration_steps": 50},
+    )
+    try:
+        _, reset_info = env.reset(seed=0)
+        for command in ([1.5], [-0.1], [float("nan")], [float("inf")], []):
+            with pytest.raises(ValueError):
+                env.step(command)
+        for step in range(2):
+            _, _, _, _, info = env.step([0.6])
+            assert info["step_index"] == step + 1
+            np.testing.assert_array_equal(
+                info["channel_action"], reset_info["previous_applied_action"] * 0.5,
+            )
+        _, _, _, _, info = env.step([0.6])
+        np.testing.assert_allclose(info["channel_action"], [0.3])
+    finally:
+        env.close()

@@ -70,6 +70,16 @@ class QuadrupleModel(_QuadruplePhysicsKernel):
                 }
                 for row in reference
             ),
+            *(
+                {
+                    "name": f"{row['name']}_tracking_error",
+                    "kind": "derived",
+                    "unit": "normalized_error",
+                    "low": -1.0,
+                    "high": 1.0,
+                }
+                for row in reference
+            ),
         ]
 
     def observation(self, state, reference, previous_action, disturbances):
@@ -86,7 +96,14 @@ class QuadrupleModel(_QuadruplePhysicsKernel):
             / (float(row["high"]) - float(row["low"]))
             for value, row in zip(reference, reference_rows)
         ]
-        return [*normalized_state, *normalized_reference]
+        normalized = np.clip([*normalized_state, *normalized_reference], 0.0, 1.0)
+        error = normalized[:2] - normalized[4:6]
+        return [*normalized.tolist(), *error.tolist()]
+
+    def recompute_derived_observation(self, observation):
+        values = np.asarray(observation, dtype=float).copy()
+        values[6:] = values[:2] - values[4:6]
+        return values
 
     def measurement(self, state, disturbances=None):
         context = self._resolve_disturbances(

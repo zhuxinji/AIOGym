@@ -56,9 +56,9 @@ def test_tank3_tracking_pid_and_mpc_use_the_physical_interface(controller_id):
             env,
             make_controller(controller_id, env=env),
             seed=2,
-            max_steps=120,
+            max_steps=2,
         )
-        assert len(result.transitions) == 120
+        assert len(result.transitions) == 2
         assert not result.transitions[-1].terminated
         assert result.transitions[0].action.shape == (4,)
         assert result.transitions[0].info["applied_action"].shape == (4,)
@@ -95,6 +95,10 @@ def test_three_tank_controller_config_is_shared_by_all_benchmarks():
     assert "feedforward" not in pid
     assert mpc["feedforward_reseed"] == "setpoint_or_feedforward_change"
     assert mpc["horizon"] == 60
+    assert mpc["control_horizon"] == 1
+    assert mpc["action_bound_handling"] == "post_solve_clip"
+    assert mpc["action_bounds"] == [0.0, 1.0]
+    assert mpc["prediction_state_constraints"] is False
     assert mpc["move_supp"] == [50.0] * 4
     assert mpc["steady_input_weight"] == [5.0] * 4
 

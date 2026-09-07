@@ -1,312 +1,93 @@
 # Quickstart
 
-This guide follows the common Python workflow from environment creation through
-PID/MPC/RL comparison. Choose a built-in scenario first, then use the same
-workflow throughout. Physical variables, supported parameter overrides,
-disturbances, controller settings, and recommended training budgets belong to
-the [scenario guides](../README.md#included-scenarios).
+Start with `heater` to see a complete result before choosing a more demanding
+process. Run commands from the repository root. Other processes use the same
+commands; their variables and recommended budgets are in the
+[scenario guides](../README.md#included-scenarios).
 
-## 1. Install AIO-Gym
-
-From the repository root:
+## 1. Install
 
 ```bash
 pip install '.[rl]'
+aiogym list scenarios
 ```
 
-This installs simulation, PID, MPC, data collection, evaluation, and the
-reinforcement-learning dependencies used later in this guide.
+Use `pip install .` if you only need simulation and classical controllers.
 
-## 2. Choose a scenario
+## 2. Compare PID and MPC
 
-```python
-import aiogym
-
-scenarios = aiogym.list_scenarios()
-scenario = scenarios[0]  # Replace this with any returned scenario id.
-
-print(scenarios)
-print(aiogym.list_algorithms())
-print(aiogym.list_benchmarks(scenario))
-print(aiogym.list_rewards(scenario))
-print(aiogym.list_parameters(scenario))
+```bash
+aiogym compare heater --benchmark tracking --controllers pid mpc --seeds 0 1 2 --output runs/heater/demos/pid-mpc
 ```
 
-The scenario guide explains its observation, action, physical units, accepted
-initial state, parameters, disturbances, Benchmarks, and practical limits.
+Both controllers run the same three fixed test cases. Open
+`runs/heater/demos/pid-mpc/comparison.svg` to see outputs, targets, actions, and
+scores. `comparison.json` contains the metrics; `trajectories.npz` contains
+the numeric trajectories. Three cases are an introduction, not a full study.
 
-## 3. Run an environment
+The explicit output must be a new or empty directory. To repeat the example,
+choose another name such as `runs/heater/demos/pid-mpc-2`. Omitting `--output`
+on a Benchmark comparison replaces the managed results in
+`runs/heater/benchmarks/tracking/`.
 
-```python
-import aiogym
+## 3. Check that training runs
 
-scenario = aiogym.list_scenarios()[0]
-env = aiogym.make_env(scenario)
-observation, info = env.reset(seed=0)
-observation, reward, terminated, truncated, info = env.step(
-    env.action_space.sample()
-)
-env.close()
+```bash
+aiogym train heater sac --steps 1000 --record-every 250 --no-evaluation
 ```
 
-An ordinary environment may also accept `initial_state=` and `parameters=`.
-Their values, order, and physical units are scenario-specific, so copy them
-from the selected scenario guide. Randomized training environments choose their
-own initial states, while fixed Benchmarks own their complete test cases.
+This short run checks environment interaction and checkpoint saving. It skips
+validation to finish sooner; it does not select a best policy or establish
+control performance. SAC, DDPG, PPO, and TD3 can train directly online, without
+collecting a Dataset first.
 
-## 4. Compare PID and MPC
+The command prints its output directory before starting. In another terminal,
+from the same working directory, inspect recent CLI runs with:
 
-```python
-import aiogym
-
-scenario = aiogym.list_scenarios()[0]
-env = aiogym.make_env(scenario, benchmark="tracking")
-pid = aiogym.make_controller("pid", env=env)
-mpc = aiogym.make_controller("mpc", env=env)
-
-comparison = aiogym.compare_policies(
-    env=env,
-    policies={"pid": pid, "mpc": mpc},
-    seeds=range(20),
-)
-env.close()
-
-print(comparison["ordering"])
+```bash
+aiogym status
 ```
 
-Both controllers receive the same 20 physical test cases. The comparison is
-written to:
+The table shows state, phase, recorded steps, elapsed time, and the last update.
+A rough ETA appears after enough progress has been recorded. Completed jobs
+remain in the list. Use `aiogym status --json` for machine-readable output.
+
+## 4. Train with validation
+
+```bash
+aiogym train heater sac --steps 500000
+```
+
+Training randomizes the operating conditions by default. Statistics are saved
+every 500 steps and validation runs every 5,000 steps, including an initial
+validation before training. This takes longer than the smoke run. The step
+budget counts environment transitions, not seconds of wall time.
+
+Each invocation creates a new directory:
 
 ```text
-runs/<scenario>/benchmarks/tracking/
-├── comparison.json
-├── comparison.svg
-└── trajectories.npz
+runs/heater/training/sac/<experiment>/seed-0/
 ```
 
-Use `comparison.svg` for a quick review, `comparison.json` for scores and
-summaries, and `trajectories.npz` for complete numeric trajectories.
+When training finishes, the terminal prints actual paths and commands for:
 
-PID, MPC, and loaded learned policies receive the same environment observation.
-At each action the policy context contains only `step_index`, `physical_time`,
-and the current public `reference`. Diagnostic fields such as true state,
-physical disturbance factors, applied action, safety margins, and the complete
-episode schedule remain in `info` and saved artifacts, but are not policy
-inputs.
+- **Comparison:** `best/model.zip`, selected on separate validation cases.
+- **Continuation:** `model.zip`, saved at the final training step.
+- **Learning curve:** `training_curve.svg`; raw records remain in JSON.
 
-## 5. Collect a Dataset
+Copy the printed comparison command to evaluate PID and the learned policy
+on the held-out tracking Benchmark. Keep the same evaluation seeds when adding
+other algorithms. The comparison command uses a separate output directory.
 
-```python
-from pathlib import Path
+For independent algorithms or seeds, use the same `train` command:
 
-import aiogym
-
-scenario = aiogym.list_scenarios()[0]
-run_scenario = scenario.replace("_", "-")
-dataset_path = Path("runs") / run_scenario / "datasets" / "pid-20" / "seed-0"
-
-env = aiogym.make_env(scenario, randomize=True)
-pid = aiogym.make_controller("pid", env=env)
-dataset = aiogym.collect(
-    env=env,
-    policy=pid,
-    episodes=20,
-    seed=0,
-    output=dataset_path,
-)
-env.close()
-
-reader = aiogym.DatasetReader(dataset_path)
-print(len(reader), reader.transition_count)
+```bash
+aiogym train heater sac ppo td3 --seeds 0 1 --workers 3
 ```
 
-## 6. Train SAC
+## Continue by task
 
-```python
-from pathlib import Path
-
-import aiogym
-
-scenario = aiogym.list_scenarios()[0]
-run_scenario = scenario.replace("_", "-")
-run_path = (
-    Path("runs")
-    / run_scenario
-    / "training"
-    / "sac"
-    / "sac-100k"
-    / "seed-0"
-)
-
-training_env = aiogym.make_env(scenario, randomize=True)
-evaluation_env = aiogym.make_env(scenario, randomize=True)
-trained = aiogym.train(
-    env=training_env,
-    algorithm="sac",
-    steps=100_000,
-    seed=0,
-    record_every=500,
-    evaluation_env=evaluation_env,
-    evaluate_every=5_000,
-    output=run_path,
-)
-training_env.close()
-evaluation_env.close()
-
-print(trained["checkpoint"])
-```
-
-Training writes a final `model.zip`, a learning curve, metadata, and—because
-periodic evaluation is enabled—a `best/model.zip` checkpoint. Selection follows
-the shared [best-checkpoint protocol](architecture.md#select-the-best-checkpoint)
-on a separate randomized validation environment. Formal Benchmark cases remain
-held out from this selection.
-
-Store runs as
-`runs/<scenario>/training/<algorithm>/<experiment>/seed-<n>` so checkpoints
-from different algorithms remain separate. Scenario guides may recommend a
-different step budget or algorithm configuration for meaningful performance.
-
-## 7. Compare the learned policy
-
-```python
-from pathlib import Path
-
-import aiogym
-
-scenario = aiogym.list_scenarios()[0]
-run_scenario = scenario.replace("_", "-")
-checkpoint = (
-    Path("runs")
-    / run_scenario
-    / "training"
-    / "sac"
-    / "sac-100k"
-    / "seed-0"
-    / "best"
-    / "model.zip"
-)
-
-env = aiogym.make_env(scenario, benchmark="tracking")
-pid = aiogym.make_controller("pid", env=env)
-mpc = aiogym.make_controller("mpc", env=env)
-sac = aiogym.load_policy(checkpoint, env=env)
-comparison = aiogym.compare_policies(
-    env=env,
-    policies={"pid": pid, "mpc": mpc, "sac": sac},
-    seeds=range(20),
-)
-env.close()
-```
-
-## 8. Continue training
-
-```python
-from pathlib import Path
-
-import aiogym
-
-scenario = aiogym.list_scenarios()[0]
-run_scenario = scenario.replace("_", "-")
-source = (
-    Path("runs")
-    / run_scenario
-    / "training"
-    / "sac"
-    / "sac-100k"
-    / "seed-0"
-    / "model.zip"
-)
-output = (
-    Path("runs")
-    / run_scenario
-    / "training"
-    / "sac"
-    / "sac-150k"
-    / "seed-0"
-)
-
-training_env = aiogym.make_env(scenario, randomize=True)
-continued = aiogym.train(
-    env=training_env,
-    algorithm="sac",
-    steps=50_000,
-    resume_from=source,
-    output=output,
-)
-training_env.close()
-```
-
-Here, `steps=50_000` adds 50,000 environment steps. The new run keeps the
-source checkpoint unchanged. Use the same scenario, training settings, seed,
-and—for RLPD—the same Dataset.
-
-## Add training variation
-
-Training environments can vary operating conditions and add common process or
-measurement problems:
-
-```python
-import aiogym
-
-scenario = aiogym.list_scenarios()[0]
-env = aiogym.make_env(
-    scenario,
-    randomize=True,
-    boundary_probability=0.30,
-    disturbance=True,
-    noise=True,
-    delay=True,
-    fault=True,
-)
-```
-
-- `randomize` varies feasible interior initial conditions and targets;
-- `boundary_probability` selects the fraction of randomized episodes that use
-  the scenario's reachable boundary initializer (default `0.0`);
-- `disturbance` adds a temporary physical disturbance;
-- `noise` affects measured observation channels;
-- `delay` adds observation or action delay;
-- `fault` applies temporary actuator loss of effectiveness.
-
-Pass a mapping instead of `True` when you need explicit settings. These options
-are for training and ordinary simulation; fixed Benchmarks keep their own test
-conditions so policies remain directly comparable. Available disturbance names,
-schedule examples, event timing, and physical meaning are documented by each
-scenario.
-
-## Read the main metrics
-
-- `unsafe_rate`: lower is better;
-- `safe_completion`: higher is better;
-- `settling_rate`: fraction of cases that enter and remain inside every settling
-  band; higher is better;
-- `return`: higher is better when policies use the same Reward;
-- `tracking_iae` and `tracking_ise`: lower tracking error is better;
-- `final_error`: lower endpoint error is better.
-
-Formal comparisons rank mean safety metrics across all cases before performance
-metrics. The report's `ranking_metrics` rows show the exact metric order and
-aggregate used by the selected Benchmark. Scenario guides define their physical
-settling bands, Reward terms, and any additional ranking rules.
-
-Short training runs only show that the workflow executes. For performance
-claims, use fixed Benchmarks, identical seeds, and enough training and test
-cases to support the conclusion.
-
-Keep these interpretation limits in mind:
-
-- a good median return does not cancel unsafe episodes;
-- results using different Rewards or model parameters are not directly
-  comparable;
-- learned-policy comparisons use the checkpoint selected by the shared
-  validation protocol and still make final claims on held-out Benchmark cases;
-- simulation safety does not establish safety on real equipment.
-
-## Optional command-line use
-
-The same workflows are available through the `aiogym` command for shell scripts
-and batch jobs. Use `aiogym --help` and `aiogym <command> --help` when needed;
-the documentation uses Python as the primary interface. In CLI automation,
-`boundary_probability=0.30` is written as `--boundary-probability 0.30` and
-requires `--randomize`.
+See the [task guide](workflows.md) for continuation, output rules, Python usage,
+and the optional Dataset/BC/RLPD branch. Consult
+[concepts and reference](architecture.md) for checkpoint selection and metrics,
+or `aiogym train --help` for grouped options and examples.

@@ -144,11 +144,11 @@ env.close()
 
 The tracking benchmark selects the start and three-level target during reset;
 the selected case, initial steady action, and seed are stored in the evaluation
-output. The disturbance benchmark starts from the matching tracking case,
-holds its initial steady reference, opens the selected bypass path or paths,
-then changes to the matching tracking target while those paths remain open,
-and finally closes them. The three phases are reported separately with the
-common `regulation` Reward.
+output. The disturbance benchmark uses the matching tracking case's initial state and
+action, with its target reference active from reset. It opens the selected
+bypass path or paths and later closes them while keeping that reference fixed.
+The common `regulation` metrics cover the episode; disturbance error starts at
+the first disturbance event and recovery time starts at the final restoration.
 The boundary benchmark starts from the last safe state of a deterministic
 forward pre-run and measures whether the policy remains safe. It does not
 construct or test a boundary equilibrium.
@@ -209,11 +209,13 @@ training_env.close()
 evaluation_env.close()
 
 continued_env = aiogym.make_env("three_tank", randomize=True)
+continued_evaluation_env = aiogym.make_env("three_tank", randomize=True)
 continued = aiogym.train(
     env=continued_env,
     algorithm="sac",
     steps=60_000,
     record_every=1_000,
+    evaluation_env=continued_evaluation_env,
     resume_from=(
         "runs/three-tank/training/sac/"
         "randomized-regulation-sac-nstep10-240k/seed-0/model.zip"
@@ -224,6 +226,7 @@ continued = aiogym.train(
     ),
 )
 continued_env.close()
+continued_evaluation_env.close()
 ```
 
 The SAC configuration uses `n_steps=10`. Set `algorithm="ppo"` or
@@ -316,3 +319,12 @@ the simulator. LT101, LT201, LT301, FT101, FT12, FT23, and FT34 provide the
 seven measured channels required for the 10-dimensional policy observation. It records
 `benchmark_id="tracking"`. Closed-loop operation requires measured calibration
 and explicit arming.
+
+Calibration currently provides an admission check and provenance: its ID and
+hash are written to real logs. Parameter estimates are not applied to the
+nominal model, reference reachability calculations, or channel conversion.
+Those model calculations still use the default simulation parameters. The
+injected transport must supply already calibrated engineering-unit samples;
+it owns raw-channel conversion and must be configured separately with the
+rig's measured channel calibration. Passing a calibration record to this
+environment does not configure the transport or calibrate the simulator.

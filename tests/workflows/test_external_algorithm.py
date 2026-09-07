@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import importlib
 import json
 import platform
 import zipfile
 from dataclasses import dataclass
+from functools import partial
 
 import numpy as np
 import pytest
@@ -105,7 +107,12 @@ class ConstantAlgorithmBackend:
         }
 
 
-def test_external_algorithm_uses_the_complete_workflow(tmp_path, capsys):
+def test_external_algorithm_uses_the_complete_workflow(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(
+        importlib.import_module("aiogym.workflows.train"),
+        "evaluate",
+        partial(aiogym.evaluate, max_steps=2),
+    )
     backend = ConstantAlgorithmBackend()
     aiogym.register_algorithm(backend)
     env = aiogym.make_env("quadruple")
@@ -185,6 +192,7 @@ def test_external_algorithm_checkpoint_can_continue_training(tmp_path):
     try:
         first = aiogym.train(
             env=env,
+            evaluate_every=None,
             algorithm=backend.id,
             steps=2,
             seed=8,
@@ -192,6 +200,7 @@ def test_external_algorithm_checkpoint_can_continue_training(tmp_path):
         )
         continued = aiogym.train(
             env=env,
+            evaluate_every=None,
             algorithm=backend.id,
             steps=3,
             resume_from=first["checkpoint"],

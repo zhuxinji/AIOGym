@@ -3,25 +3,32 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
+import sys
 from pathlib import Path
 
-from aiogym.core.io import jsonable
+from aiogym.core.io import jsonable, write_json
 
 
 _CONTROLLERS = ("hold", "mpc", "pid", "random")
 _DESCRIPTIONS = {
     "collect": "Collect an episode-oriented Dataset.",
-    "train": "Train and save one registered algorithm policy.",
+    "train": "Train registered algorithms across independent training seeds.",
     "evaluate": "Evaluate one controller or checkpoint on explicit seeds.",
     "compare": "Compare controllers and checkpoints on identical seeds.",
 }
 
 
-def _environment_arguments(parser, *, allow_benchmark):
+class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
+    pass
+
+
+def _environment_arguments(parser, *, allow_benchmark, options=None):
     parser.add_argument(
         "scenario",
         help="registered Scenario id; inspect choices with `aiogym list scenarios`",
     )
+    parser = options if options is not None else parser
     parser.add_argument(
         "--reward",
         help=(
@@ -49,7 +56,8 @@ def _environment_arguments(parser, *, allow_benchmark):
         )
     parser.add_argument(
         "--randomize",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=False,
         help="sample a new training episode on every reset",
     )
     parser.add_argument(
@@ -89,9 +97,26 @@ def _parser(command):
     parser = argparse.ArgumentParser(
         prog=f"aiogym {command}",
         description=_DESCRIPTIONS[command],
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=_HelpFormatter,
     )
-    _environment_arguments(parser, allow_benchmark=command != "train")
+    if command == "train":
+        common = parser.add_argument_group("Training and output")
+        validation = parser.add_argument_group("Validation and progress")
+        environment = parser.add_argument_group("Environment and variation")
+        advanced = parser.add_argument_group("Dataset, behavior cloning, and algorithm settings")
+        parser.epilog = """Examples:
+  aiogym train heater sac --steps 1000 --no-evaluation
+  aiogym train heater sac ppo td3 --seeds 0 1 --workers 3
+  aiogym train heater sac --resume-from /path/to/model.zip --steps 50000
+  aiogym train heater sac ddpg ppo td3 rlpd --dataset /path/to/dataset
+
+RLPD requires a compatible Dataset. Online SAC/DDPG/PPO/TD3 do not.
+With --resume-from, --steps adds steps to the checkpoint in a new directory.
+Inspect progress from another terminal with: aiogym status
+"""
+    else:
+        environment = None
+    _environment_arguments(parser, allow_benchmark=command != "train", options=environment)
     if command == "collect":
         parser.add_argument(
             "--controller",
@@ -110,76 +135,97 @@ def _parser(command):
             "--output",
             required=True,
             type=Path,
-            help="new or empty Dataset directory",
+            metavar="DIR",
+            help="create a Dataset in a new or empty directory; existing data rejected",
         )
     elif command == "train":
         from aiogym.rl.algorithms import list_algorithms
 
+        parser.set_defaults(randomize=True)
         parser.add_argument(
-            "algorithm", choices=list_algorithms(), help="registered algorithm id"
+            "algorithm", nargs="+", choices=list_algorithms(),
+            help="one or more registered algorithm ids",
         )
-        parser.add_argument(
-            "--steps", required=True, type=int, help="positive environment-step budget"
+        common.add_argument(
+            "--steps", default=500_000, type=int, help="positive additional environment steps per task; also additive on continuation"
         )
-        parser.add_argument(
+        seeds = common.add_mutually_exclusive_group()
+        seeds.add_argument(
             "--seed",
             type=int,
             help="training seed; continued training uses the checkpoint seed",
         )
-        parser.add_argument(
+        seeds.add_argument(
+            "--seeds", nargs="+", type=int,
+            help="independent training seeds; defaults to seed 0 for new training",
+        )
+        common.add_argument(
+            "--workers", type=int, default=2,
+            help="maximum concurrent training processes; 1 runs tasks sequentially",
+        )
+        common.add_argument(
             "--resume-from",
             type=Path,
             metavar="MODEL_ZIP",
-            help="complete checkpoint whose optimization state will be continued",
+            help="continue optimization from a complete checkpoint; one task only, into a new run",
         )
-        parser.add_argument(
+        advanced.add_argument(
             "--algorithm-kwargs",
             type=Path,
             metavar="JSON",
             help="JSON object file passed to the algorithm backend",
         )
-        parser.add_argument(
+        validation.add_argument(
             "--record-every",
             type=int,
             default=500,
             help="training-curve aggregation interval in environment steps",
         )
-        parser.add_argument(
+        advanced.add_argument(
             "--dataset",
             type=Path,
             metavar="DATASET",
-            help="Dataset v2 used by behavior cloning or offline-to-online learning",
+            help="required for RLPD; optional for online algorithms only with behavior cloning",
         )
-        parser.add_argument(
+        advanced.add_argument(
             "--behavior-cloning-epochs",
             type=int,
             metavar="N",
             help="positive supervised epochs; required for Dataset-based BC",
         )
-        parser.add_argument(
+        advanced.add_argument(
             "--behavior-cloning-batch-size",
             type=int,
             default=256,
             metavar="N",
             help="supervised demonstration batch size",
         )
-        parser.add_argument(
+        advanced.add_argument(
             "--behavior-cloning-learning-rate",
             type=float,
             default=3e-4,
             metavar="RATE",
             help="supervised actor learning rate",
         )
-        parser.add_argument(
+        evaluation = validation.add_mutually_exclusive_group()
+        evaluation.add_argument(
             "--evaluate-every",
             type=int,
+            default=5_000,
             help="periodically evaluate and save the best checkpoint at this interval",
         )
-        parser.add_argument(
+        evaluation.add_argument(
+            "--no-evaluation",
+            dest="evaluate_every",
+            action="store_const",
+            const=None,
+            help="disable periodic validation and best-checkpoint selection",
+        )
+        common.add_argument(
             "--output",
-            required=True,
             type=Path,
-            help="new or empty training directory",
+            metavar="DIR",
+            help="create a run in this exact new or empty directory (one task only); omit for automatic per-algorithm directories",
         )
     elif command == "evaluate":
         source = parser.add_mutually_exclusive_group(required=True)
@@ -207,7 +253,8 @@ def _parser(command):
             "--max-steps", type=int, help="optional per-episode step limit"
         )
         parser.add_argument(
-            "--output", required=True, type=Path, help="new evaluation JSON file"
+            "--output", required=True, type=Path, metavar="JSON_FILE",
+            help="create a new evaluation JSON file; existing file rejected"
         )
     else:
         parser.add_argument(
@@ -240,8 +287,10 @@ def _parser(command):
         parser.add_argument(
             "--output",
             type=Path,
+            metavar="DIR",
             help=(
-                "empty output directory; optional Benchmark comparisons use "
+                "create results in a new or empty directory; omit with --benchmark "
+                "to replace comparison.json, comparison.svg, and trajectories.npz in "
                 "runs/<scenario>/benchmarks/<benchmark>"
             ),
         )
@@ -293,6 +342,8 @@ def _comparison_output(args, env):
     if args.output is not None:
         return str(args.output.resolve())
     base_env = env.unwrapped
+    if base_env.benchmark is None:
+        raise ValueError("comparison outside a Benchmark requires an explicit --output directory")
     scenario = base_env.scenario.id.replace("_", "-")
     return str(
         (
@@ -355,7 +406,60 @@ def _success_summary(command, args, result, env):
     }
 
 
-def main(command, argv=None):
+def _print_training_result(output, metadata):
+    """Use the same artifact roles and continuation settings for every CLI run."""
+    import aiogym
+    from aiogym.rl.algorithms import get_algorithm
+    from aiogym.workflows._metadata import ENVIRONMENT_COMPATIBILITY_FIELDS, environment_metadata
+
+    output = Path(output).resolve()
+    environment = metadata["environment"]
+    scenario, algorithm = environment["scenario"], metadata["algorithm"]
+    options = ["--reward", environment["reward"]]
+    parameters = output / "parameters.json"
+    if parameters.is_file():
+        options.extend(["--parameters", str(parameters)])
+    resume = ["aiogym", "train", scenario, algorithm, "--resume-from", str(output / "model.zip"),
+              "--steps", "50000", "--seed", str(metadata["seed"]), *options,
+              "--randomize" if environment["randomize"] else "--no-randomize",
+              "--boundary-probability", str(environment["boundary_probability"]),
+              "--record-every", str(metadata["record_every"])]
+    for name in ("disturbance", "noise", "delay", "fault"):
+        if environment[name]:
+            resume.extend([f"--{name}", "on"])
+    validation = metadata["evaluation"]
+    if validation is None:
+        resume.append("--no-evaluation")
+    else:
+        resume.extend(["--evaluate-every", str(validation["evaluate_every"])])
+    if get_algorithm(algorithm).requires_dataset:
+        resume.extend(["--dataset", metadata["dataset"]["path"]])
+
+    checkpoint = output / "model.zip" if validation is None else output / "best/model.zip"
+    print(f"\n{scenario} / {algorithm} / seed {metadata['seed']} — {metadata['actual_steps']:,} steps", file=sys.stderr)
+    print(f"  Compare:  {checkpoint}" + (" (final; no validation selection)" if validation is None else " (validation best)"), file=sys.stderr)
+    print(f"  Continue: {output / 'model.zip'} (final optimization state)", file=sys.stderr)
+    print(f"  Curve:    {output / 'training_curve.svg'}" + (" (no validation data)" if validation is None else ""), file=sys.stderr)
+    print(f"  Log:      {output / 'train.log'}", file=sys.stderr)
+    # A custom reward or parameter set may be incompatible with a fixed Benchmark.
+    # In that case offer an ordinary comparison retaining the trained configuration.
+    comparison_options = options
+    if "tracking" in aiogym.list_benchmarks(scenario):
+        benchmark_env = aiogym.make_env(scenario, benchmark="tracking")
+        try:
+            benchmark = environment_metadata(benchmark_env)
+        finally:
+            benchmark_env.close()
+        if all(environment[field] == benchmark[field] for field in ENVIRONMENT_COMPATIBILITY_FIELDS):
+            comparison_options = ["--benchmark", "tracking"]
+    compare = ["aiogym", "compare", scenario, *comparison_options, "--controllers", "pid",
+               "--checkpoint", algorithm, str(checkpoint), "--seeds", "0", "1", "2",
+               "--output", str(output / "comparison")]
+    print("  Compare on 3 cases (expand seeds for a formal report):\n    " + shlex.join(compare), file=sys.stderr)
+    print("  Add 50,000 steps:\n    " + shlex.join(resume), file=sys.stderr)
+
+
+def main(command, argv=None, *, _managed=False):
     parser = _parser(command)
     args = parser.parse_args(argv)
     parameters = _json_object_file(args.parameters, parser, "parameters")
@@ -365,6 +469,10 @@ def main(command, argv=None):
     try:
         import aiogym
 
+        if command == "train":
+            from ._train_batch import prepare_training, run_training_batch
+
+            jobs = prepare_training(args)
         env = aiogym.make_env(
             args.scenario,
             reward=args.reward,
@@ -378,6 +486,7 @@ def main(command, argv=None):
             fault=args.fault == "on",
         )
         if command == "collect":
+            print(f"Dataset: {args.output.resolve()} (create in new or empty directory)", file=sys.stderr)
             result = aiogym.collect(
                 env=env,
                 policy=args.controller,
@@ -392,6 +501,23 @@ def main(command, argv=None):
                 parser,
                 "algorithm kwargs",
             )
+            if len(jobs) > 1:
+                summary = run_training_batch(
+                    args, jobs, env=env,
+                    parameters=parameters, algorithm_kwargs=algorithm_kwargs,
+                )
+                for job in jobs:
+                    if job["status"] == "succeeded":
+                        metadata = json.loads((Path(job["output"]) / "metadata.json").read_text(encoding="utf-8"))
+                        _print_training_result(job["output"], metadata)
+                print(json.dumps(summary, indent=2, sort_keys=True, allow_nan=False))
+                return {"completed": 0, "failed": 1, "cancelled": 130}[summary["status"]]
+            if args.output is None:
+                args.output = Path(jobs[0]["output"])
+                args.output.parent.mkdir(parents=True, exist_ok=False)
+            args.algorithm = jobs[0]["algorithm"]
+            args.seed = jobs[0]["seed"]
+            print(f"Training {args.algorithm}: {args.output.resolve()} (create new run directory)", file=sys.stderr)
             if args.evaluate_every is not None:
                 evaluation_env = aiogym.make_env(
                     args.scenario,
@@ -399,25 +525,43 @@ def main(command, argv=None):
                     parameters=parameters,
                     randomize=True,
                 )
-            result = aiogym.train(
-                env=env,
-                algorithm=args.algorithm,
-                steps=args.steps,
-                seed=args.seed,
-                algorithm_kwargs=algorithm_kwargs,
-                record_every=args.record_every,
-                evaluation_env=evaluation_env,
-                evaluate_every=args.evaluate_every,
-                dataset=args.dataset,
-                behavior_cloning_epochs=args.behavior_cloning_epochs,
-                behavior_cloning_batch_size=args.behavior_cloning_batch_size,
-                behavior_cloning_learning_rate=(
-                    args.behavior_cloning_learning_rate
-                ),
-                resume_from=args.resume_from,
-                output=args.output,
-            )
+            def train_one():
+                return aiogym.train(
+                    env=env,
+                    algorithm=args.algorithm,
+                    steps=args.steps,
+                    seed=args.seed,
+                    algorithm_kwargs=algorithm_kwargs,
+                    record_every=args.record_every,
+                    evaluation_env=evaluation_env,
+                    evaluate_every=args.evaluate_every,
+                    dataset=args.dataset,
+                    behavior_cloning_epochs=args.behavior_cloning_epochs,
+                    behavior_cloning_batch_size=args.behavior_cloning_batch_size,
+                    behavior_cloning_learning_rate=(
+                        args.behavior_cloning_learning_rate
+                    ),
+                    resume_from=args.resume_from,
+                    output=args.output,
+                )
+            if _managed:
+                result = train_one()
+            else:
+                from ._train_job import run_training_job
+
+                output = Path(args.output)
+                if output.exists() and any(output.iterdir()):
+                    raise FileExistsError(f"training output must be empty: {output}")
+                output.mkdir(parents=True, exist_ok=True)
+                for name, value in (("parameters", parameters), ("algorithm-kwargs", algorithm_kwargs)):
+                    if value is not None:
+                        write_json(output / f"{name}.json", value)
+                job = {**jobs[0], "command": ["aiogym", "train", *(argv or [])]}
+                result = run_training_job(job, train_one)
+            _print_training_result(args.output, result)
+
         elif command == "evaluate":
+            print(f"Evaluation: {args.output.resolve()} (create new JSON file)", file=sys.stderr)
             if args.checkpoint is not None:
                 policy = aiogym.load_policy(
                     args.checkpoint,
@@ -433,6 +577,8 @@ def main(command, argv=None):
                 output=args.output,
             )
         else:
+            mode = "create in new or empty directory" if args.output is not None else "replace managed comparison JSON/SVG/NPZ files"
+            print(f"Comparison: {_comparison_output(args, env)} ({mode})", file=sys.stderr)
             policies = _comparison_policies(args, parser, aiogym, env)
             result = aiogym.compare_policies(
                 env=env,
@@ -443,8 +589,7 @@ def main(command, argv=None):
             )
         summary = _success_summary(command, args, result, env)
     except (
-        FileExistsError,
-        FileNotFoundError,
+        OSError,
         KeyError,
         RuntimeError,
         TypeError,

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-import tempfile
+import shutil
+import xml.etree.ElementTree as ET
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -13,11 +14,12 @@ import numpy as np
 from aiogym.core.io import write_json
 
 from ._comparison_svg import render_trajectory_svg
-from .evaluate import evaluate
+from .evaluate import DEFAULT_VALIDATION_SETTLING_FRACTION, evaluate
 
 
-COMPARISON_SCHEMA_VERSION = "aiogym.comparison.v5"
+COMPARISON_SCHEMA_VERSION = "aiogym.comparison.v6"
 TRAJECTORY_ARCHIVE_SCHEMA_VERSION = "aiogym.trajectory-archive.v1"
+_COMPARISON_FILES = ("trajectories.npz", "comparison.svg", "comparison.json")
 _TRAJECTORY_FIELDS = (
     "physical_time",
     "true_state",
@@ -45,7 +47,13 @@ def compare_policies(
     Benchmark environments default to
     ``runs/<scenario>/benchmarks/<benchmark>`` and
     replace only the three managed comparison artifacts. Comparisons outside a
-    Benchmark require an explicit empty output directory.
+    Benchmark require an explicit empty output directory. The complete trio is
+    staged before replacement; failed commits restore previous files. Interrupted
+    or failed recovery leaves .comparison-pending for inspection before retrying.
+
+    The figure pairs tracking ISE against the first PID controller, or the first
+    supplied policy when no PID is included. Safety precedes mean return in
+    formal ranking; the paired-cost boxplots do not change that order.
     """
     if not isinstance(policies, Mapping) or len(policies) < 2:
         raise ValueError("policies must be a mapping with at least two entries")
@@ -67,6 +75,13 @@ def compare_policies(
     ordered_seeds = first["seeds"]
     if any(result["seeds"] != ordered_seeds for result in evaluations.values()):
         raise ValueError("all policy evaluations must use identical ordered seeds")
+    for evaluation in evaluations.values():
+        for episode, reference in zip(evaluation["episodes"], first["episodes"]):
+            if any(
+                episode[field] != reference[field]
+                for field in ("episode_spec", "episode_parameters", "runtime_variation")
+            ):
+                raise ValueError("paired comparisons require identical physical cases")
     ranking_metrics = first["ranking_metrics"]
     if any(
         result["ranking_metrics"] != ranking_metrics for result in evaluations.values()
@@ -109,34 +124,77 @@ def compare_policies(
 
     ordering = sorted(labels, key=ranking_key)
     trajectory_seed = ordered_seeds[0]
-    archive = _write_trajectory_archive(
-        output_directory / "trajectories.npz",
-        evaluations,
-        trajectory_schema,
-        overwrite=overwrite,
-    )
-    result = {
-        "schema_version": COMPARISON_SCHEMA_VERSION,
-        "environment": dict(first["environment"]),
-        "trajectory_schema": trajectory_schema,
-        "seeds": list(ordered_seeds),
-        "trajectory_seed": trajectory_seed,
-        "trajectory_archive": archive,
-        "max_steps": first["max_steps"],
-        "ranking_metrics": ranking_metrics,
-        "ordering": ordering,
-        "evaluations": {
-            label: _compact_evaluation(evaluations[label], trajectory_seed)
-            for label in labels
-        },
-    }
-    svg_path = output_directory / "comparison.svg"
-    svg_path.write_text(render_trajectory_svg(result), encoding="utf-8")
-    write_json(
-        output_directory / "comparison.json",
-        result,
-        overwrite=overwrite,
-    )
+    # This directory is both staging space and an exclusive commit reservation.
+    pending = output_directory / ".comparison-pending"
+    pending.mkdir()
+    cleanup = True
+    try:
+        archive = _write_trajectory_archive(
+            pending / "trajectories.npz",
+            evaluations,
+            trajectory_schema,
+        )
+        result = {
+            "schema_version": COMPARISON_SCHEMA_VERSION,
+            "settling_fraction": DEFAULT_VALIDATION_SETTLING_FRACTION,
+            "environment": dict(first["environment"]),
+            "trajectory_schema": trajectory_schema,
+            "seeds": list(ordered_seeds),
+            "trajectory_seed": trajectory_seed,
+            "trajectory_archive": archive,
+            "max_steps": first["max_steps"],
+            "ranking_metrics": ranking_metrics,
+            "ordering": ordering,
+            "evaluations": {
+                label: _compact_evaluation(evaluations[label], trajectory_seed)
+                for label in labels
+            },
+        }
+        svg_path = pending / "comparison.svg"
+        svg = render_trajectory_svg(result)
+        ET.fromstring(svg)
+        svg_path.write_text(svg, encoding="utf-8")
+        write_json(
+            pending / "comparison.json",
+            result,
+            overwrite=False,
+        )
+
+        previous = pending / "previous"
+        previous.mkdir()
+        for name in _COMPARISON_FILES:
+            target = output_directory / name
+            if target.exists():
+                if not overwrite:
+                    raise FileExistsError(f"refusing to overwrite existing artifact: {target}")
+                shutil.copy2(target, previous / name)
+
+        cleanup = False
+        attempted = []
+        committed = False
+        try:
+            for name in _COMPARISON_FILES:
+                attempted.append(name)
+                os.replace(pending / name, output_directory / name)
+            committed = True
+        finally:
+            if not committed:
+                try:
+                    for name in reversed(attempted):
+                        if (previous / name).exists():
+                            # Keep the backup intact if a later rollback operation fails.
+                            shutil.copy2(previous / name, pending / name)
+                            os.replace(pending / name, output_directory / name)
+                        else:
+                            (output_directory / name).unlink(missing_ok=True)
+                except OSError as error:
+                    raise OSError(
+                        f"comparison rollback failed; recovery files retained at {pending}"
+                    ) from error
+            cleanup = True
+    finally:
+        if cleanup:
+            shutil.rmtree(pending)
     return result
 
 
@@ -145,16 +203,21 @@ def _prepare_output_directory(env, output) -> tuple[Path, bool]:
     directory = _default_output_directory(env) if overwrite else Path(output)
     if directory.exists() and not directory.is_dir():
         raise FileExistsError(f"comparison output is not a directory: {directory}")
+    pending = directory / ".comparison-pending"
+    if pending.exists():
+        raise FileExistsError(
+            f"comparison write is active or unfinished: {pending}; "
+            "inspect the pending directory before retrying"
+        )
     entries = tuple(directory.iterdir()) if directory.exists() else ()
     if not overwrite and entries:
         raise FileExistsError(
             f"refusing to create comparison in non-empty directory: {directory}"
         )
-    managed_names = {"comparison.json", "comparison.svg", "trajectories.npz"}
     invalid = sorted(
         path.name
         for path in entries
-        if path.name in managed_names
+        if path.name in _COMPARISON_FILES
         and (path.is_symlink() or not path.is_file())
     )
     if invalid:
@@ -184,7 +247,7 @@ def _compact_evaluation(evaluation, trajectory_seed):
     }
 
 
-def _write_trajectory_archive(path, evaluations, schema, *, overwrite):
+def _write_trajectory_archive(path, evaluations, schema):
     target = Path(path)
     arrays = {}
     entries = []
@@ -206,7 +269,10 @@ def _write_trajectory_archive(path, evaluations, schema, *, overwrite):
                     "length": episode["length"],
                 }
             )
-    _write_npz(target, arrays, overwrite=overwrite)
+    with target.open("xb") as stream:
+        np.savez_compressed(stream, **arrays)
+        stream.flush()
+        os.fsync(stream.fileno())
     return {
         "schema_version": TRAJECTORY_ARCHIVE_SCHEMA_VERSION,
         "file": target.name,
@@ -300,29 +366,6 @@ def _trajectory_arrays(trajectory, columns):
             raise ValueError(f"trajectory field {field!r} must contain finite values")
         arrays[field] = array
     return arrays
-
-
-def _write_npz(path, arrays, *, overwrite):
-    target = Path(path)
-    if target.exists() and not overwrite:
-        raise FileExistsError(f"refusing to overwrite existing artifact: {target}")
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=target.parent,
-        prefix=f".{target.name}.",
-        suffix=".tmp",
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            np.savez_compressed(stream, **arrays)
-            stream.flush()
-            os.fsync(stream.fileno())
-        if target.exists() and not overwrite:
-            raise FileExistsError(f"refusing to overwrite existing artifact: {target}")
-        os.replace(temporary, target)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
 
 
 def _default_output_directory(env) -> Path:
