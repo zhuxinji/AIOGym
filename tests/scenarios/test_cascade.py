@@ -98,7 +98,9 @@ def test_cascade_settling_uses_physical_level_and_temperature_tolerances():
         reset_info={"episode_spec": {"disturbance_schedule": {}}},
         transitions=(transition,),
     )
-    env = SimpleNamespace(unwrapped=SimpleNamespace(control_dt=1.0))
+    env = SimpleNamespace(
+        unwrapped=SimpleNamespace(control_dt=1.0, model=SimpleNamespace(time_unit="s"))
+    )
 
     metrics = regulation_episode_metrics(env, episode)
 
