@@ -1,4 +1,4 @@
-"""Fired-heater Scenario registration."""
+"""Fired-heater Scenario definition."""
 
 from .definition import SCENARIO
 

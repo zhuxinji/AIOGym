@@ -100,11 +100,11 @@ jobs:
               policy = aiogym.make_controller("pid", env=env)
               result = aiogym.evaluate(
                   env=env,
-                  policy=policy,
+                  policies={"pid": policy},
                   seeds=(0,),
                   max_steps=2,
               )
-              assert result["episodes"][0]["length"] == 2
+              assert result["evaluations"]["pid"]["episodes"][0]["length"] == 2
           finally:
               env.close()
           PY

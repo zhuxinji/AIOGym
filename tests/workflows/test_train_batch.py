@@ -101,16 +101,24 @@ def test_batch_rejects_ambiguous_or_invalid_options(tmp_path, monkeypatch, optio
 
 
 def _jobs(tmp_path, scripts):
-    for index in range(len(scripts)):
-        (tmp_path / f"job-{index}").mkdir()
-    return [
-        {"algorithm": f"test-{index}", "seed": 0, "status": "pending",
-         "output": str(tmp_path / f"job-{index}"),
-         "log": str(tmp_path / f"job-{index}" / "train.log"),
-         "status_file": str(tmp_path / f"job-{index}" / "status.json"),
-         "command": [sys.executable, "-u", "-c", script]}
-        for index, script in enumerate(scripts)
-    ]
+    worker = (
+        "import json,sys; from pathlib import Path; "
+        "from aiogym.cli._train_job import run_training_job; "
+        "job=json.loads(Path(sys.argv[1]).read_text()); "
+        "run_training_job(job, lambda: exec(job['command'][-1]), log_output=False)"
+    )
+    jobs = []
+    for index, script in enumerate(scripts):
+        output = tmp_path / f"job-{index}"
+        output.mkdir()
+        jobs.append({
+            "algorithm": f"test-{index}", "seed": 0, "status": "pending",
+            "output": str(output), "log": str(output / "train.log"),
+            "status_file": str(output / "status.json"),
+            "command": [sys.executable, "-u", "-c", script],
+            "worker_command": [sys.executable, "-u", "-c", worker, str(output / "status.json")],
+        })
+    return jobs
 
 
 def test_scheduler_overlaps_only_up_to_worker_limit(tmp_path):
@@ -121,7 +129,7 @@ def test_scheduler_overlaps_only_up_to_worker_limit(tmp_path):
     )
     jobs = _jobs(tmp_path, [script] * 3)
     result = batch._run_jobs(jobs, workers=2)
-    records = [[json.loads(line) for line in Path(job["log"]).read_text().splitlines()]
+    records = [[json.loads(line) for line in Path(job["log"]).read_text().splitlines() if line.startswith("{")]
                for job in jobs]
     assert max(records[0][0]["start"], records[1][0]["start"]) < min(
         records[0][1]["end"], records[1][1]["end"],

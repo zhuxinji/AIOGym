@@ -42,6 +42,7 @@ class EpisodeSpec:
     disturbance_schedule: Mapping[int, Mapping[str, float]] = field(
         default_factory=dict
     )
+    terminal_at_horizon: bool = False
 
     def __post_init__(self) -> None:
         initial_state = _finite_tuple("initial_state", self.initial_state)
@@ -52,6 +53,8 @@ class EpisodeSpec:
         horizon = int(self.horizon)
         if horizon <= 0:
             raise ValueError("horizon must be a positive integer")
+        if not isinstance(self.terminal_at_horizon, bool):
+            raise TypeError("terminal_at_horizon must be bool")
         disturbances = _finite_mapping("disturbances", self.disturbances)
         reference_schedule: dict[int, tuple[float, ...]] = {}
         for raw_step, values in self.reference_schedule.items():
@@ -84,6 +87,7 @@ class EpisodeSpec:
             "initial_action": list(self.initial_action),
             "reference": list(self.reference),
             "horizon": self.horizon,
+            **({"terminal_at_horizon": True} if self.terminal_at_horizon else {}),
             "disturbances": deep_thaw(self.disturbances),
             "reference_schedule": {
                 str(step): list(values)
@@ -105,8 +109,18 @@ class Benchmark:
     episode_factory: EpisodeFactory
     metric_function: EpisodeMetricFunction
     ranking_metrics: tuple[tuple[str, MetricDirection], ...]
+    description: str = "Not provided"
+    horizon: int | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.description, str) or not self.description.strip():
+            raise ValueError("benchmark description must be a non-empty string")
+        if self.horizon is not None and (
+            isinstance(self.horizon, bool)
+            or not isinstance(self.horizon, Integral)
+            or self.horizon <= 0
+        ):
+            raise ValueError("benchmark horizon must be a positive integer or None")
         if not isinstance(self.id, str) or not self.id.strip() or "/" in self.id:
             raise ValueError("benchmark id must be a non-empty local name")
         if (
@@ -154,12 +168,15 @@ class Reward:
     primary_metric: str | None = None
     metric_direction: MetricDirection = "minimize"
     safety_violation_penalty: float = 0.0
+    success_criterion: str = "Safe completion and task-defined target attainment."
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not self.id.strip() or "/" in self.id:
             raise ValueError("reward id must be a non-empty local name")
         if not callable(self.function):
             raise TypeError("reward function must be callable")
+        if not isinstance(self.success_criterion, str) or not self.success_criterion.strip():
+            raise ValueError("success_criterion must be a non-empty string")
         if self.metric_direction not in {"minimize", "maximize"}:
             raise ValueError("metric_direction must be minimize or maximize")
         if self.episode_metric_function is not None and not callable(

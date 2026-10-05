@@ -300,10 +300,10 @@ def test_randomized_direct_action_environment_uses_the_standard_evaluator():
     try:
         result = evaluate(
             env=env,
-            policy="random",
+            policies={"policy": "random"},
             seeds=[3, 4],
             max_steps=2,
-        )
+        )["evaluations"]["policy"]
     finally:
         env.close()
     assert result["seeds"] == [3, 4]

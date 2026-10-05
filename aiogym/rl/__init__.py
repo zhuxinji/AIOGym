@@ -1,20 +1,5 @@
-"""Trainable-algorithm contracts and RL framework adapters."""
+"""Built-in learning algorithms."""
 
-from .algorithms import (
-    AlgorithmBackend,
-    TrainingStep,
-    list_algorithms,
-    register_algorithm,
-    register_sb3_algorithm,
-)
-from .sb3 import SB3AlgorithmBackend, SB3CheckpointPolicy
+from .algorithms import list_algorithms
 
-__all__ = [
-    "AlgorithmBackend",
-    "SB3AlgorithmBackend",
-    "SB3CheckpointPolicy",
-    "TrainingStep",
-    "list_algorithms",
-    "register_algorithm",
-    "register_sb3_algorithm",
-]
+__all__ = ["list_algorithms"]

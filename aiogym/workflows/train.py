@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 
 from aiogym.core.io import jsonable, write_json
+from aiogym.scenarios._metrics import DEFAULT_SETTLING_FRACTION, REGULATION_SUCCESS_CRITERION
 from aiogym.rl.algorithms import (
     TrainingStep,
     get_algorithm,
@@ -23,7 +24,7 @@ from aiogym.rl.behavior_cloning import load_demonstrations
 from aiogym.rl.datasets import load_training_dataset, training_dataset_metadata
 
 from ._metadata import environment_metadata, validate_environment_compatibility
-from .compare import render_trajectory_svg
+from ._comparison_svg import render_trajectory_svg
 from ._checkpoint import (
     CHECKPOINT_SCHEMA_VERSION,
     backend_runtime_metadata,
@@ -32,13 +33,14 @@ from ._checkpoint import (
     save_checkpoint,
 )
 from .evaluate import (
-    DEFAULT_VALIDATION_SETTLING_FRACTION,
     _evaluate,
     _validation_summary,
-    evaluate,
 )
 from .training_curve import (
     TRAINING_CURVE_SCHEMA_VERSION,
+    TRAINING_EVALUATION_SCHEMA_VERSION,
+    LEGACY_EVALUATION_SCHEMAS,
+    _legacy_control_metrics,
     _load_curve,
     _validate_curve,
     _validation_rows,
@@ -46,8 +48,7 @@ from .training_curve import (
 )
 
 
-TRAINING_SCHEMA_VERSION = "aiogym.training.v14"
-TRAINING_EVALUATION_SCHEMA_VERSION = "aiogym.training_evaluation.v4"
+TRAINING_SCHEMA_VERSION = "aiogym.training.v15"
 DEFAULT_VALIDATION_SEEDS = tuple(range(1_000, 1_020))
 _LOGGER = logging.getLogger(__name__)
 
@@ -71,8 +72,11 @@ def train(
 ):
     """Train or continue for 500k steps, validating every 5k by default.
 
+    ``algorithm`` is a built-in name returned by ``aiogym.list_algorithms()``.
     Supply a separate ``evaluation_env`` or set ``evaluate_every=None`` to
-    disable validation. The caller retains ownership of both environments.
+    disable validation. Validation variation may be configured independently
+    of training; continuation must retain its recorded configuration.
+    The caller retains ownership of both environments.
     The output must be new or empty apart from CLI logs, status, and frozen
     JSON inputs; existing training artifacts are never overwritten.
     """
@@ -95,8 +99,6 @@ def train(
     if any(not isinstance(name, str) for name in requested_kwargs):
         raise TypeError("algorithm_kwargs keys must be strings")
     serialized_kwargs = jsonable(requested_kwargs)
-    if not isinstance(serialized_kwargs, dict):
-        raise TypeError("algorithm_kwargs must be a mapping")
 
     resume_path = None if resume_from is None else Path(resume_from)
     initial_steps = 0
@@ -349,14 +351,17 @@ def train(
             )
         best_policy = load_policy(best_checkpoint, env=evaluation_env)
         _LOGGER.info("Evaluating best checkpoint", extra={"phase": "validation"})
-        best_evaluation = evaluate(
+        best_evaluation = _evaluate(
             env=evaluation_env,
             policy=best_policy,
             seeds=DEFAULT_VALIDATION_SEEDS,
+            include_trajectories=True,
+            include_trajectory_summary=True,
         )
         _LOGGER.info("Writing training artifacts", extra={"phase": "saving"})
         best_tracking_figure = best_checkpoint.parent / "tracking.svg"
         trajectory_report = {
+            "success_criterion": best_evaluation["success_criterion"],
             "environment": best_evaluation["environment"],
             "trajectory_schema": best_evaluation["trajectory_schema"],
             "seeds": best_evaluation["seeds"],
@@ -379,7 +384,7 @@ def train(
             "seeds": list(DEFAULT_VALIDATION_SEEDS),
             "ranking_metric": evaluation_history["ranking_metric"],
             "selection_order": evaluation_history["selection_order"],
-            "settling_fraction": evaluation_history["settling_fraction"],
+            "success_criterion": evaluation_history["success_criterion"],
             "best_step": evaluation_history["best_step"],
             "best_mean_return": evaluation_history["best_mean_return"],
             "best_median_return": evaluation_history["best_median_return"],
@@ -518,15 +523,25 @@ def _resume_history(path, training, *, evaluation_env):
             return history
         raise ValueError("continued training must preserve whether validation is enabled")
     if evaluation is not None:
-        if evaluation.get("schema_version") not in {
-            "aiogym.training_evaluation.v2", "aiogym.training_evaluation.v3",
-            TRAINING_EVALUATION_SCHEMA_VERSION,
-        }:
+        schema = evaluation.get("schema_version")
+        if schema is None or schema not in LEGACY_EVALUATION_SCHEMAS | {TRAINING_EVALUATION_SCHEMA_VERSION}:
             raise ValueError("unsupported checkpoint validation history schema")
+        validation_environment = environment_metadata(evaluation_env)
+        if "environment" in evaluation:
+            if evaluation["environment"] != validation_environment:
+                raise ValueError(
+                    "continued training validation environment must match the saved configuration"
+                )
+        elif any(validation_environment[name] is not None
+                 for name in ("disturbance", "noise", "delay", "fault")):
+            # Older histories were produced when validation channels were disabled.
+            raise ValueError(
+                "validation history has no environment metadata; continue with "
+                "disturbance, noise, delay, and fault disabled"
+            )
         _validation_rows(
             evaluation, curve or {"initial_steps": 0, "actual_steps": 0},
             control_dt=float(evaluation_env.unwrapped.control_dt),
-            settling_fraction=DEFAULT_VALIDATION_SETTLING_FRACTION,
         )
         source = history["best_checkpoint"]
         if source is None:
@@ -540,22 +555,23 @@ def _resume_history(path, training, *, evaluation_env):
             manifest = json.loads(archive.read("manifest.json"))
         if manifest["policy"]["training"]["completed_steps"] != evaluation["best_step"]:
             raise ValueError("saved best checkpoint does not match the validation history")
-        if evaluation.get("settling_fraction") != DEFAULT_VALIDATION_SETTLING_FRACTION:
+        if schema in LEGACY_EVALUATION_SCHEMAS:
             # Old validation points remain diagnostics. Only retained weights can
             # compete under a new rule; a metric history cannot restore a model.
             available = {evaluation["best_step"]: source, step: path}
+            changed_rule = evaluation.get("settling_fraction") != DEFAULT_SETTLING_FRACTION
             best = None
             for record in evaluation["records"]:
-                if (
-                    evaluation.get("schema_version") != TRAINING_EVALUATION_SCHEMA_VERSION
-                    and getattr(evaluation_env.unwrapped.model, "time_unit", "s") == "h"
-                ):
-                    for episode in record["episodes"]:
+                for episode in record["episodes"]:
+                    if (schema in {"aiogym.training_evaluation.v2", "aiogym.training_evaluation.v3"}
+                        and getattr(evaluation_env.unwrapped.model, "time_unit", "s") == "h"):
                         episode["metrics"]["energy"] *= 3600
-                record.update(_validation_summary(
-                    record["episodes"], control_dt=float(evaluation_env.unwrapped.control_dt),
-                ))
-                record["selection_eligible"] = record["step"] in available
+                    episode["metrics"] = _legacy_control_metrics(
+                        episode, float(evaluation_env.unwrapped.control_dt),
+                    )
+                record.update(_validation_summary(record["episodes"]))
+                if changed_rule:
+                    record["selection_eligible"] = record["step"] in available
                 if _is_better_training_evaluation(record, best):
                     best = record
             source = available[best["step"]]
@@ -564,7 +580,8 @@ def _resume_history(path, training, *, evaluation_env):
                 evaluation[f"best_{name}"] = best[name]
             evaluation["schema_version"] = TRAINING_EVALUATION_SCHEMA_VERSION
             evaluation.pop("settling_window", None)
-            evaluation["settling_fraction"] = DEFAULT_VALIDATION_SETTLING_FRACTION
+            evaluation.pop("settling_fraction", None)
+            evaluation["success_criterion"] = REGULATION_SUCCESS_CRITERION
         history["best_checkpoint"] = source
     return history
 
@@ -599,12 +616,8 @@ def _dataset_inputs(*, backend, dataset, epochs, batch_size, learning_rate):
     }
 
 
-def load_policy(
-    checkpoint: str | Path,
-    *,
-    env,
-):
-    """Load one self-describing AIO-Gym ``model.zip`` policy."""
+def load_policy(checkpoint: str | Path, *, env):
+    """Load a built-in algorithm's AIO-Gym ``model.zip`` for this environment."""
 
     return load_checkpoint(checkpoint, env=env)
 
@@ -648,16 +661,11 @@ def _validate_evaluation_env(training_env, evaluation_env, evaluate_every):
         raise ValueError("evaluation_env must be separate from the training env")
     if evaluation_env.unwrapped.benchmark is not None:
         raise ValueError("training evaluation does not accept a Benchmark env")
-    training_metadata = environment_metadata(training_env)
-    evaluation_metadata = environment_metadata(evaluation_env)
+    evaluation_metadata = validate_environment_compatibility(
+        environment_metadata(training_env), evaluation_env,
+    )
     if not evaluation_metadata["randomize"]:
         raise ValueError("training evaluation env must use randomize=True")
-    for channel in ("disturbance", "noise", "delay", "fault"):
-        if evaluation_metadata[channel] is not None:
-            raise ValueError(
-                f"training evaluation env must not enable {channel}"
-            )
-    validate_environment_compatibility(training_metadata, evaluation_env)
     if training_env.observation_space != evaluation_env.observation_space:
         raise ValueError("evaluation observation space must match training")
     if training_env.action_space != evaluation_env.action_space:
@@ -683,6 +691,7 @@ class _TrainingEvaluationRecorder:
         self._backend = backend
         self._model = model
         self._env = env
+        self._environment_metadata = environment_metadata(env)
         self._checkpoint_env = checkpoint_env
         self._evaluate_every = evaluate_every
         self._seeds = tuple(seeds)
@@ -721,9 +730,7 @@ class _TrainingEvaluationRecorder:
         result = _evaluate(env=self._env, policy=policy, seeds=self._seeds,
                            include_trajectories=False)
         episodes = result["episodes"]
-        summary = _validation_summary(
-            episodes, control_dt=float(self._env.unwrapped.control_dt),
-        )
+        summary = _validation_summary(episodes)
         record = {
             "step": int(step),
             **summary,
@@ -781,9 +788,10 @@ class _TrainingEvaluationRecorder:
         best = self._records[self._best_index]
         return {
             "schema_version": TRAINING_EVALUATION_SCHEMA_VERSION,
+            "environment": self._environment_metadata,
             "evaluate_every": int(self._evaluate_every),
             "seeds": list(self._seeds),
-            "settling_fraction": DEFAULT_VALIDATION_SETTLING_FRACTION,
+            "success_criterion": self._env.unwrapped.reward.success_criterion,
             "ranking_metric": {
                 "name": "return",
                 "aggregate": "mean",

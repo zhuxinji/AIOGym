@@ -13,7 +13,7 @@ import numpy as np
 from aiogym.core.io import canonical_json_bytes, write_json
 
 
-DATASET_SCHEMA_VERSION = "aiogym.dataset.v3"
+DATASET_SCHEMA_VERSION = "aiogym.dataset.v4"
 REQUIRED_ARRAYS = (
     "observation",
     "action",
@@ -126,7 +126,7 @@ class DatasetWriter:
 
 
 class DatasetReader:
-    """Read Dataset v2/v3, optionally caching validated episodes for training."""
+    """Read Dataset v2/v3/v4, optionally caching validated episodes for training."""
 
     def __init__(self, path: str | Path, *, cache_episodes: bool = False) -> None:
         self.path = Path(path)
@@ -264,7 +264,9 @@ def _read_metadata(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"), parse_constant=reject_constant)
     if not isinstance(payload, dict):
         raise ValueError("dataset metadata must contain a JSON object")
-    if payload.get("schema_version") not in {"aiogym.dataset.v2", DATASET_SCHEMA_VERSION}:
+    if payload.get("schema_version") not in {
+        "aiogym.dataset.v2", "aiogym.dataset.v3", DATASET_SCHEMA_VERSION,
+    }:
         raise ValueError(f"unsupported dataset schema; expected {DATASET_SCHEMA_VERSION}")
     for field in (
         "environment",
@@ -309,7 +311,7 @@ def _read_metadata(path: Path) -> dict[str, Any]:
     _nonnegative_int("base_seed", payload["base_seed"])
     for field in ("episode_count", "transition_count"):
         _nonnegative_int(field, payload[field])
-    if payload["schema_version"] == DATASET_SCHEMA_VERSION:
+    if payload["schema_version"] != "aiogym.dataset.v2":
         for record in episodes:
             digest = record.get("sha256")
             if (

@@ -1,7 +1,51 @@
-"""Small non-learning baseline policies."""
+"""Small baseline policies and a callback adapter for external algorithms."""
 from __future__ import annotations
 
+from collections.abc import Mapping
+from copy import deepcopy
+
 import numpy as np
+
+
+class FunctionPolicy:
+    """Adapt ``act(observation, context)`` and optional ``reset(seed=...)``.
+
+    Observation-only functions can be passed directly to evaluate and collect;
+    use this adapter for reset callbacks, context, or metadata.
+
+    The callback returns an action in the environment's action space; the
+    workflow validates it without scaling or clipping. Metadata is copied and
+    must be JSON-compatible. Its optional ``environment`` entry is a snapshot
+    from ``aiogym.environment_metadata(training_env)``, checked by evaluation
+    and collection before resetting or stepping the environment.
+    """
+
+    env = None
+
+    def __init__(self, act, *, reset=None, metadata=None):
+        if not callable(act):
+            raise TypeError("act must be callable")
+        if reset is not None and not callable(reset):
+            raise TypeError("reset must be callable or None")
+        if metadata is not None and not isinstance(metadata, Mapping):
+            raise TypeError("metadata must be a mapping or None")
+        self._act = act
+        self._reset = reset
+        self._metadata = deepcopy({
+            "id": "external",
+            "kind": "external_policy",
+            **({} if metadata is None else metadata),
+        })
+
+    def reset(self, seed=None):
+        if self._reset is not None:
+            self._reset(seed=seed)
+
+    def act(self, observation, context):
+        return np.asarray(self._act(observation, context), dtype=np.float32)
+
+    def metadata(self):
+        return deepcopy(self._metadata)
 
 
 class HoldPolicy:
@@ -51,4 +95,4 @@ class RandomPolicy:
         }
 
 
-__all__ = ["HoldPolicy", "RandomPolicy"]
+__all__ = ["FunctionPolicy", "HoldPolicy", "RandomPolicy"]

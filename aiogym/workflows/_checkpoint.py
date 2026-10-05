@@ -16,7 +16,7 @@ from aiogym.rl.algorithms import get_algorithm
 from ._metadata import environment_metadata, validate_environment_compatibility
 
 
-CHECKPOINT_SCHEMA_VERSION = "aiogym.checkpoint.v2"
+CHECKPOINT_SCHEMA_VERSION = "aiogym.checkpoint.v3"
 _MANIFEST_NAME = "manifest.json"
 _PAYLOAD_NAME = "payload.zip"
 
@@ -76,7 +76,9 @@ def save_checkpoint(
 
 
 def load_checkpoint(checkpoint, *, env):
-    path, _manifest, backend, model = _load_checkpoint_model(checkpoint, env=env)
+    path, _manifest, backend, model = _load_checkpoint_model(
+        checkpoint, env=env
+    )
     return validate_policy(backend.policy(model, checkpoint=path))
 
 
@@ -112,32 +114,35 @@ def _load_checkpoint_model(checkpoint, *, env, training_algorithm=None):
                         "checkpoint must contain exactly manifest.json and payload.zip"
                     )
                 manifest = _read_manifest(archive)
-                validate_environment_compatibility(manifest["environment"], env)
+                actual = validate_environment_compatibility(
+                    manifest["environment"], env,
+                    allow_legacy=manifest["schema_version"] == "aiogym.checkpoint.v2",
+                )
+                backend = get_algorithm(manifest["algorithm"])
                 if training_algorithm is not None:
                     if manifest["algorithm"] != training_algorithm:
                         raise ValueError(
                             f"checkpoint algorithm {manifest['algorithm']!r} does "
-                            "not match requested algorithm "
-                            f"{training_algorithm!r}"
+                            f"not match requested algorithm {training_algorithm!r}"
                         )
-                    _validate_training_environment(manifest["environment"], env)
+                    if "policy_interface" not in manifest["environment"]:
+                        actual.pop("policy_interface")
+                    _validate_training_environment(manifest["environment"], actual)
                 with archive.open(_PAYLOAD_NAME) as source, payload.open(
                     "wb"
                 ) as destination:
                     shutil.copyfileobj(source, destination)
         except zipfile.BadZipFile as error:
             raise ValueError("checkpoint must be a valid AIO-Gym model.zip") from error
-        backend = get_algorithm(manifest["algorithm"])
         model = backend.load(payload, env=env)
     return path, manifest, backend, model
 
 
-def _validate_training_environment(expected, env) -> None:
-    actual = environment_metadata(env)
+def _validate_training_environment(expected, actual) -> None:
     if set(expected) != set(actual):
         raise ValueError("checkpoint training environment fields are invalid")
     for field, value in expected.items():
-        if field not in actual or value != actual[field]:
+        if value != actual[field]:
             raise ValueError(
                 f"checkpoint {field} is incompatible with the training environment"
             )
@@ -147,10 +152,7 @@ def backend_runtime_metadata(backend) -> dict:
     runtime = backend.runtime_metadata()
     if not isinstance(runtime, Mapping):
         raise TypeError("algorithm backend runtime_metadata must return a mapping")
-    serialized = jsonable(dict(runtime))
-    if not isinstance(serialized, dict):
-        raise TypeError("algorithm backend runtime_metadata must return a mapping")
-    return serialized
+    return jsonable(dict(runtime))
 
 
 def _checkpoint_path(checkpoint) -> Path:
@@ -177,7 +179,7 @@ def _read_manifest(archive) -> dict:
             "checkpoint manifest requires schema_version, algorithm, runtime, "
             "environment, and policy"
         )
-    if manifest["schema_version"] != CHECKPOINT_SCHEMA_VERSION:
+    if manifest["schema_version"] not in {"aiogym.checkpoint.v2", CHECKPOINT_SCHEMA_VERSION}:
         raise ValueError(
             f"checkpoint schema_version must be {CHECKPOINT_SCHEMA_VERSION}"
         )

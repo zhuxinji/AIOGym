@@ -1,245 +1,197 @@
 # Heated Cascade model
 
-The built-in `cascade` Scenario starts from the same three 45 L process tanks,
-180 L source/return reservoir, P101 pump, and V12/V23/V34 hydraulic path as
-`three_tank`. The equipment design contains one independently commanded 2 kW
-immersion heater in each process tank: H1, H2, and H3. Heater availability is
-configured when the environment is created and defaults to H1 only:
+`scenario = "cascade"` · [User guide](../user-guide.md)
 
-```python
-import aiogym
+## Physical interface
 
-env = aiogym.make_env("cascade", heater=[1, 0, 0])
+```mermaid
+flowchart LR
+    R[Dynamic reservoir] -->|P101 / FT101| T1[Tank 1 + H1]
+    T1 -->|V12 / FT12| T2[Tank 2 + H2]
+    T2 -->|V23 / FT23| T3[Tank 3 + H3]
+    T3 -->|V34 / FT34| R
 ```
 
-Each entry must be binary. Other combinations such as `[1, 0, 1]` work with
-ordinary, randomized, and Benchmark environments. Choose `cascade` for coupled
-level and temperature control; choose `three_tank` for the hydraulic-only task.
+Same hydraulic equipment as [Three-Tank](three_tank.md), plus independently
+commanded `2 kW` heaters. Default availability is H1 only.
 
-The simulated physical state includes the three process tanks and the common
-return reservoir:
+| Interface | Ordered values / units |
+|---|---|
+| State | `[h1, T1, h2, T2, h3, T3, reservoir_volume, reservoir_temperature]`; m, degC, m^3 |
+| Output / reference | `[h1, h2, h3, T1, T2, T3]` |
+| Direct action | `[P101, V12, V23, V34, H1, H2, H3]`, each in `[0, 1]` |
+| Observation | `[h1, T1, h2, T2, h3, T3, FT101, FT12, FT23, FT34, h1_sp, h2_sp, h3_sp, T1_sp, T2_sp, T3_sp]` |
+| Scaling | All observations `[0, 1]`; flowmeters use `0–10 L/min` |
+| Hidden state | Reservoir volume/temperature; inspect `info["reservoir_volume_m3"]` / `info["reservoir_temperature"]` |
+| Timing | Control `2 s` |
+| Heater availability | Binary `parameters={"heater": [1, 0, 0]}`; direct interface always 16 observations / 7 actions |
 
-```text
-[h1, T1, h2, T2, h3, T3, reservoir_volume, reservoir_temperature]
-```
-
-Pass all eight values through `initial_state=` to start an ordinary simulation
-from measured or chosen physical conditions:
-
-```python
-import aiogym
-
-env = aiogym.make_env(
-    "cascade",
-    heater=[1, 0, 0],
-    initial_state=[
-        0.20, 25.0,
-        0.25, 28.0,
-        0.30, 32.0,
-        0.09, 20.0,
-    ],
-)
-observation, info = env.reset(seed=0)
-print(info["reservoir_volume_m3"], info["reservoir_temperature"])
-env.close()
-```
-
-This overrides only the initial state. The initial action, target, horizon, and
-disturbances remain unchanged, so a chosen state is not assumed to be a steady
-state. An explicitly supplied state may represent a cold start. Randomized
-training environments sample their own initial state, and fixed Benchmarks own
-their complete episodes; neither accepts `initial_state=`.
-
-The controlled output and reference group the three levels followed by the
-three temperatures:
-
-```text
-[h1, h2, h3, T1, T2, T3]
-```
-
-The direct physical action is:
-
-```text
-[P101, V12, V23, V34, H1, H2, H3]
-```
-
-In the ordinary environment, every action is a normalized physical command in
-`[0, 1]`. There is no hidden lower-level controller or shared heater command.
-The interface remains seven-dimensional for every heater configuration.
-Commands sent to unavailable heaters remain visible as commanded actions, while
-their applied actions, delivered heat, and energy use are forced to zero. The
-resolved heater list is recorded with environment and checkpoint metadata.
-The direct policy observation contains six normalized state measurements,
-four normalized flow measurements, and six normalized references:
-
-```text
-[h1, T1, h2, T2, h3, T3, FT101, FT12, FT23, FT34,
- h1_sp, h2_sp, h3_sp, T1_sp, T2_sp, T3_sp]
-```
-
-All channels are normalized to `[0, 1]`; the four shared flowmeter channels use
-the confirmed `0--10 L/min` span. Every default, randomized, and
-Benchmark mode therefore keeps the same 16-dimensional observation and
-7-dimensional physical action interface. Reservoir volume and temperature are
-internal plant states, not policy observation channels or controlled outputs.
-They are available in `info["reservoir_volume_m3"]` and
-`info["reservoir_temperature"]` for inspection and saved trajectories. Built-in
-PID, MPC, and learned policies do not receive the true hidden values through
-policy context. Ambient temperature remains an external condition reported in
-`info["disturbance"]`.
+Unavailable heaters retain commanded actions in records, but applied action,
+delivered heat, and energy are zero. PID/MPC/learned policies receive no true
+hidden reservoir state through context. Bypass positions and ambient conditions
+remain diagnostics in `info["disturbance"]`.
 
 ## Physical balances and safety
 
-The hydraulic balances, vessel geometry, passive overflow, high-level pump
-trip, and reservoir availability permissive match `three_tank`. P101 feeds
-Tank 1, V12 carries mixed liquid from Tank 1 to Tank 2, V23 carries it to Tank
-3, and V34 returns it to the reservoir. Passive overflow returns to the
-reservoir rather than bypassing into the next process tank.
-BV12, BV23, and BV34 provide binary parallel bypass disturbances around the
-three outlet branches. Their positions are hidden conditions, while FT101,
-FT12, FT23, and FT34 remain available to every policy. The three outlet meters
-sit on the regulating-valve branches before the bypasses rejoin, so their
-readings exclude bypass flow; policies observe each bypass only indirectly
-through the liquid-level and temperature response.
+| Balance / equipment | Behavior |
+|---|---|
+| Hydraulic path | Pump → Tank 1 → Tank 2 → Tank 3 → reservoir; passive overflow returns directly to reservoir |
+| BV12/BV23/BV34 | Parallel bypass disturbances; outlet meters measure valve flow only |
+| Tank heat balance | Inlet mixing + electrical heat × efficiency − ambient loss |
+| Reservoir | Dynamic liquid/energy inventory; default `90 L` at ambient `20 degC`, capacity `180 L` |
+| Heat loss | `40 W/K` per tank and reservoir |
+| Makeup / drain / reservoir overflow | None; total liquid is conserved |
 
-Each thermal balance includes inlet mixing, its own electrical heater, and
-tank-to-ambient heat loss. Tank 3 and all passive tank overflows return liquid
-and energy to the reservoir; P101 draws its inlet from the reservoir. The
-reservoir has a maximum capacity of `180 L`, starts with `90 L`, starts at the
-ambient temperature of `20 degC`, and loses heat to the same ambient. It has no
-automatic makeup, drain, or overflow path. Emptying it or exceeding its
-capacity is therefore a terminal safety violation instead of silently adding
-or discarding liquid. Its default heat-loss coefficient is `40 W/K`, the same
-as each tank. Heater electrical power is multiplied by its tank-specific
-efficiency disturbance before entering the liquid balance.
+| Safety condition | Response |
+|---|---|
+| High process-tank level | Same pump trip and overflow rules as Three-Tank |
+| Heater tank level `< 0.10 m` | Disable that heater |
+| Heater tank temperature `≥ 80 degC` | Disable that heater; interlock alone is not terminal |
+| Tank level outside `0–0.50 m` | Terminate |
+| Reservoir outside `0–180 L` | Terminate |
+| Any tank/reservoir temperature `< 0` or `≥ 90 degC` | Terminate |
 
-Each heater has two local hardwired permissives:
+Step diagnostics include actual electrical power, liquid heat input, and per-heater interlocks.
 
-- it is disabled below `0.10 m` liquid level;
-- it is disabled at or above the `80 degC` temperature trip.
+## Default task
 
-An episode terminates when any tank level becomes negative or exceeds `0.50 m`,
-when the reservoir inventory leaves `0--180 L`, or when any tank or reservoir
-temperature becomes negative or reaches the `90 degC` hard limit.
-The temperature trip prevents additional heating but is not itself a terminal
-condition. `step()` reports actual heater electrical power, heat transferred to
-liquid, and the per-heater interlock state.
+| Setting | Value |
+|---|---|
+| Initial levels / flow | All `0.225 m` / common `3 L/min` |
+| Initial temperatures / bias | Closed recirculating steady state, including reservoir |
+| Target from reset | Levels `(0.30, 0.25, 0.325) m` plus reachable heated temperature profile |
+| Target reservoir volume | Derived from liquid conservation |
+| Horizon | `600 steps = 1200 s` |
 
-The default episode starts at `0.225 m` in every tank with a common `3 L/min`
-flow. All three tank temperatures, the hidden reservoir temperature, and the
-controller bias come from the same closed recirculating steady state. The
-deterministic default episode immediately tracks
-`(0.30, 0.25, 0.325) m` and a reachable heated temperature profile for 1200
-seconds. Its target reservoir inventory is chosen by liquid conservation, so a
-level change does not assume external makeup water.
+## Reward and success
 
-Use the public parameter interface for direct validated overrides:
+| `regulation` component | Definition |
+|---|---|
+| Output error scales | Levels `0.1 m` each; temperatures `5 degC` each; shared by reward/IAE/ISE/final error |
+| Success / settling bands | Levels `0.005 m` each; temperatures `0.2 degC` each |
+| Control success | Safe completion, all 6 outputs inside bands for final 10% of planned steps |
+| Safety termination | `2.0 × remaining physical seconds + 100.0` penalty |
+
+[Tracking metrics and success](../user-guide.md#metrics-and-ranking).
+
+## Controller defaults
+
+| Setting | PI (`pid`) | MPC |
+|---|---|---|
+| Model / bias | Analytic steady pump/valve/heater feedforward | 8-state, 7-input linearized model; steady input reference |
+| Hydraulics | Pump fixed at target flow; valve level feedback | Joint input optimization |
+| Heater feedback | H1 combines T1/T2/T3 errors with `0.75/0.15/0.10`; H2/H3 use local loops when available | Output weights: levels `3/3/3`, temperatures `2/2.5/4` |
+| Reference change | Recompute feedforward, clear integrals | Replan from latest observation |
+| Prediction / replanning | Every control step | 20 × 2 s actions = 40 s; execute 2, replan every 4 s |
+| Move weights | — | Pump/valves `25`; heaters `2`; first move relative to previous issued action |
+| Steady-input weights | — | `0.5` per actuator |
+| Hidden reservoir state | Not read | Nominal inventory and inlet-temperature estimate from measured return temperature/flow |
+
+## Training variation
+
+| Option / protocol         | Behavior                                                                                                 |
+| ------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `randomize=True`          | Complete hydraulic/thermal equilibrium → feasible target; 600 steps / 1200 s                             |
+| Formal tracking benchmark | 2100 steps / 4200 s for full settling                                                                    |
+| `boundary_probability=p`  | Fraction `p` starts from the benchmark's forward-pre-run high-level family                               |
+| `disturbance=True`        | Reduce pump capacity and available-heater efficiencies, lower ambient temperature, then restore defaults |
+| Noise / delay / fault     | Independent [channel options](../user-guide.md#inspect-and-configure-an-environment)                     |
+
+## Training settings
+
+Use the [training recipe](../user-guide.md#3-train-and-compare) with
+`scenario = "cascade"` and these settings, run from the repository root:
+
+```python
+import json
+from pathlib import Path
+
+training_steps = 150_000
+algorithm_settings = json.loads(
+    Path("aiogym/rl/configs/cascade-sac-nstep5.json").read_text()
+)
+record_interval = 500
+validation_interval = 5_000
+```
+
+The SAC configuration uses `gamma=0.99900025` and five-step returns at the
+2-second control interval, giving a 10-second return window. This is a
+scenario baseline configuration; assess learned performance on held-out cases
+and across independent training seeds.
+
+For **RLPD**, separately follow the [collection recipe](../user-guide.md#collect-and-use-a-dataset)
+with `policy="mpc"`, `episodes=100`, `seed=2_000`, and a new Dataset path. This
+produces 60,000 transitions if every episode completes. Supply that Dataset to
+the [RLPD tutorial](../rlpd.md). Online SAC does not use this collection step.
+Checkpoints and Datasets must retain the same control interval and policy interface.
+
+## Benchmarks
+
+| Benchmark | Protocol | Duration |
+|---|---|---|
+| `tracking` | Full steady start → feasible six-output target at common `2–6 L/min` flow | 4200 s |
+| `disturbance-rejection` | Default point, simultaneous pump/heater/ambient changes, then restoration | 2000 s |
+| `boundary-safety` | High-pump, staged low-outlet-flow pre-run with available heaters at `80–95%` duty | 1200 s |
+
+Ranking: **mean unsafe rate → settling rate → mean cumulative return**.
+An equally safe controller settling more cases ranks ahead even with lower return.
+[Shared evaluation rules](../user-guide.md#metrics-and-ranking).
+
+<details>
+<summary>Tracking case envelope</summary>
+
+| Setting | Range / rule |
+|---|---|
+| Initial / target levels | `0.125–0.40 m`; each level moves ≥ `0.05 m` |
+| Steady actions | Hydraulics and available heaters `0.02–0.85`; unavailable heaters exactly zero |
+| Temperature generation | Independent available-heater duties `5–80%`; reachable envelope depends on flow |
+| Minimum temperature move | `1 degC` where an upstream available heater can influence the tank; otherwise passive equilibrium |
+| Target-minus-start temperature | T1 `-4.5–6.5 degC`, T2 `-3.5–5 degC`, T3 `-3–3.5 degC` |
+
+</details>
+
+## Parameters and model scope
+
+Query `aiogym.list_parameters("cascade")`; ordinary environments accept
+`parameters={...}`. Heater availability accepts any binary vector of length 3.
+Formal benchmarks freeze `[1, 0, 0]` and all other model parameters.
 
 ```python
 import aiogym
 
-print(aiogym.list_parameters("cascade"))
+with aiogym.make_env("cascade", parameters={"heater": [1, 0, 1]}) as env:
+    print(env.parameters["heater"])
 ```
 
-Thermal parameters include the three heater powers, three heat-loss
-coefficients, reservoir capacity, initial reservoir inventory, reservoir heat
-loss, ambient temperature, heater low-level permissive, temperature trip and
-hard limit, and the small positive level floor used only to keep the
-variable-volume energy balance finite near an empty vessel.
+| Parameter group | Includes |
+|---|---|
+| Heating | Availability, powers, heat losses, low-level permissive, temperature trip/hard limit |
+| Reservoir | Capacity, initial inventory, heat loss, ambient temperature |
+| Numerical level floor | Keeps variable-volume energy balance finite near empty; not a new physical level limit |
+| Saved model | `metadata["parameters"]` can be passed to `make_env(..., parameters=...)` |
 
-## Reward, training variation, and Benchmarks
-
-`cascade` exposes one `regulation` Reward. It scores all six controlled outputs
-with fixed error scales `(0.1, 0.1, 0.1) m` and `(5, 5, 5) degC`. Formal metrics
-use the same scales for IAE, ISE, and final error. Settling and recovery instead
-use direct physical acceptance bands: `0.005 m` for each level and `0.2 degC`
-for each temperature. A safety termination adds the explicit Reward safety
-penalty and charges the remaining episode time, so stopping early through an
-unsafe transition cannot avoid the remaining tracking cost.
+<details>
+<summary>Start an ordinary simulation from a chosen physical state</summary>
 
 ```python
-import aiogym
-
-print(aiogym.list_rewards("cascade"))
-print(aiogym.list_benchmarks("cascade"))
+with aiogym.make_env(
+    "cascade",
+    initial_state=[0.20, 25.0, 0.25, 28.0, 0.30, 32.0, 0.09, 20.0],
+) as env:
+    observation, info = env.reset(seed=0)
+    print(info["reservoir_volume_m3"], info["reservoir_temperature"])
 ```
 
-| Benchmark | Fixed protocol | Horizon | Ranking |
-|---|---|---:|---|
-| `tracking` | complete eight-state steady start and a different feasible six-output target at one common `2--6 L/min` flow | 4200 s | unsafe rate, settling rate, cumulative return |
-| `disturbance-rejection` | default operating point with simultaneous pump, available-heater efficiency, and ambient-temperature changes, followed by explicit restoration | 2000 s | unsafe rate, settling rate, cumulative return |
-| `boundary-safety` | normal state is forward pre-run with a high pump, staged low outlet flow, and `80--95%` duties on available heaters until one tank reaches a case-seeded high-level boundary | 1200 s | unsafe rate, settling rate, cumulative return |
+Only the starting state changes; target, action, horizon, and disturbances remain
+as configured. No equilibrium is inferred. Randomized/benchmark environments
+own their initial conditions and reject `initial_state=`.
 
-Tracking cases sample every initial and target level in `0.125--0.40 m` and
-keep hydraulic and available-heater steady actions inside `0.02--0.85`;
-unavailable heater actions are exactly zero. Every level target moves by at
-least `0.05 m`. A tank temperature moves by at least `1 degC` when at least
-one available upstream heater can influence it; otherwise that temperature
-remains at its reachable passive equilibrium. Temperature profiles are
-generated from independently sampled `5--80%` duties on available heaters, so
-the reachable envelope automatically widens at low flow and narrows at high
-flow. Each target-minus-start temperature move stays within `-4.5--6.5 degC`
-for Tank 1, `-3.5--5 degC` for Tank 2, and `-3--3.5 degC` for Tank 3.
-
-Randomized training retains 1200-second episodes, now represented by 600 control
-steps, so a fixed physical-time budget sees more operating points; the formal
-tracking Benchmark runs for 4200 seconds, represented by 2100 control steps,
-to judge full physical settling. Both start from complete hydraulic and thermal
-equilibria. By default every randomized start is interior;
-setting `boundary_probability=p` makes fraction `p` begin from the same
-forward-pre-run high-level family used by the boundary Benchmark. With
-`disturbance=True`, one event reduces pump capacity and the efficiency of
-every available heater and lowers ambient temperature, then explicitly
-restores all defaults. Noise, delay, and actuator faults remain independent
-standard policy-channel variations.
-
-Cascade ranks mean unsafe rate first, then the fraction of cases that enter and
-remain inside all six physical settling bands, and only then median cumulative
-return. A controller that settles more formal cases therefore ranks ahead of an
-equally safe controller with a slightly better return.
-
-## Quick start and controllers
-
-The built-in PI controller resolves the target's analytic steady pump, valve,
-and heater actions as feedforward. P101 remains at that target-flow command,
-while V12, V23, and V34 apply the liquid-level feedback; this prevents redundant
-level integrators from moving the process to a different circulation flow.
-Because the default H1 heater affects every downstream tank, its feedback
-combines the T1/T2/T3 errors with weights `0.75/0.15/0.10`; the weights sum to
-one, so this does not increase the total proportional or integral gain. H2 and
-H3 retain their local temperature loops when those heaters are installed. The
-model masks unavailable loops before their commands reach the plant. When a
-public reference changes, the controller resolves the new feedforward and
-clears the previous integral; feedback then corrects measured error around that
-operating point.
-The successive-linearization MPC uses the eight-state plant model and seven
-physical inputs. Because the two reservoir states are intentionally hidden, it
-uses a nominal inventory and an inlet-temperature estimate derived from the
-measured return temperature and flow; it does not read the simulator's true
-reservoir state. It initializes from the reachable analytic steady input
-whenever the target or relevant disturbance changes and uses a unit
-steady-input regularization weight on every actuator.
-It updates every 2 seconds and keeps a 60-second physical prediction window
-with 30 prediction steps. Its normalized output weights are `3/3/3` for the
-three levels and `2/2.5/4` for the three temperatures. Move suppression remains
-`50` for the pump and valves and `2` for each heater; larger values left
-persistent residuals, while smaller values increased action variation.
-
-```python
-import aiogym
-
-env = aiogym.make_env("cascade", benchmark="tracking")
-pid = aiogym.make_controller("pid", env=env)
-result = aiogym.evaluate(env=env, policy=pid, seeds=range(20))
-env.close()
-```
+</details>
 
 ## Optional heater-only learning
 
-Cascade also provides an explicit hybrid experiment in which the Three-Tank PI
-controller operates P101 and the three valves while a learned policy commands
-only H1/H2/H3. This is an opt-in Cascade interface, not a training variation of
-the direct seven-action environment:
+The opt-in wrapper gives hydraulics to the Three-Tank PI controller and heater
+actions to the learned policy:
 
 ```python
 import aiogym
@@ -252,72 +204,17 @@ print(observation.shape, heater_env.action_space.shape)
 heater_env.close()
 ```
 
-`three_tank_pid_heater_control()` exposes the 16 direct observations plus the
-four hydraulic PI commands and accepts three heater actions. The temperature
-training form above additionally appends the three normalized temperature
-errors and uses a temperature-focused reward, giving 23 observations and three
-actions.
+| Interface | Observations | Actions / reward |
+|---|---|---|
+| Direct Cascade | 16 | 7 physical commands / six-output regulation |
+| `three_tank_pid_heater_control()` | 20: direct observations + 4 hydraulic PI commands | 3 heater commands |
+| `three_tank_pid_temperature_control()` | 23: above + 3 normalized temperature errors | 3 heater commands / temperature-focused reward |
 
-A checkpoint trained on either wrapped interface must be loaded against that
-same interface. For comparison on the ordinary seven-action Cascade Benchmark,
-wrap the loaded heater policy with `as_hybrid_physical_policy()` from the same
-module. Pass `temperature_error_observation=True` when the checkpoint used the
-temperature training form. The adapter combines the PI hydraulic action and
-learned heater action before the direct environment receives it.
+Load a checkpoint against the same wrapped interface used for training. For a
+direct seven-action benchmark, adapt it with `as_hybrid_physical_policy()` from
+the same module; use `temperature_error_observation=True` for the temperature
+training form. The adapter combines PI hydraulics with learned heater commands.
 
-## RL training
+## Run this scenario
 
-Collection and training use the same Python workflow as the other scenarios.
-For RLPD, collect a fresh 100-episode randomized MPC Dataset: this contains
-60,000 transitions at the 2-second interval. Checkpoints and Datasets recorded
-with another control interval are rejected instead of being mixed with the
-current scenario. The recommended SAC run uses the physical-time-equivalent
-budget and the shared
-[best-checkpoint selection](../architecture.md#select-the-best-checkpoint):
-
-```python
-import json
-from pathlib import Path
-
-import aiogym
-
-data_env = aiogym.make_env("cascade", randomize=True)
-mpc = aiogym.make_controller("mpc", env=data_env)
-aiogym.collect(
-    env=data_env,
-    policy=mpc,
-    episodes=100,
-    seed=2_000,
-    output="runs/cascade/datasets/randomized-mpc-100/seed-2000",
-)
-data_env.close()
-
-sac_settings = json.loads(
-    Path("aiogym/rl/configs/cascade-sac-nstep5.json").read_text()
-)
-training_env = aiogym.make_env("cascade", randomize=True)
-validation_env = aiogym.make_env("cascade", randomize=True)
-aiogym.train(
-    env=training_env,
-    algorithm="sac",
-    steps=150_000,
-    seed=0,
-    algorithm_kwargs=sac_settings,
-    record_every=500,
-    evaluation_env=validation_env,
-    evaluate_every=5_000,
-    output=(
-        "runs/cascade/training/sac/"
-        "randomized-regulation-sac-nstep5-gamma99900025-150k/seed-0"
-    ),
-)
-training_env.close()
-validation_env.close()
-```
-
-The Cascade SAC configuration uses `gamma=0.99900025` and five-step returns,
-preserving the previous physical discount and 10-second return windows at the
-2-second control interval. Direct policies use
-16 observations, including the four physical flow measurements. Train and
-evaluate direct checkpoints on this interface with the same ordered Benchmark
-seeds used for other policies.
+[Train](../user-guide.md#3-train-and-compare) · [Compare a checkpoint](../user-guide.md#evaluate-a-saved-model)

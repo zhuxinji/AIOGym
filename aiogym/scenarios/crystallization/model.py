@@ -11,7 +11,9 @@ from typing import Any
 
 import numpy as np
 
-from aiogym.core.model import PhysicsModelBase
+from aiogym.core.information import state_limit_rules
+
+from aiogym.core.model import PhysicsModelBase, integrate_process_state
 
 
 class CrystallizationModel(PhysicsModelBase):
@@ -104,6 +106,52 @@ class CrystallizationModel(PhysicsModelBase):
         }
     )
 
+    parameter_metadata = {
+        'nucleation_rate_coefficient': ('Pre-exponential coefficient in the nucleation-rate model', 'Finite number > 0'),
+        'nucleation_supersaturation_exponent': ('Supersaturation exponent in the nucleation-rate model', 'Finite number > 0'),
+        'nucleation_third_moment_exponent': ('Third-moment exponent in the nucleation-rate model', 'Finite number > 0'),
+        'growth_rate_coefficient': ('Pre-exponential coefficient in the crystal-growth model', 'Finite number > 0'),
+        'growth_supersaturation_exponent': ('Supersaturation exponent in the crystal-growth model', 'Finite number > 0'),
+        'size_independent_growth_weight': ('Weight of size-independent crystal growth', 'Finite number > 0'),
+        'size_dependent_growth_weight': ('Weight of size-dependent crystal growth', 'Finite number > 0'),
+        'crystal_shape_factor': ('Factor converting the third moment to crystal volume', 'Finite number > 0'),
+        'crystal_density': ('Crystal material density', 'Finite number > 0'),
+        'numerical_epsilon': ('Positive floor used in moment ratios and kinetic calculations', 'Finite number > 0'),
+        'maximum_nucleation_rate': ('Upper cap on the nucleation rate including disturbance scaling', 'Finite number > 0'),
+        'growth_rate_scale': ('Scale factor applied to the crystal-growth rate', 'Finite number > 0'),
+        'maximum_growth_rate': ('Upper cap on the growth rate including disturbance scaling', 'Finite number > 0'),
+        'nucleation_activation_temperature': ('Signed activation-temperature coefficient in the nucleation exponential', 'Finite number < 0'),
+        'growth_activation_temperature': ('Signed activation-temperature coefficient in the growth exponential', 'Finite number < 0'),
+        'minimum_cooling_temperature': ('Cooling-medium temperature at zero command', '0 <= minimum_cooling_temperature < maximum_cooling_temperature <= 100'),
+        'maximum_cooling_temperature': ('Cooling-medium temperature at full command', '0 <= minimum_cooling_temperature < maximum_cooling_temperature <= 100'),
+        'nominal_cooling_temperature': ('Cooling-medium temperature used for the default action', '[minimum_cooling_temperature, maximum_cooling_temperature]'),
+    }
+    variable_descriptions = {
+        'zeroth_crystal_moment': 'Zeroth crystal-size-distribution moment (number-related)',
+        'first_crystal_moment': 'First crystal-size-distribution moment (length-related)',
+        'second_crystal_moment': 'Second crystal-size-distribution moment (area-related)',
+        'third_crystal_moment': 'Third crystal-size-distribution moment (volume-related)',
+        'solute_concentration': 'Dissolved solute concentration',
+        'coefficient_of_variation': 'Crystal-size standard deviation divided by mean size',
+        'mean_crystal_size': 'Mean crystal size derived from the moments',
+        'cooling_temperature_fraction': 'Normalized cooling-medium temperature command',
+    }
+
+    def action_metadata(self):
+        return {"cooling_temperature_fraction": {
+            "interpretation": f"Temperature = {self.p['minimum_cooling_temperature']:g} + action * {self.p['maximum_cooling_temperature'] - self.p['minimum_cooling_temperature']:g} degC; larger commands mean warmer cooling medium",
+        }}
+
+    def observation_metadata(self):
+        return {**super().observation_metadata(), "remaining_batch_time": {
+            "description": "Normalized remaining planned batch time",
+            "source": "remaining_time",
+            "normalization": "t_remaining / (100 s + t_remaining)",
+        }}
+
+    def safety_metadata(self):
+        return state_limit_rules(self.state_bounds, self.state_units)
+
     def __init__(self, parameters: Mapping[str, Any] | None = None):
         defaults = {
             "nucleation_rate_coefficient": 0.92,
@@ -125,6 +173,7 @@ class CrystallizationModel(PhysicsModelBase):
             "growth_rate_scale": 2.0e-6,
             "maximum_growth_rate": 2.0e-4,
         }
+        self._parameter_defaults = deepcopy(defaults)
         self.p = _resolved_parameters(defaults, parameters)
         self._resolved_parameters = MappingProxyType(dict(self.p))
 
@@ -155,6 +204,19 @@ class CrystallizationModel(PhysicsModelBase):
         maximum = float(self.p["maximum_cooling_temperature"])
         nominal = float(self.p["nominal_cooling_temperature"])
         return [(nominal - minimum) / (maximum - minimum)]
+
+    def observation_schema(self):
+        return [*super().observation_schema(), {
+            "name": "remaining_batch_time", "kind": "time",
+            "unit": "t_remaining / (100 s + t_remaining)",
+            "low": 0.0, "high": 1.0,
+        }]
+
+    def observation(self, state, reference, previous_action, disturbances, *, remaining_time):
+        return [
+            *super().observation(state, reference, previous_action, disturbances),
+            remaining_time / (100.0 + remaining_time),
+        ]
 
     def cooling_temperature(self, action):
         return self._cooling_temperature(self.action_vector(action))
@@ -262,10 +324,6 @@ class CrystallizationModel(PhysicsModelBase):
     def outputs(self, state):
         return self.crystal_quality(state)
 
-    def display_outputs(self, state):
-        del state
-        return {"levels": [], "temps": []}
-
     def batch_endpoint(
         self,
         action,
@@ -281,41 +339,15 @@ class CrystallizationModel(PhysicsModelBase):
             or int(horizon_steps) <= 0
         ):
             raise ValueError("horizon_steps must be a positive integer")
-        interval = float(control_dt)
-        if not math.isfinite(interval) or interval <= 0.0:
-            raise ValueError("control_dt must be finite and positive")
         action_values = self.action_vector(action)
         context = self._resolve_disturbances(
             {} if disturbances is None else disturbances
         )
-        state = np.asarray(
-            self.initial_state() if initial_state is None else initial_state,
-            dtype=float,
-        ).reshape(-1)
-        if state.shape != (5,) or not np.isfinite(state).all():
-            raise ValueError(
-                "crystallization batch initial_state must contain five finite values"
+        state = self.initial_state() if initial_state is None else initial_state
+        for _ in range(int(horizon_steps)):
+            state = integrate_process_state(
+                self, state, action_values, context, duration=control_dt,
             )
-        substeps = max(1, math.ceil(interval / self.dt_micro - 1.0e-12))
-        step = interval / substeps
-
-        def derivative(values):
-            return np.asarray(
-                self.dynamics(values, action_values, context),
-                dtype=float,
-            )
-
-        for _control_step in range(int(horizon_steps)):
-            for _micro_step in range(substeps):
-                k1 = derivative(state)
-                k2 = derivative(state + 0.5 * step * k1)
-                k3 = derivative(state + 0.5 * step * k2)
-                k4 = derivative(state + step * k3)
-                state = state + (step / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
-                if not np.isfinite(state).all():
-                    raise FloatingPointError(
-                        "crystallization batch simulation produced a non-finite state"
-                    )
         return {
             "state": state.tolist(),
             "output": self.outputs(state),

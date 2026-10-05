@@ -134,11 +134,11 @@ def test_rlpd_uses_complete_workflow_and_standard_checkpoint(tmp_path):
         action = policy.act(observation, {})
         evaluation = aiogym.evaluate(
             env=env,
-            policy=policy,
+            policies={"policy": policy},
             seeds=[9],
             max_steps=2,
-        )
-        comparison = aiogym.compare_policies(
+        )["evaluations"]["policy"]
+        comparison = aiogym.evaluate(
             env=env,
             policies={"rlpd": policy, "hold": "hold"},
             seeds=[9],
@@ -153,7 +153,7 @@ def test_rlpd_uses_complete_workflow_and_standard_checkpoint(tmp_path):
     )
     with zipfile.ZipFile(training_path / "model.zip") as checkpoint:
         manifest = json.loads(checkpoint.read("manifest.json"))
-    assert result["schema_version"] == "aiogym.training.v14"
+    assert result["schema_version"] == "aiogym.training.v15"
     assert result["algorithm"] == "rlpd"
     assert result["dataset"]["transition_count"] == 4
     assert result["behavior_cloning"] is None

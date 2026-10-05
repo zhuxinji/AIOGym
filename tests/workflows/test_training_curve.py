@@ -94,6 +94,24 @@ def test_settling_fraction_is_independent_of_time_unit(tmp_path, curve, history)
     assert _series(root, "control_success")[-1] == 25
 
 
+def test_current_history_uses_task_metrics_without_settling_time(tmp_path, curve, history):
+    history.update(schema_version="aiogym.training_evaluation.v5",
+                   success_criterion="Safe full batch; endpoint quality within tolerance.")
+    for record in history["records"]:
+        for episode in record["episodes"]:
+            episode.update(terminated=True, truncated=False, length=225)
+            episode["episode_spec"]["terminal_at_horizon"] = True
+            episode["metrics"] = {"safe_completion": 1.0, "control_success": 1.0}
+    root = _plot(tmp_path, curve, history, control_dt=None)
+    assert _series(root, "control_success") == [100, 100, 100]
+    text = " ".join(root.itertext())
+    assert "endpoint quality within tolerance" in text
+    assert "last 10%" not in text
+    with pytest.raises(ValueError, match="only to legacy"):
+        plot_training_curve(curve, evaluation_history=history, settling_fraction=0.2,
+                            output=tmp_path / "changed.svg")
+
+
 def test_fraction_cannot_exceed_entire_episode(tmp_path, curve, history):
     with pytest.raises(ValueError, match="at most 1"):
         _plot(tmp_path, curve, history, settling_fraction=1.1)

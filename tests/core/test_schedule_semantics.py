@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
 from aiogym.core.contracts import Scenario
 from aiogym.core.env import make_env
-from aiogym.core.registry import register_scenario, unregister_scenario
 from aiogym.core.rollout import rollout
 from aiogym.core.specs import Benchmark, EpisodeSpec, Reward
 from aiogym.scenarios._metrics import regulation_episode_metrics
@@ -47,7 +48,7 @@ class ScheduleModel:
             {"name": "gain", "low": 0.0, "high": 10.0},
         ]
 
-    def observation(self, state, reference, previous_action, disturbances):
+    def observation(self, state, reference, previous_action, disturbances, *, remaining_time=0.0):
         del previous_action
         return [float(state[0]), float(reference[0]), float(disturbances["gain"])]
 
@@ -126,7 +127,6 @@ def _reward(state, action, next_state, context):
 
 @pytest.fixture
 def schedule_scenario():
-    unregister_scenario("schedule-toy")
     REWARD_CONTEXTS.clear()
     reward = Reward(
         id="regulation",
@@ -172,15 +172,11 @@ def schedule_scenario():
         rewards={"regulation": reward},
         default_reward="regulation",
     )
-    register_scenario(scenario)
-    try:
-        yield
-    finally:
-        unregister_scenario("schedule-toy")
+    return scenario
 
 
 def test_events_are_visible_before_corresponding_actions(schedule_scenario):
-    env = make_env("schedule-toy")
+    env = make_env(schedule_scenario)
     env.set_disturbances({"gain": 3.0})
     policy = RecordingPolicy()
     try:
@@ -244,8 +240,31 @@ def test_events_are_visible_before_corresponding_actions(schedule_scenario):
     ]
 
 
+@pytest.mark.parametrize("observation_delay", [0, 2])
+def test_policy_reference_shares_observation_delay(schedule_scenario, observation_delay):
+    env = make_env(schedule_scenario, delay={
+        "observation_steps": observation_delay, "action_steps": 1,
+    })
+    env.unwrapped.default_episode = replace(env.unwrapped.default_episode, horizon=5)
+    policy = RecordingPolicy()
+    try:
+        episode = rollout(env, policy, seed=7)
+    finally:
+        env.close()
+
+    references = [0.2, 0.4, 0.6, 0.6, 0.6]
+    expected = ([references[0]] * observation_delay + references)[:5]
+    np.testing.assert_array_equal([call["reference"][0] for call in policy.calls], expected)
+    np.testing.assert_allclose([call["observation"][1] for call in policy.calls], expected)
+    np.testing.assert_allclose([row.action[0] for row in episode.transitions], expected)
+    assert [call["step_index"] for call in policy.calls] == list(range(5))
+    assert [call["physical_time"] for call in policy.calls] == list(range(5))
+    assert [row.info["transition_reference"][0] for row in episode.transitions] == references
+    assert [record["reference"][0] for record in REWARD_CONTEXTS] == references
+
+
 def test_dataset_records_both_transition_and_next_contexts(schedule_scenario, tmp_path):
-    env = make_env("schedule-toy")
+    env = make_env(schedule_scenario)
     try:
         result = collect(
             env=env,
@@ -258,7 +277,7 @@ def test_dataset_records_both_transition_and_next_contexts(schedule_scenario, tm
         env.close()
     reader = DatasetReader(result["path"])
     episode = reader.load_episode(0)
-    assert reader.metadata["schema_version"] == "aiogym.dataset.v3"
+    assert reader.metadata["schema_version"] == "aiogym.dataset.v4"
     assert np.allclose(episode.array("transition_reference"), [[0.2], [0.4], [0.6]])
     assert np.allclose(episode.array("reference"), [[0.4], [0.6], [0.6]])
     assert episode.array("transition_disturbance").tolist() == [
@@ -272,14 +291,14 @@ def test_dataset_records_both_transition_and_next_contexts(schedule_scenario, tm
 def test_evaluation_metrics_use_the_same_transition_reference_as_reward(
     schedule_scenario,
 ):
-    env = make_env("schedule-toy", reward="regulation")
+    env = make_env(schedule_scenario, reward="regulation")
     try:
         result = evaluate(
             env=env,
-            policy=RecordingPolicy(),
+            policies={"policy": RecordingPolicy()},
             seeds=(0,),
             max_steps=3,
-        )
+        )["evaluations"]["policy"]
     finally:
         env.close()
     assert result["schema_version"] == "aiogym.evaluation.v5"

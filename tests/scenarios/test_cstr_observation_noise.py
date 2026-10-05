@@ -77,10 +77,12 @@ def test_cstr_noisy_errors_use_the_same_delayed_reference_as_the_observation():
         action = np.asarray(env.unwrapped.model.default_action(), dtype=np.float32)
         observations = []
         for _ in range(3):
-            observation, *_ = env.step(action)
+            observation, _, _, _, info = env.step(action)
             observations.append(observation)
             measurement = observation[:2].astype(float) * [1.5, 200.0]
             reference = [0.02, 45.0] + observation[2:4].astype(float) * [0.18, 45.0]
+            np.testing.assert_allclose(info["policy_reference"], reference)
+            np.testing.assert_array_equal(info["reference"], [0.10, 60.0])
             expected = np.clip((measurement - reference) / [0.18, 45.0], -1.0, 1.0)
             np.testing.assert_allclose(observation[4:], expected, rtol=0, atol=6e-8)
         np.testing.assert_array_equal(observations[0][2:4], old_reference)

@@ -66,28 +66,12 @@ class SB3CheckpointPolicy:
 
 @dataclass(frozen=True)
 class SB3AlgorithmBackend:
-    """Adapt one SB3 ``BaseAlgorithm`` class to the AIO-Gym workflow."""
+    """Adapt one built-in SB3 algorithm to the AIO-Gym workflow."""
 
     id: str
-    model_class: type | str
+    model_class: str
     behavior_cloning: BehaviorCloningHook | None = None
     requires_dataset: bool = False
-
-    def __post_init__(self) -> None:
-        if isinstance(self.model_class, str):
-            module_name, separator, attribute_name = self.model_class.partition(
-                ":"
-            )
-            if not separator or not module_name or not attribute_name:
-                raise ValueError(
-                    "SB3 model_class import path must be 'module:ClassName'"
-                )
-            return
-        if not isinstance(self.model_class, type):
-            raise TypeError(
-                "model_class must be an SB3 BaseAlgorithm subclass or import path"
-            )
-        self.resolve_model_class()
 
     def effective_kwargs(
         self,
@@ -98,10 +82,7 @@ class SB3AlgorithmBackend:
         del steps
         resolved = copy.deepcopy(dict(values))
         resolved.setdefault("policy", "MlpPolicy")
-        serialized = jsonable(resolved)
-        if not isinstance(serialized, dict):
-            raise TypeError("effective algorithm kwargs must be a mapping")
-        return serialized
+        return jsonable(resolved)
 
     def create(
         self,
@@ -224,28 +205,15 @@ class SB3AlgorithmBackend:
         }
 
     def resolve_model_class(self):
-        model_class = self.model_class
-        if isinstance(model_class, str):
-            module_name, _separator, attribute_name = model_class.partition(":")
-            try:
-                module = importlib.import_module(module_name)
-                model_class = getattr(module, attribute_name)
-            except (AttributeError, ModuleNotFoundError) as error:
-                raise RuntimeError(
-                    f"could not import SB3 model class {self.model_class!r}"
-                ) from error
+        module_name, _separator, attribute_name = self.model_class.partition(":")
         try:
-            from stable_baselines3.common.base_class import BaseAlgorithm
+            module = importlib.import_module(module_name)
         except ModuleNotFoundError as error:
             raise RuntimeError(
                 "Stable-Baselines3 is required for this algorithm; "
                 "install `aiogym[rl]`"
             ) from error
-        if not isinstance(model_class, type) or not issubclass(
-            model_class, BaseAlgorithm
-        ):
-            raise TypeError("model_class must be an SB3 BaseAlgorithm subclass")
-        return model_class
+        return getattr(module, attribute_name)
 
 
 def built_in_backends() -> tuple[SB3AlgorithmBackend, ...]:

@@ -1,20 +1,15 @@
-"""Public algorithm-backend contract used by the training workflow."""
+"""Internal contracts and built-in implementations for the training workflow."""
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from importlib.metadata import entry_points
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol
 
 import numpy as np
 
 from aiogym.core.contracts import Policy
 from aiogym.core.io import jsonable
-
-
-_ALGORITHM_ID = re.compile(r"[a-z][a-z0-9_-]*")
 
 
 @dataclass(frozen=True)
@@ -45,7 +40,6 @@ class BehaviorCloningHook(Protocol):
     ) -> Mapping[str, Any]: ...
 
 
-@runtime_checkable
 class AlgorithmBackend(Protocol):
     """Adapter implemented once by each trainable algorithm family."""
 
@@ -85,56 +79,23 @@ class AlgorithmBackend(Protocol):
 
     def runtime_metadata(self) -> Mapping[str, Any]: ...
 
-_BACKENDS: dict[str, AlgorithmBackend] = {}
-_BUILTINS_REGISTERED = False
-_INSTALLED_BACKENDS_REGISTERED = False
-
-
-def register_algorithm(backend: AlgorithmBackend) -> None:
-    """Register one backend in the current Python process."""
-
-    _register_builtins()
-    _register_installed_backends()
-    _register_backend(backend)
-
-
-def register_sb3_algorithm(
-    algorithm: str,
-    model_class: type,
-    *,
-    behavior_cloning: BehaviorCloningHook | None = None,
-) -> None:
-    """Register one SB3 ``BaseAlgorithm`` subclass in the current process."""
-
-    from .sb3 import SB3AlgorithmBackend
-
-    backend = SB3AlgorithmBackend(
-        id=algorithm,
-        model_class=model_class,
-        behavior_cloning=behavior_cloning,
-    )
-    register_algorithm(backend)
-
 
 def list_algorithms() -> tuple[str, ...]:
-    """Return all algorithm ids registered in the current Python process."""
+    """Return the built-in algorithm names supported by Python and the CLI."""
 
-    _register_builtins()
-    _register_installed_backends()
-    return tuple(sorted(_BACKENDS))
+    return tuple(sorted(_BUILTIN_BACKENDS))
 
 
 def get_algorithm(algorithm: str) -> AlgorithmBackend:
-    """Resolve one registered backend or raise a precise unknown-id error."""
+    """Resolve one built-in algorithm name."""
 
-    _register_builtins()
-    _register_installed_backends()
-    key = _normalize_lookup_id(algorithm)
+    if not isinstance(algorithm, str):
+        raise TypeError("algorithm must be a built-in algorithm name (string)")
     try:
-        return _BACKENDS[key]
+        return _BUILTIN_BACKENDS[algorithm.lower()]
     except KeyError as error:
         raise ValueError(
-            f"algorithm must be one of {', '.join(sorted(_BACKENDS))}"
+            f"algorithm must be one of {', '.join(list_algorithms())}"
         ) from error
 
 
@@ -149,72 +110,18 @@ def resolve_algorithm_kwargs(
     resolved = backend.effective_kwargs(steps=steps, values=values)
     if not isinstance(resolved, Mapping):
         raise TypeError("algorithm backend effective_kwargs must return a mapping")
-    serialized = jsonable(dict(resolved))
-    if not isinstance(serialized, dict):
-        raise TypeError("algorithm backend effective_kwargs must return a mapping")
-    return serialized
+    return jsonable(dict(resolved))
 
 
-def _register_builtins() -> None:
-    global _BUILTINS_REGISTERED
-    if _BUILTINS_REGISTERED:
-        return
-    from .sb3 import built_in_backends
-    from .rlpd import RLPDAlgorithmBackend
-
-    for backend in (*built_in_backends(), RLPDAlgorithmBackend()):
-        _register_backend(backend)
-    _BUILTINS_REGISTERED = True
+# Keep the implementations below their shared contracts to avoid circular imports.
+from .sb3 import built_in_backends
+from .rlpd import RLPDAlgorithmBackend
 
 
-def _register_installed_backends() -> None:
-    global _INSTALLED_BACKENDS_REGISTERED
-    if _INSTALLED_BACKENDS_REGISTERED:
-        return
-    for entry_point in entry_points(group="aiogym.algorithms"):
-        backend = entry_point.load()
-        if not isinstance(backend, AlgorithmBackend):
-            raise TypeError(
-                "aiogym.algorithms entry point must expose one complete "
-                f"AlgorithmBackend instance: {entry_point.name}"
-            )
-        if entry_point.name != backend.id:
-            raise ValueError(
-                "aiogym.algorithms entry-point name must equal backend id: "
-                f"{entry_point.name} != {backend.id}"
-            )
-        _register_backend(backend)
-    _INSTALLED_BACKENDS_REGISTERED = True
-
-
-def _register_backend(backend: AlgorithmBackend) -> None:
-    if not isinstance(backend, AlgorithmBackend):
-        raise TypeError(
-            "backend must implement the complete AIO-Gym AlgorithmBackend contract"
-        )
-    algorithm_id = backend.id
-    if (
-        not isinstance(algorithm_id, str)
-        or _ALGORITHM_ID.fullmatch(algorithm_id) is None
-    ):
-        raise ValueError(
-            "algorithm backend id must match [a-z][a-z0-9_-]*"
-        )
-    if backend.behavior_cloning is not None and not callable(
-        backend.behavior_cloning
-    ):
-        raise TypeError("backend behavior_cloning must be callable or None")
-    if not isinstance(backend.requires_dataset, bool):
-        raise TypeError("backend requires_dataset must be bool")
-    if algorithm_id in _BACKENDS:
-        raise ValueError(f"algorithm backend is already registered: {algorithm_id}")
-    _BACKENDS[algorithm_id] = backend
-
-
-def _normalize_lookup_id(algorithm: str) -> str:
-    if not isinstance(algorithm, str) or not algorithm.strip():
-        raise TypeError("algorithm must be a non-empty string")
-    return algorithm.lower()
+_BUILTIN_BACKENDS = {
+    backend.id: backend
+    for backend in (*built_in_backends(), RLPDAlgorithmBackend())
+}
 
 
 __all__ = [
@@ -223,6 +130,4 @@ __all__ = [
     "TrainingStepCallback",
     "get_algorithm",
     "list_algorithms",
-    "register_algorithm",
-    "register_sb3_algorithm",
 ]

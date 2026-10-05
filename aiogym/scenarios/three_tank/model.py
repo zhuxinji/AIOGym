@@ -10,6 +10,8 @@ from typing import Any
 
 import numpy as np
 
+from aiogym.core.information import state_limit_rules
+
 from aiogym.core.model import PhysicsModelBase
 
 
@@ -146,6 +148,82 @@ class ThreeTankModel(PhysicsModelBase):
         }
     )
 
+    parameter_metadata = {
+        'area': ('Horizontal cross-sectional areas of tanks 1, 2 and 3', 'Three finite positive values'),
+        'height_max': ('Maximum liquid levels of tanks 1, 2 and 3', 'Three positive values; nominal_level < high_level_trip < overflow_level < height_max'),
+        'level_sensor_range': ('Declared level-sensor spans for tanks 1, 2 and 3', 'Three positive values >= the corresponding height_max'),
+        'cv_valves': ('Installed flow coefficients of V12, V23 and V34', 'Three finite positive values'),
+        'cv_bypass': ('Flow coefficients of bypasses BV12, BV23 and BV34', 'Three finite positive values'),
+        'flow_observation_scale': ('Normalization scales of FT101, FT12, FT23 and FT34', 'Four finite positive values'),
+        'gravity_drop': ('Additional gravity heads across the three outlet branches', 'Three finite positive values'),
+        'overflow_level': ('Levels at which passive tank overflow begins', 'Three positive values; high_level_trip < overflow_level < height_max'),
+        'cv_overflow': ('Passive overflow flow coefficients for the three tanks', 'Three finite positive values'),
+        'overflow_head_floor': ('Head regularization scale in the passive overflow calculation', 'Finite number > 0'),
+        'high_level_trip': ('Tank level thresholds that disable the feed pump', 'Three positive values; nominal_level < high_level_trip < overflow_level'),
+        'nominal_level': ('Common tank level used for the default operating point', 'Finite number > 0 and below every high_level_trip'),
+        'pump_flow_max': ('P101 flow capacity at rated speed before disturbance scaling', 'Finite number > 0'),
+        'pump_power_max': ('P101 electrical power at full speed', 'Finite number > 0'),
+        'pump_static_head': ('Static head that P101 must overcome', '0 < pump_static_head < pump_shutoff_head'),
+        'pump_shutoff_head': ('P101 shutoff head at rated speed', 'pump_shutoff_head > pump_static_head > 0'),
+    }
+    variable_descriptions = {
+        'h1': 'Liquid level in tank 1',
+        'h2': 'Liquid level in tank 2',
+        'h3': 'Liquid level in tank 3',
+        'tank_1_level': 'Liquid level in tank 1',
+        'tank_2_level': 'Liquid level in tank 2',
+        'tank_3_level': 'Liquid level in tank 3',
+        'pump_P101': 'P101 feed-pump speed fraction',
+        'valve_V12': 'V12 outlet-valve opening fraction',
+        'valve_V23': 'V23 outlet-valve opening fraction',
+        'valve_V34': 'V34 outlet-valve opening fraction',
+    }
+
+    def action_metadata(self):
+        return {
+            "pump_P101": {"interpretation": f"0 = stopped; 1 = rated speed; flow follows the pump head curve with capacity {self.p['pump_flow_max']:g} m^3/s before disturbance scaling"},
+            **{name: {"interpretation": "0 = closed; 1 = fully open; flow also depends on liquid head and the installed flow coefficient"} for name in self.action_names if name.startswith("valve_")},
+        }
+
+    def observation_metadata(self):
+        rows = {}
+        for index in range(3):
+            name = f"tank_{index + 1}_level"
+            for suffix in ("", "_reference"):
+                rows[f"normalized_{name}{suffix}"] = {
+                    "description": f"Normalized {'reference' if suffix else 'measurement'}: liquid level in tank {index + 1}",
+                    "source": name,
+                    "physical_unit": "m",
+                    "normalization": f"clip(value / {self.height_max[index]:g}, 0, 1)",
+                }
+        for meter, scale in zip(("FT101", "FT12", "FT23", "FT34"), self.p["flow_observation_scale"]):
+            rows[f"normalized_{meter}_flow"] = {
+                "description": f"Normalized volumetric flow measured by {meter}",
+                "source": f"{meter}_flow",
+                "physical_unit": "m^3/s",
+                "normalization": f"clip(value / {scale:g}, 0, 1)",
+            }
+        return rows
+
+    def safety_metadata(self):
+        rules = state_limit_rules(
+            {f"h{i + 1}": (0.0, high) for i, high in enumerate(self.p["height_max"])},
+            self.state_units,
+        )
+        rules["pump_interlock"] = {
+            "kind": "interlock",
+            "condition": "reservoir_available < 0.5 or " + " or ".join(
+                f"h{i + 1} >= {trip:g} m" for i, trip in enumerate(self.p["high_level_trip"])
+            ),
+            "effect": "Disable P101 flow",
+        }
+        rules["passive_overflow"] = {
+            "kind": "physical_response",
+            "condition": " or ".join(f"h{i + 1} > {level:g} m" for i, level in enumerate(self.p["overflow_level"])),
+            "effect": "Drain overflow from the affected tank to the reservoir",
+        }
+        return rules
+
     def __init__(self, parameters: Mapping[str, Any] | None = None):
         defaults = {
             "area": [0.09, 0.09, 0.09],
@@ -165,6 +243,7 @@ class ThreeTankModel(PhysicsModelBase):
             "pump_static_head": 1.7,
             "pump_shutoff_head": 10.0,
         }
+        self._parameter_defaults = deepcopy(defaults)
         self.p = _resolved_parameters(defaults, parameters)
         self._resolved_parameters = MappingProxyType(
             {
@@ -210,9 +289,6 @@ class ThreeTankModel(PhysicsModelBase):
 
     def outputs(self, x):
         return self.state_vector(x)
-
-    def display_outputs(self, x):
-        return {"levels": [max(float(value), 0.0) for value in x], "temps": []}
 
     def nominal_steady_state(self, *, flow=NOMINAL_FLOW_M3S, levels=None, env=None):
         context = self._resolved_env(env)
@@ -438,7 +514,7 @@ class ThreeTankModel(PhysicsModelBase):
             ),
         ]
 
-    def observation(self, state, reference, previous_action, disturbances):
+    def observation(self, state, reference, previous_action, disturbances, *, remaining_time=0.0):
         context = self._resolved_env(disturbances)
         action = self.default_action() if previous_action is None else previous_action
         pump, valve_flows, _, _, _ = self._flow_terms(

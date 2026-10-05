@@ -202,7 +202,7 @@ def _run_jobs(jobs, *, workers):
                 save_status(job)
                 try:
                     process = subprocess.Popen(
-                        job.get("worker_command", job["command"]), stdout=log, stderr=subprocess.STDOUT,
+                        job["worker_command"], stdout=log, stderr=subprocess.STDOUT,
                         stdin=subprocess.DEVNULL, env=child_env,
                         start_new_session=os.name == "posix",
                     )
@@ -213,9 +213,7 @@ def _run_jobs(jobs, *, workers):
                     raise
                 running.append((process, log, job))
                 job.update(status="running", pid=process.pid)
-                # A managed worker owns all subsequent on-disk running/final states.
-                if "worker_command" not in job:
-                    save_status(job)
+                # The worker owns all subsequent on-disk running/final states.
             if running:
                 time.sleep(0.1)
         summary["status"] = "failed" if failed else "completed"

@@ -1,4 +1,4 @@
-"""Evaluate one policy on an ordered set of seeds."""
+"""Evaluate named policies on shared cases, with optional report export."""
 
 from __future__ import annotations
 
@@ -10,42 +10,131 @@ from typing import Any
 
 import numpy as np
 
-from aiogym.controllers import make_controller
-from aiogym.core.contracts import policy_metadata
-from aiogym.core.io import jsonable, write_json
+from aiogym.controllers.base import resolve_policy
+from aiogym.core.io import jsonable
 from aiogym.core.rollout import rollout
 
-from ._metadata import environment_metadata
+from ._metadata import environment_metadata, policy_metadata_for_environment
 
-EVALUATION_SCHEMA_VERSION = "aiogym.evaluation.v5"
-DEFAULT_VALIDATION_SETTLING_FRACTION = 0.1
+EVALUATION_SCHEMA_VERSION = "aiogym.evaluation.v6"
+_POLICY_EVALUATION_SCHEMA_VERSION = "aiogym.evaluation.v5"
 
 
 def evaluate(
     *,
     env,
-    policy,
+    policies: Mapping[str, Any],
     seeds: Sequence[int],
     max_steps: int | None = None,
     output: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Evaluate ``policy`` without taking ownership of ``env``."""
+    """Evaluate one or more named policies on the same ordered cases.
 
-    result = _evaluate(env=env, policy=policy, seeds=seeds, max_steps=max_steps,
-                       include_trajectories=True)
+    Values may be controller names, Policy objects, or observation-to-action
+    callables. Every returned evaluation includes all episode trajectories.
+    Omit output to return data without writing files. Otherwise, output must
+    be a new or empty directory for comparison.json, trajectories.npz and
+    comparison.svg. The caller retains ownership of env.
+    """
+    if not isinstance(policies, Mapping) or not policies:
+        raise ValueError("policies must be a non-empty mapping")
+    labels = tuple(policies)
+    if any(not isinstance(label, str) or not label.strip() for label in labels):
+        raise ValueError("policy labels must be non-empty strings")
+    directory = None
     if output is not None:
-        write_json(output, result)
+        from ._evaluation_report import _prepare_output_directory, _write_evaluation_report
+
+        directory = _prepare_output_directory(output)
+
+    evaluations = {
+        label: _evaluate(
+            env=env,
+            policy=policies[label],
+            seeds=seeds,
+            max_steps=max_steps,
+            include_trajectories=True,
+            include_trajectory_summary=True,
+        )
+        for label in labels
+    }
+    first = evaluations[labels[0]]
+    ordered_seeds = first["seeds"]
+    if any(result["seeds"] != ordered_seeds for result in evaluations.values()):
+        raise ValueError("all policy evaluations must use identical ordered seeds")
+    for evaluation in evaluations.values():
+        for episode, reference in zip(evaluation["episodes"], first["episodes"]):
+            if any(
+                episode[field] != reference[field]
+                for field in ("episode_spec", "episode_parameters", "runtime_variation")
+            ):
+                raise ValueError("paired comparisons require identical physical cases")
+    ranking_metrics = first["ranking_metrics"]
+    if any(
+        result["ranking_metrics"] != ranking_metrics for result in evaluations.values()
+    ):
+        raise ValueError("all policy evaluations must use identical ranking metrics")
+    first_schema = first["trajectory_schema"]
+    static_schema_fields = (
+        "time_unit",
+        "state",
+        "output",
+        "action",
+        "disturbance_names",
+    )
+    if any(
+        any(
+            result["trajectory_schema"][field] != first_schema[field]
+            for field in static_schema_fields
+        )
+        for result in evaluations.values()
+    ):
+        raise ValueError("all policy evaluations must use compatible trajectory schemas")
+    trajectory_schema = {
+        **first_schema,
+        "constraint_cost_names": sorted(
+            {
+                name
+                for result in evaluations.values()
+                for name in result["trajectory_schema"]["constraint_cost_names"]
+            }
+        ),
+    }
+
+    def ranking_key(label):
+        result = evaluations[label]
+        values = []
+        for metric in ranking_metrics:
+            value = result["aggregate"][metric["name"]][metric["aggregate"]]
+            values.append(value if metric["direction"] == "minimize" else -value)
+        return (*values, label)
+
+    ordering = sorted(labels, key=ranking_key)
+    trajectory_seed = ordered_seeds[0]
+    result = {
+        "schema_version": EVALUATION_SCHEMA_VERSION,
+        "success_criterion": first["success_criterion"],
+        "environment": dict(first["environment"]),
+        "trajectory_schema": trajectory_schema,
+        "seeds": list(ordered_seeds),
+        "trajectory_seed": trajectory_seed,
+        "max_steps": first["max_steps"],
+        "ranking_metrics": ranking_metrics,
+        "ordering": ordering,
+        "evaluations": evaluations,
+    }
+    if directory is not None:
+        _write_evaluation_report(result, directory)
     return result
 
 
-def _evaluate(*, env, policy, seeds, max_steps=None, include_trajectories):
+def _evaluate(*, env, policy, seeds, max_steps=None, include_trajectories,
+              include_trajectory_summary=False):
     resolved_seeds = _validate_seeds(seeds)
     rollout_limit = _max_steps(max_steps)
-    resolved_policy = (
-        make_controller(policy, env=env) if isinstance(policy, str) else policy
-    )
+    resolved_policy = resolve_policy(policy, env=env)
     base_env = env.unwrapped
-    resolved_policy_metadata = policy_metadata(resolved_policy)
+    resolved_policy_metadata = policy_metadata_for_environment(resolved_policy, env)
     metric_function = (
         base_env.reward.episode_metric_function
         if base_env.benchmark is None
@@ -118,7 +207,7 @@ def _evaluate(*, env, policy, seeds, max_steps=None, include_trajectories):
             f"ranking metrics are missing from episode metrics: {missing_ranking_metrics}"
         )
     result = {
-        "schema_version": EVALUATION_SCHEMA_VERSION,
+        "schema_version": _POLICY_EVALUATION_SCHEMA_VERSION,
         "environment": environment_metadata(env),
         "policy": resolved_policy_metadata,
         "seeds": list(resolved_seeds),
@@ -129,30 +218,30 @@ def _evaluate(*, env, policy, seeds, max_steps=None, include_trajectories):
                 "direction": direction,
                 "aggregate": (
                     "mean"
-                    if name in {"unsafe_rate", "safe_completion", "settling_rate", "return"}
+                    if name in {"unsafe_rate", "safe_completion", "control_success", "settling_rate", "return"}
                     else "median"
                 ),
             }
             for name, direction in ranking_metrics
         ],
         "episodes": episodes,
+        "success_criterion": base_env.reward.success_criterion,
         "return_distribution": [row["return"] for row in episodes],
         "aggregate": aggregate,
     }
     if include_trajectories:
         result["trajectory_schema"] = _trajectory_schema(base_env, episodes)
+    if include_trajectory_summary:
         result["trajectory_summary"] = _trajectory_summary(episodes)
     return result
 
 
-def _validation_summary(
-    episodes, *, control_dt, settling_fraction=DEFAULT_VALIDATION_SETTLING_FRACTION,
-):
+def _validation_summary(episodes):
     """Summarize validated cases for checkpoint selection and its learning curve."""
     returns, safe, successful = [], [], []
     for episode in episodes:
         metrics = episode["metrics"]
-        for name in ("constraint_violations", "settling_time"):
+        for name in ("safe_completion", "control_success"):
             if name not in metrics:
                 raise ValueError(f"validation episodes require metric {name!r}")
             value = metrics[name]
@@ -161,22 +250,12 @@ def _validation_summary(
                 or not math.isfinite(value)
             ):
                 raise ValueError(f"validation metric {name!r} must be a finite number")
-        if (
-            not 0 <= metrics["settling_time"] <= episode["length"] * control_dt
-            or metrics["constraint_violations"] < 0
-        ):
-            raise ValueError("validation settling time or violation count is invalid")
-        horizon = episode["episode_spec"]["horizon"]
-        completed = (
-            not episode["terminated"] and episode["truncated"]
-            and episode["length"] == horizon
-            and metrics["constraint_violations"] == 0
-        )
-        safe.append(completed)
-        successful.append(
-            completed and metrics["settling_time"]
-            <= (horizon - math.ceil(horizon * settling_fraction)) * control_dt
-        )
+        if (metrics["safe_completion"] not in (0, 1)
+            or metrics["control_success"] not in (0, 1)
+            or metrics["control_success"] > metrics["safe_completion"]):
+            raise ValueError("validation success metrics must be binary and success requires safety")
+        safe.append(metrics["safe_completion"])
+        successful.append(metrics["control_success"])
         returns.append(episode["return"])
     return {
         "mean_return": float(np.mean(returns)),

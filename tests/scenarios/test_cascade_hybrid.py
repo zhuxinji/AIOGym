@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 import aiogym
+from aiogym.workflows._metadata import environment_metadata
 from aiogym.scenarios.cascade import (
     as_hybrid_physical_policy,
     three_tank_pid_heater_control,
@@ -40,6 +41,12 @@ def test_hybrid_environment_exposes_heaters_and_applies_three_tank_pid():
         assert env.action_space.shape == (3,)
         assert env.observation_space.contains(observation)
         assert observation[-4:] == pytest.approx(info["hydraulic_action"])
+        interface = environment_metadata(env)["policy_interface"]
+        assert len(interface["observation"]) == 20
+        assert [row["name"] for row in interface["action"]] == [
+            row["name"] for row in env.unwrapped.model.action_schema()[-3:]
+        ]
+        assert [row["index"] for row in interface["action"]] == [0, 1, 2]
 
         heaters = np.asarray([0.2, 0.3, 0.4], dtype=np.float32)
         next_observation, reward, terminated, truncated, step_info = env.step(
@@ -69,6 +76,9 @@ def test_temperature_training_adds_errors_and_replaces_only_tracking_reward():
             np.asarray(info["reference"])[3:] - np.asarray(info["y"])[3:]
         ) / 5.0
         assert observation.shape == (23,)
+        interface = environment_metadata(env)["policy_interface"]
+        assert len(interface["observation"]) == 23
+        assert [row["kind"] for row in interface["observation"][-3:]] == ["error"] * 3
         assert observation[-3:] == pytest.approx(expected_error)
         assert env.observation_space.contains(observation)
 

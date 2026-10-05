@@ -222,7 +222,7 @@ def test_heater_baselines_complete_every_formal_horizon(
     env = aiogym.make_env("heater", benchmark=benchmark)
     try:
         policy = aiogym.make_controller(controller_id, env=env)
-        result = aiogym.evaluate(env=env, policy=policy, seeds=(0, 1, 2))
+        result = aiogym.evaluate(env=env, policies={"policy": policy}, seeds=(0, 1, 2))["evaluations"]["policy"]
         aggregate = result["aggregate"]
         assert aggregate["safe_completion"]["mean"] == pytest.approx(1.0)
         assert aggregate["unsafe_rate"]["max"] == pytest.approx(0.0)

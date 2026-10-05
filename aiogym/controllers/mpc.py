@@ -1,10 +1,11 @@
-"""Successive-linearization fixed-setpoint MPC baseline with action clipping."""
+"""Successive-linearization MPC with bounded action sequences."""
 
 from __future__ import annotations
 
 import math
 
 import numpy as np
+from scipy.optimize import lsq_linear
 
 from ._context import controller_inputs
 
@@ -42,37 +43,46 @@ def positive_int(name, value):
 
 
 class SuccessiveLinearizationMPC:
-    """Successive-linearization, velocity-form MPC with control horizon M=1.
+    """Optimize one action per environment step over a linearized prediction.
 
-    Predict P steps with one constant action adjustment. Solve the unconstrained
-    quadratic objective, then clip each action to [0, 1]. This does not solve a
-    box-constrained optimum or impose predicted state constraints.
+    Execute the first ``solve_every`` actions, then replan from the observation.
+    Predicted states are unconstrained; actions obey the model's box bounds.
     """
 
     def __init__(
         self,
         model,
-        Ts=0.5,
-        P=40,
+        *,
+        control_dt,
+        prediction_horizon=10,
+        solve_every=1,
         move_supp=0.8,
         cv_scale=None,
         q_y=1.0,
         steady_input_weight=0.0,
-        reseed_on_feedforward_change=False,
     ):
         self.m = model
         self.nu = model.action_dim()
+        action_schema = model.action_schema()
+        self._action_low = np.array([row["low"] for row in action_schema], dtype=float)
+        self._action_high = np.array([row["high"] for row in action_schema], dtype=float)
         self.nx = len(model.initial_state())
         self.ncv = len(model.outputs(model.initial_state()))
-        self.Ts = positive_float("Ts", Ts)
-        self.P = positive_int("P", P)
+        self.control_dt = positive_float("control_dt", control_dt)
+        self._integration_substeps = max(
+            1, math.ceil(self.control_dt / model.dt_micro - 1e-12)
+        )
+        self._integration_dt = self.control_dt / self._integration_substeps
+        self.prediction_horizon = positive_int("prediction_horizon", prediction_horizon)
+        self.solve_every = positive_int("solve_every", solve_every)
+        if self.solve_every > self.prediction_horizon:
+            raise ValueError("solve_every must not exceed prediction_horizon")
         self._move_supp, self.move_supp = nonnegative_weights(
             "move_supp", move_supp, self.nu
         )
         self._steady_input_weight, self.steady_input_weight = nonnegative_weights(
             "steady_input_weight", steady_input_weight, self.nu
         )
-        self.reseed_on_feedforward_change = bool(reseed_on_feedforward_change)
         self.cv_scale = self._resolve_cv_scale(cv_scale)
         self.q_y = self._resolve_q_y(q_y)
         self.reset()
@@ -109,21 +119,25 @@ class SuccessiveLinearizationMPC:
             "class": self.__class__.__name__,
             "kind": "successive_linearization_mpc",
             "scenario": self.m.scenario,
-            "Ts": self.Ts,
-            "horizon": self.P,
-            "control_horizon": 1,
-            "action_bound_handling": "post_solve_clip",
-            "action_bounds": [0.0, 1.0],
+            "control_dt": self.control_dt,
+            "time_unit": self.m.time_unit,
+            "prediction_horizon": self.prediction_horizon,
+            "prediction_duration": self.prediction_horizon * self.control_dt,
+            "solve_every": self.solve_every,
+            "solve_interval": self.solve_every * self.control_dt,
+            "control_horizon": self.prediction_horizon,
+            "linearization": "continuous_dynamics",
+            "discretization": "rk4",
+            "max_integration_dt": self._integration_dt,
+            "min_integration_substeps": self._integration_substeps,
+            "integration_refinement": "linear_model_spectral_radius",
+            "action_bound_handling": "box_constrained_lsq",
+            "action_bounds": np.column_stack((self._action_low, self._action_high)).tolist(),
             "prediction_state_constraints": False,
             "move_supp": self.move_supp,
             "steady_input_weight": self.steady_input_weight,
-            "initialization": "tracking_steady_state_action",
-            "initialization_status": self._initialization_status,
-            "feedforward_reseed": (
-                "setpoint_or_feedforward_change"
-                if self.reseed_on_feedforward_change
-                else "setpoint_change"
-            ),
+            "initialization": "default_action",
+            "steady_input_role": "linearization_reference_and_penalty",
             "cv_scale": self.cv_scale,
             "q_y": self.q_y,
         }
@@ -132,122 +146,125 @@ class SuccessiveLinearizationMPC:
         del seed
         initial_action = self.m.default_action()
         self.u = np.asarray(self.m.action_vector(initial_action), dtype=np.float64)
-        self._last_target = None
-        self._target_u = None
-        self._clock = 1e9
-        self._initialization_status = "default_action"
-
-    def _unpack(self, u):
-        return self.m.action_vector(u)
-
-    def _toX(self, meas):
-        return np.asarray(meas["x"], dtype=np.float64)
+        self._plan = np.empty((0, self.nu))
+        self._plan_index = 0
 
     def _cv(self, x):
         return np.asarray(self.m.outputs(list(x)), dtype=np.float64)
 
-    def _wcv(self):
-        return np.array(
-            [
-                float(weight) / max(float(scale), 1e-12) ** 2
-                for weight, scale in zip(self.q_y, self.cv_scale)
-            ],
-            dtype=np.float64,
-        )
-
-    def compute(self, meas, sp, dt):
-        self._clock += dt
-        if self._clock >= self.Ts:
-            self._clock = 0.0
+    def compute(self, meas, sp):
+        if not len(self._plan) or self._plan_index == self.solve_every:
             self._solve(meas, sp)
-        return self._unpack(self.u)
+            self._plan_index = 0
+        self.u = np.asarray(
+            self.m.action_vector(self._plan[self._plan_index]), dtype=np.float64
+        )
+        self._plan_index += 1
+        return self.u.copy()
 
     def _solve(self, meas, sp):
-        m, nx, nu, P, Ts = self.m, self.nx, self.nu, self.P, self.Ts
+        m, nx, nu, horizon = self.m, self.nx, self.nu, self.prediction_horizon
         env = {
             k: v
             for k, v in meas.items()
             if k not in ("x", "y", "levels", "temps", "conc")
         }
-        x0 = self._toX(meas)
+        x0 = np.asarray(meas["x"], dtype=np.float64)
         target = np.asarray(sp["y_sp"], dtype=np.float64)
-        target_changed = self._last_target is None or not np.array_equal(
-            target, self._last_target
-        )
         steady_input = m.tracking_steady_state_action(target, env)
-        previous_target_u = self._target_u
-        self._target_u = None
-        if steady_input is not None:
-            candidate = np.asarray(steady_input, dtype=np.float64).reshape(-1)
-            if len(candidate) == nu and np.all(np.isfinite(candidate)):
-                self._target_u = np.clip(candidate, 0.0, 1.0)
-                feedforward_changed = previous_target_u is None or not np.allclose(
-                    self._target_u,
-                    previous_target_u,
-                    rtol=0.0,
-                    atol=1e-12,
-                )
-                if target_changed or (
-                    self.reseed_on_feedforward_change and feedforward_changed
-                ):
-                    self.u = self._target_u.copy()
-                    self._initialization_status = "tracking_steady_state_action"
-        if target_changed:
-            self._last_target = target.copy()
-        u0 = self.u.copy()
-        f = lambda x: np.asarray(m.dynamics(list(x), u0, env), dtype=np.float64)
-        f0 = f(x0)
-        eps = 1e-5
-        Ad = np.eye(nx)
-        Bd = np.zeros((nx, nu))
-        for j in range(nx):
-            xp = x0.copy()
-            xp[j] += eps
-            xm = x0.copy()
-            xm[j] -= eps
-            Ad[:, j] += (f(xp) - f(xm)) / (2 * eps) * Ts
-        for j in range(nu):
-            up = u0.copy()
-            up[j] += eps
-            um = u0.copy()
-            um[j] -= eps
-            fp = np.asarray(m.dynamics(list(x0), up, env), dtype=np.float64)
-            fm = np.asarray(m.dynamics(list(x0), um, env), dtype=np.float64)
-            Bd[:, j] = (fp - fm) / (2 * eps) * Ts
+        # The operating input is separate from the last issued action self.u.
+        # Feedforward must not reset the reference for the first move penalty.
+        u0 = self.u.copy() if steady_input is None else np.clip(
+            np.asarray(steady_input, dtype=float), self._action_low, self._action_high
+        )
+        dynamics = lambda x, u: np.asarray(
+            m.dynamics(x, u, disturbances=env), dtype=np.float64
+        )
+        f0 = dynamics(x0, u0)
         cv0 = self._cv(x0)
-        nCV = len(cv0)
-        C = np.zeros((nCV, nx))
+        A = np.zeros((nx, nx))
+        B = np.zeros((nx, nu))
+        C = np.zeros((self.ncv, nx))
+        eps = np.cbrt(np.finfo(float).eps)
+        state_schema = m.state_schema()
         for j in range(nx):
-            xp = x0.copy()
-            xp[j] += eps
-            C[:, j] = (self._cv(xp) - cv0) / eps
-        Wcv = self._wcv()
-        c0 = (x0 + f0 * Ts) - Ad @ x0 - Bd @ u0
+            step = eps * max(1.0, abs(x0[j]))
+            xp, xm = x0.copy(), x0.copy()
+            xp[j] = min(x0[j] + step, state_schema[j]["high"])
+            xm[j] = max(x0[j] - step, state_schema[j]["low"])
+            width = xp[j] - xm[j]
+            if width > 0:
+                A[:, j] = (dynamics(xp, u0) - dynamics(xm, u0)) / width
+                C[:, j] = (self._cv(xp) - self._cv(xm)) / width
+        for j in range(nu):
+            step = eps * max(1.0, abs(u0[j]))
+            up, um = u0.copy(), u0.copy()
+            up[j] = min(u0[j] + step, self._action_high[j])
+            um[j] = max(u0[j] - step, self._action_low[j])
+            width = up[j] - um[j]
+            if width > 0:
+                B[:, j] = (dynamics(x0, up) - dynamics(x0, um)) / width
+
+        # Linearize first: dx/dt = A (x-x0) + B (u-u0) + f0.
+        # Augment with the held input and a constant to preserve the affine term.
+        generator = np.zeros((nx + nu + 1, nx + nu + 1))
+        generator[:nx, :nx] = A
+        generator[:nx, nx:nx + nu] = B
+        generator[:nx, -1] = f0
+        # Boundary dynamics can be much stiffer after local linearization.
+        # Keep |dt * eigenvalue| <= 1, inside RK4's stable left-half-plane region.
+        spectral_radius = float(np.max(np.abs(np.linalg.eigvals(A))))
+        substeps = max(self._integration_substeps, math.ceil(self.control_dt * spectral_radius))
+        scaled = (self.control_dt / substeps) * generator
+        substep = np.eye(len(generator))
+        term = substep.copy()
+        for order in range(1, 5):
+            term = term @ scaled / order
+            substep += term
+        # RK4 for a constant linear model is a matrix polynomial. Repeated
+        # squaring gives exactly the same substeps without a Python time loop.
+        discrete = np.linalg.matrix_power(substep, substeps)
+        Ad, Bd = discrete[:nx, :nx], discrete[:nx, nx:nx + nu]
+        next_x = x0 + discrete[:nx, -1]
+
+        # Condense x[k+1] = Ad (x[k]-x0) + next_x + Bd (u[k]-u0).
+        # Each column block belongs to a separate future action, not one held move.
+        size = horizon * nu
+        weights = np.sqrt(self.q_y) / self.cv_scale
         xf = x0.copy()
-        S = np.zeros((nx, nu))
-        H = np.zeros((nu, nu))
-        g = np.zeros(nu)
-        for _ in range(P):
-            xf = Ad @ xf + Bd @ u0 + c0
-            S = Ad @ S + Bd
-            G = C @ S
-            e = cv0 + C @ (xf - x0) - target
-            WG = Wcv[:, None] * G
-            H += G.T @ WG
-            g += G.T @ (Wcv * e)
-        H += np.diag(self._move_supp)
-        if self._target_u is not None and np.any(self._steady_input_weight):
-            H += np.diag(self._steady_input_weight)
-            g += self._steady_input_weight * (u0 - self._target_u)
-        try:
-            du = np.linalg.solve(H, -g)
-        except np.linalg.LinAlgError:
-            # With zero move suppression, unobservable/redundant actuator
-            # directions can make the positive-semidefinite Hessian singular.
-            # Use the minimum-norm unconstrained solution before action clipping,
-            # without adding a penalty solely for numerical regularization.
-            du = np.linalg.lstsq(H, -g, rcond=None)[0]
-        self.u = np.clip(u0 + du, 0.0, 1.0)
+        sensitivity = np.zeros((nx, size))
+        matrices, targets = [], []
+        for k in range(horizon):
+            xf = Ad @ (xf - x0) + next_x
+            sensitivity = Ad @ sensitivity
+            sensitivity[:, k * nu:(k + 1) * nu] += Bd
+            matrices.append(weights[:, None] * (C @ sensitivity))
+            targets.append(weights * (target - cv0 - C @ (xf - x0)))
+
+        if np.any(self._move_supp):
+            differences = np.eye(size) - np.eye(size, k=-nu)
+            move_weights = np.tile(np.sqrt(self._move_supp), horizon)
+            matrices.append(move_weights[:, None] * differences)
+            targets.append(move_weights * np.concatenate((self.u - u0, np.zeros(size - nu))))
+        if steady_input is not None and np.any(self._steady_input_weight):
+            matrices.append(np.diag(np.tile(np.sqrt(self._steady_input_weight), horizon)))
+            targets.append(np.zeros(size))
+        matrix, target = np.vstack(matrices), np.concatenate(targets)
+        lower = np.tile(self._action_low - u0, horizon)
+        upper = np.tile(self._action_high - u0, horizon)
+        free = lower < upper
+        moves = lower.copy()
+        if np.any(free):
+            result = lsq_linear(
+                matrix[:, free], target - matrix[:, ~free] @ moves[~free],
+                bounds=(lower[free], upper[free]), method="bvls", lsq_solver="exact",
+            )
+            if not result.success:
+                raise RuntimeError(f"MPC action sequence solve failed: {result.message}")
+            moves[free] = result.x
+        self._plan = np.clip(
+            moves.reshape(horizon, nu) + u0, self._action_low, self._action_high
+        )
 
 
 class FixedSetpointMPCPolicy:
@@ -257,18 +274,20 @@ class FixedSetpointMPCPolicy:
 
     def __init__(self, env, **config):
         self.env = env
-        self.controller = SuccessiveLinearizationMPC(env.model, **config)
+        self.controller = SuccessiveLinearizationMPC(
+            env.model, control_dt=env.control_dt, **config
+        )
 
     def reset(self, seed=None):
         self.controller.reset(seed=seed)
 
     def act(self, observation, context):
-        measurement, setpoint, control_dt = controller_inputs(
+        measurement, setpoint, _ = controller_inputs(
             self.env,
             observation,
             context,
         )
-        action = self.controller.compute(measurement, setpoint, control_dt)
+        action = self.controller.compute(measurement, setpoint)
         return np.asarray(self.env.model.action_vector(action), dtype=np.float32)
 
     def metadata(self):

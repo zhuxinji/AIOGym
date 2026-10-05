@@ -39,7 +39,7 @@ def test_cli_lists_current_resources(capsys):
 def test_cli_lists_parameter_defaults_and_units(capsys):
     assert main(["list", "parameters", "--scenario", "quadruple"]) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert lines[0].split() == ["NAME", "DEFAULT", "UNIT"]
+    assert lines[0].split() == ["NAME", "DEFAULT", "UNIT", "DESCRIPTION", "ALLOWED_VALUES"]
     assert any("tank_area" in line and "cm^2" in line for line in lines[1:])
     assert any("pump_gain" in line and "cm^3/(s*V)" in line for line in lines[1:])
 
@@ -47,48 +47,39 @@ def test_cli_lists_parameter_defaults_and_units(capsys):
 def test_cli_lists_benchmark_summaries(capsys):
     assert main(["list", "benchmarks", "--scenario", "three_tank"]) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert lines[0].split() == [
-        "ID",
-        "HORIZON",
-        "REWARD",
-        "PARAMETERS",
-        "RANKING_METRICS",
-    ]
-    assert any(
-        line.split()
-        == [
-            "tracking",
-            "600",
-            "regulation",
-            "scenario-defaults",
-            "unsafe_rate,return",
-        ]
-        for line in lines[1:]
-    )
-    assert any(
-            line.split()
-            == [
-                "disturbance-rejection",
-                "600",
-                "regulation",
-            "scenario-defaults",
-            "unsafe_rate,return",
-        ]
-        for line in lines[1:]
-    )
+    assert "HORIZON" in lines[0]
+    assert "DESCRIPTION" in lines[0]
+    assert any("tracking" in line and "600" in line and "regulation" in line for line in lines[1:])
+    assert any("disturbance-rejection" in line and "600" in line for line in lines[1:])
+    assert "minimize" in "\n".join(lines)
+
+
+def test_cli_lists_information_and_json(capsys):
+    import aiogym
+
+    assert main(["list", "states", "--scenario", "cstr"]) == 0
+    output = capsys.readouterr().out
+    assert "Reactor temperature" in output
+    assert "degC" in output
+    assert main(["list", "info", "--scenario", "cstr", "--benchmark", "tracking", "--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report == aiogym.list_info("cstr", benchmark="tracking")
+    assert report["episode"]["status"] == "template"
+    assert main(["list", "safety_rules", "--scenario", "cstr", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == aiogym.list_safety_rules("cstr")
 
 
 def test_cli_parameter_listing_requires_scenario(capsys):
     with pytest.raises(SystemExit):
         main(["list", "parameters"])
-    assert "--scenario is required for parameters" in capsys.readouterr().err
+    assert "the following arguments are required: --scenario" in capsys.readouterr().err
 
 
 def test_cli_help_describes_the_small_workflow_set(capsys):
     assert main([]) == 0
     output = capsys.readouterr().out
     assert "collect an episode-oriented Dataset" in output
-    assert "compare controllers and checkpoints on identical seeds" in output
+    assert "evaluate one or more policies on identical seeds" in output
 
 
 def test_cli_workflow_help_explains_arguments_and_hides_invalid_benchmark(capsys):
@@ -110,25 +101,25 @@ def test_cli_workflow_help_explains_arguments_and_hides_invalid_benchmark(capsys
     assert "RLPD requires a compatible Dataset" in output
 
     with pytest.raises(SystemExit) as exit_info:
-        main(["compare", "--help"])
+        main(["evaluate", "--help"])
     assert exit_info.value.code == 0
     output = capsys.readouterr().out
-    assert "Compare controllers and checkpoints on identical seeds" in output
+    assert "Evaluate one or more controllers and checkpoints on identical seeds" in output
     assert "LABEL MODEL_ZIP" in output
     assert "--boundary-probability PROBABILITY" in output
 
 
-def test_non_training_cli_does_not_discover_algorithm_plugins(monkeypatch, capsys):
+def test_non_training_cli_does_not_query_algorithm_catalog(monkeypatch, capsys):
     from aiogym.rl import algorithms
 
     def broken_discovery():
-        raise RuntimeError("broken training plugin")
+        raise RuntimeError("unavailable algorithm catalog")
 
     monkeypatch.setattr(algorithms, "list_algorithms", broken_discovery)
     with pytest.raises(SystemExit) as exit_info:
-        main(["compare", "--help"])
+        main(["evaluate", "--help"])
     assert exit_info.value.code == 0
-    assert "Compare controllers and checkpoints" in capsys.readouterr().out
+    assert "Evaluate one or more controllers and checkpoints" in capsys.readouterr().out
 
 
 def test_cli_collects_dataset_with_file_parameters(tmp_path, capsys):
@@ -167,7 +158,7 @@ def test_cli_collects_dataset_with_file_parameters(tmp_path, capsys):
         "schema_version": "aiogym.collect.v2",
         "transitions": 2,
     }
-    assert metadata["schema_version"] == "aiogym.dataset.v3"
+    assert metadata["schema_version"] == "aiogym.dataset.v4"
     assert metadata["environment"]["parameters"]["pump_flow_max"] == pytest.approx(
         20.0 / 60000.0
     )
@@ -177,66 +168,36 @@ def test_cli_collects_dataset_with_file_parameters(tmp_path, capsys):
     assert result["transitions"] == 2
 
 
-def test_cli_evaluates_to_one_json(tmp_path, capsys):
-    output = tmp_path / "evaluation.json"
-    assert (
-        main(
-            [
-                "evaluate",
-                "quadruple",
-                "--controller",
-                "pid",
-                "--seeds",
-                "3",
-                "4",
-                "--max-steps",
-                "2",
-                "--output",
-                str(output),
-            ]
-        )
-        == 0
-    )
+def test_cli_evaluates_one_policy_to_report_directory(tmp_path, capsys):
+    output = tmp_path / "evaluation"
+    assert main([
+        "evaluate", "quadruple", "--controllers", "pid", "--seeds", "3", "4",
+        "--max-steps", "2", "--output", str(output),
+    ]) == 0
     summary = json.loads(capsys.readouterr().out)
-    result = json.loads(output.read_text(encoding="utf-8"))
+    report = json.loads((output / "comparison.json").read_text())
     assert summary["seeds"] == [3, 4]
     assert summary["output"] == str(output.resolve())
-    assert summary["aggregate"] == result["aggregate"]
-    assert summary["policy"] == result["policy"]
-    assert summary["ranking_metrics"] == result["ranking_metrics"]
-    assert "episodes" not in summary
-    assert result["episodes"][0]["length"] == 2
-
-
-def test_cli_compares_to_default_benchmark_directory(tmp_path, capsys, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    assert (
-        main(
-            [
-                "compare",
-                "three_tank",
-                "--benchmark",
-                "tracking",
-                "--controllers",
-                "pid",
-                "mpc",
-                "--seeds",
-                "0",
-                "--max-steps",
-                "2",
-            ]
-        )
-        == 0
-    )
-    summary = json.loads(capsys.readouterr().out)
-    output = tmp_path / "runs" / "three-tank" / "benchmarks" / "tracking"
-    result = json.loads((output / "comparison.json").read_text(encoding="utf-8"))
-    assert summary["seeds"] == [0]
-    assert summary["output"] == str(output.resolve())
-    assert [row["policy"] for row in summary["ranking"]] == result["ordering"]
-    assert "evaluations" not in summary
+    assert summary["ranking_metrics"] == report["ranking_metrics"]
+    assert [row["policy"] for row in summary["ranking"]] == ["pid"]
+    assert report["evaluations"]["pid"]["episodes"][0]["length"] == 2
     assert (output / "comparison.svg").is_file()
     assert (output / "trajectories.npz").is_file()
+
+
+def test_cli_evaluates_multiple_policies_without_implicit_files(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert main([
+        "evaluate", "three_tank", "--benchmark", "tracking", "--controllers", "pid", "mpc",
+        "--seeds", "0", "--max-steps", "2",
+    ]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["schema_version"] == "aiogym.evaluation.v6"
+    assert result["seeds"] == [0]
+    assert set(result["evaluations"]) == {"pid", "mpc"}
+    assert all("trajectory" in episode for evaluation in result["evaluations"].values()
+               for episode in evaluation["episodes"])
+    assert list(tmp_path.iterdir()) == []
 
 
 @pytest.mark.parametrize(
@@ -267,7 +228,7 @@ def test_cli_train_builds_env_calls_workflow_and_closes(
 
         captured.update(kwargs)
         return {
-            "schema_version": "aiogym.training.v14",
+            "schema_version": "aiogym.training.v15",
             "path": str(output.resolve()),
             "algorithm": "sac",
             "seed": kwargs["seed"],
@@ -318,7 +279,7 @@ def test_cli_train_builds_env_calls_workflow_and_closes(
     assert "final; no validation selection" in streams.err
     assert "--no-evaluation" in streams.err
     assert str(output / "model.zip") in streams.err
-    assert summary["schema_version"] == "aiogym.training.v14"
+    assert summary["schema_version"] == "aiogym.training.v15"
     assert summary["algorithm"] == "sac"
     assert summary["initial_steps"] == 0
     assert summary["added_steps"] == 500_000
@@ -355,14 +316,14 @@ def test_cli_compare_combines_controllers_and_checkpoints(
         captured["load"] = (checkpoint, env)
         return learned_policy
 
-    def compare_policies(**kwargs):
-        captured["compare"] = kwargs
+    def evaluate(**kwargs):
+        captured["evaluate"] = kwargs
         evaluations = {
             label: {"aggregate": {"return": {"mean": float(index)}}}
             for index, label in enumerate(kwargs["policies"])
         }
         return {
-            "schema_version": "aiogym.comparison.v6",
+            "schema_version": "aiogym.evaluation.v6",
             "seeds": list(kwargs["seeds"]),
             "ranking_metrics": [
                 {
@@ -376,13 +337,13 @@ def test_cli_compare_combines_controllers_and_checkpoints(
         }
 
     monkeypatch.setattr(aiogym, "load_policy", load_policy)
-    monkeypatch.setattr(aiogym, "compare_policies", compare_policies)
+    monkeypatch.setattr(aiogym, "evaluate", evaluate)
     checkpoint = tmp_path / "model.zip"
     output = tmp_path / "comparison"
     assert (
         main(
             [
-                "compare",
+                "evaluate",
                 "quadruple",
                 "--controllers",
                 "pid",
@@ -402,7 +363,7 @@ def test_cli_compare_combines_controllers_and_checkpoints(
     summary = json.loads(capsys.readouterr().out)
     assert captured["load"][0] == checkpoint
     assert captured["load"][1].scenario.id == "quadruple"
-    assert captured["compare"]["policies"] == {
+    assert captured["evaluate"]["policies"] == {
         "pid": "pid",
         "mpc": "mpc",
         "sac-best": learned_policy,

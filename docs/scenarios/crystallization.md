@@ -1,145 +1,112 @@
 # Batch-crystallization model
 
-The built-in `crystallization` Scenario models a batch crystallizer with four
-crystal-population moments and one solute-concentration state. A normalized
-cooling-medium temperature command changes the nucleation and crystal-growth
-rates, which determine the batch quality outputs.
+`scenario = "crystallization"` · [User guide](../user-guide.md)
 
-The physical interface is:
+## Physical interface
 
-- state `[zeroth_crystal_moment, first_crystal_moment,
-  second_crystal_moment, third_crystal_moment, solute_concentration]`;
-- controlled output `[coefficient_of_variation, mean_crystal_size]`;
-- action `[cooling_temperature_fraction]` in normalized `[0, 1]` coordinates;
-- action `0` maps to `30 degC`, `0.5` to `35 degC`, and `1` to `40 degC`;
-- disturbances are multiplicative growth and nucleation factors plus an
-  additive solubility-curve bias.
+Batch crystallizer: cooling-medium temperature changes nucleation/growth and endpoint quality.
 
-The policy observation contains seven normalized values: five physical states
-followed by the two batch quality targets. It does not expose disturbances.
-The controller interval is 1 second and the plant is integrated internally
-with a maximum 0.02-second step.
+| Interface | Ordered values / units |
+|---|---|
+| State | `[zeroth_crystal_moment, first_crystal_moment, second_crystal_moment, third_crystal_moment, solute_concentration]` |
+| Output | `[coefficient_of_variation, mean_crystal_size]`; dimensionless, um |
+| Action | `[cooling_temperature_fraction]`: `0 → 30 degC`, `0.5 → 35 degC`, `1 → 40 degC` |
+| Observation | 8 values: 5 normalized states, 2 quality targets, remaining time |
+| Time encoding | `t_remaining / (100 s + t_remaining)`; distinguishes 50 s / 100 s batches |
+| Disturbances | Growth/nucleation multipliers and solubility bias; hidden from policy |
+| Timing | Control `1 s`; integration substep ≤ `0.02 s` |
 
-## Batch semantics
+Observation delay includes targets and clock; the clock receives no sensor noise.
+Older seven-observation policies/datasets and `regulation` results do not match
+this batch interface; retrain/recollect for the current task.
 
-Unlike CSTR, HVAC, extraction, heater, and the tank scenarios,
-`crystallization` is not a steady-state regulation problem. With the default
-supersaturation, its moments evolve for every admissible cooling action.
-Consequently `tracking_steady_state_action()` and
-`tracking_steady_state_state()` intentionally return no solution. The Scenario
-does not label a finite-time batch endpoint as an equilibrium.
+## Default task and batch semantics
 
-Every formal tracking case instead declares a 50-second batch-quality target
-that is known to be reachable. The case samples one constant action in
-`0.80--0.90`, simulates the same model for the complete tracking batch, and stores the
-resulting endpoint CV and mean size as the target. The sampled action remains
-with the saved episode information, but evaluated controllers command
-their own action on every step.
+| Setting | Value |
+|---|---|
+| Task | Finite-batch endpoint quality; no steady-state solution |
+| Default target | `(CV, mean size) = (0.727343, 11.392945 um)`, generated with constant action `0.85` |
+| Tracking / training horizon | `50 steps = 50 s` |
+| Randomized tracking target | Endpoint generated with constant action sampled in `0.80–0.90` |
+| Evaluated controller | Chooses its own action each step; target-generation action is saved only as episode information |
 
-The deterministic default episode uses action `0.85` and its exact 50-second
-endpoint `(CV, mean size) = (0.727343, 11.392945 um)`. Randomized training uses
-the same 50-second duration and `0.80--0.90` reachable-action envelope as the
-tracking Benchmark.
+`tracking_steady_state_action()` and `tracking_steady_state_state()` return no
+solution: the population moments continue evolving under admissible actions.
 
-## Model parameters and intended use
+## Reward and success
 
-The main executable defaults are:
-
-| Parameter | Default | Unit |
-|---|---:|---|
-| `nucleation_rate_coefficient` | 0.92 | 1/s |
-| `nucleation_activation_temperature` | -6800 | K |
-| `nucleation_supersaturation_exponent` | 0.92 | dimensionless |
-| `nucleation_third_moment_exponent` | 1.3 | dimensionless |
-| `growth_rate_coefficient` | 48 | 1/s |
-| `growth_activation_temperature` | -4900 | K |
-| `growth_supersaturation_exponent` | 1.9 | dimensionless |
-| `size_independent_growth_weight` | 0.51 | dimensionless |
-| `size_dependent_growth_weight` | 7.3 | dimensionless |
-| `crystal_shape_factor` | 7.5 | dimensionless |
-| `crystal_density` | 2.7 | kg/L |
-| `minimum_cooling_temperature` | 30 | degC |
-| `maximum_cooling_temperature` | 40 | degC |
-| `nominal_cooling_temperature` | 35 | degC |
-| `maximum_nucleation_rate` | 0.05 | 1/s |
-| `growth_rate_scale` | 2e-6 | dimensionless |
-| `maximum_growth_rate` | 2e-4 | um/s |
-
-These equations and coefficients define a normalized batch-crystallization
-surrogate. They are not calibrated to a named crystallizer, solute,
-particle-size analyzer, or cooling system. The Benchmark protocol is an
-AIO-Gym finite-batch evaluation and is not claimed to reproduce a published
-case study.
-
-Safety checks enforce nonnegative moments and concentration plus the declared
-state caps. The cooling-temperature bounds are guaranteed by the action
-mapping. No clipping is applied to evolving states; an actual bound crossing
-terminates the episode.
-
-## Benchmarks
-
-```python
-import aiogym
-
-print(aiogym.list_benchmarks("crystallization"))
+```text
+Intermediate quality reward = 0
+Final quality reward = -mean(((output - target) / [0.5, 3.5]) ** 2)
+Safety penalty = 100, with immediate batch termination
 ```
 
-| Benchmark | Fixed protocol | Horizon | Ranking |
-|---|---|---:|---|
-| `tracking` | case-seeded reachable batch endpoint generated by a constant action in `0.80--0.90` | 50 steps / 50 s | unsafe rate, cumulative return |
-| `disturbance-rejection` | case-seeded growth, nucleation, solubility, event time, and recovery time | 100 steps / 100 s | unsafe rate, cumulative return |
-| `boundary-safety` | case-seeded solute concentration in `1.70--1.95 kg/L` with a reachable endpoint target | 100 steps / 100 s | unsafe rate, cumulative return |
+| `batch-quality` contract | Requirement |
+|---|---|
+| Success | Safe complete batch; final errors ≤ `0.01 CV` and `0.07 um` |
+| Intermediate quality | No prescribed trajectory or intermediate target-success requirement |
+| Normal ending | `terminated=True`, `truncated=False`; `terminal_at_horizon=True`, no bootstrap beyond batch |
+| Incomplete evaluation | Cannot succeed; endpoint metrics describe last evaluated state |
+| Endpoint error medians / paired costs | Safe complete batches only |
 
-Tracking seeds create distinct endpoint targets but keep the model, initial
-state, duration, output dimensions, and action meaning fixed. Disturbance cases
-begin at step `20--35` and last `30--50` steps. They sample growth factor in
-`0.80--0.95`, nucleation factor in `1.05--1.20`, and solubility bias in
-`2--6 g/L`. Boundary cases sample initial solute concentration in
-`1.70--1.95 kg/L` and generate a reachable endpoint from a constant action in
-`0.10--0.50`. Seeds `0--19` select 20 distinct episodes for all three
-Benchmarks.
+The bands are simulator tolerances (2% of scales), not industrial product specifications.
 
-Disturbance-rejection and boundary-safety remain 100-second finite batches.
-Their targets are defined by the 100-second endpoint, and disturbance events
-can recover as late as step 85; shortening them would change the batch target
-rather than only remove an unused observation tail.
+## Controller defaults
+
+| Controller setting | Value |
+|---|---|
+| PID CV contribution `(Kp, Ki, Kd)` | `(1.0, 0.001, 0)` |
+| PID mean-size contribution | `(-0.15, -0.0005, 0)`; both contributions drive the same actuator |
+| MPC prediction / replanning | 10 × 1 s actions / every step |
+| MPC move weight / steady feedforward | `0.05` / none |
+
+Raising cooling-medium temperature increases nominal endpoint CV and reduces
+mean size. PID/MPC remain tracking heuristics; MPC does not optimize the complete
+remaining batch endpoint objective.
 
 ## Training variation
 
-`randomize=True` samples a reachable endpoint target on every reset and uses the
-nominal `0.90 kg/L` start by default. Setting `boundary_probability=p` makes
-fraction `p` of training batches instead start with solute concentration sampled
-in `1.70--1.95 kg/L`.
-`disturbance=True` independently samples growth and nucleation factors,
-solubility bias, an event at step `10--17`, and a `15--25` step duration. Every
-default and randomized training batch uses the tracking Benchmark's 50-step
-horizon and has its endpoint target active at reset.
+| Option | Sampling |
+|---|---|
+| `randomize=True` | Reachable endpoint target active at reset; nominal `0.90 kg/L` start, 50 steps |
+| `boundary_probability=p` | Fraction `p` starts at concentration `1.70–1.95 kg/L` |
+| `disturbance=True` | Growth, nucleation, solubility; start step `10–17`, duration `15–25` steps |
 
-## Quick start and controllers
+## Benchmarks
 
-The crystallization PID configuration uses both quality errors in its one actuator
-row. CV has `(Kp, Ki, Kd) = (1.0, 0.001, 0)` and mean size has
-`(-0.15, -0.0005, 0)`. The opposite proportional signs follow the nominal
-batch response: raising cooling-medium temperature increases endpoint CV while
-reducing endpoint mean size. MPC solves every second with a 20-step prediction
-horizon and a move-suppression weight of `0.5`. Because no batch steady state
-exists, it does not use the steady-input feedforward path.
+| Benchmark | Protocol | Steps / physical duration |
+|---|---|---|
+| `tracking` | Reachable endpoint generated by constant action `0.80–0.90` | 50 / 50 s |
+| `disturbance-rejection` | Growth, nucleation, and solubility changes, then restoration | 100 / 100 s |
+| `boundary-safety` | Initial concentration `1.70–1.95 kg/L` with reachable endpoint target | 100 / 100 s |
 
-```python
-import aiogym
+Ranking: **safe completion → endpoint success → terminal quality cost**. Standard cases: seeds `0–19`.
+[Shared evaluation rules](../user-guide.md#metrics-and-ranking).
 
-env = aiogym.make_env("crystallization", benchmark="tracking")
-pid = aiogym.make_controller("pid", env=env)
-mpc = aiogym.make_controller("mpc", env=env)
-result = aiogym.compare_policies(
-    env=env,
-    policies={"pid": pid, "mpc": mpc},
-    seeds=range(20),
-)
-env.close()
-```
+<details>
+<summary>Case sampling and recovery windows</summary>
 
-Use the [task guide](../workflows.md) for Dataset collection and RL
-training with `scenario = "crystallization"`. Read current controller results
-from the generated `runs/crystallization/benchmarks/<benchmark>/comparison.json`
-instead of treating a copied score as part of the model definition.
+| Setting | Range / rule |
+|---|---|
+| Tracking cases | Same model, initial state, duration, and interface; seed changes endpoint target |
+| Disturbance timing | Start `20–35`, duration `30–50` steps; restoration as late as step 85 |
+| Disturbance values | Growth factor `0.80–0.95`, nucleation `1.05–1.20`, solubility bias `2–6 g/L` |
+| Boundary target generation | Constant action sampled in `0.10–0.50` |
+| Duration contract | Disturbance/boundary targets belong to 100 s endpoints; shortening the batch changes the task |
+
+</details>
+
+## Parameters and model scope
+
+Query `aiogym.list_parameters("crystallization")` or the configured `env.describe()["parameters"]`.
+
+| Constraint / scope | Meaning |
+|---|---|
+| State safety | Nonnegative moments/concentration and declared caps; actual crossing terminates, without state clipping |
+| Temperature bounds | Enforced by action mapping |
+| Model scope | Normalized surrogate, not calibrated to a named crystallizer/solute/analyzer/cooling system |
+| Protocol provenance | AIO-Gym finite-batch evaluation, not a reproduction of a published case study |
+
+## Run this scenario
+
+[Train](../user-guide.md#3-train-and-compare) · [Compare a checkpoint](../user-guide.md#evaluate-a-saved-model)

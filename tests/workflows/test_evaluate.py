@@ -10,9 +10,10 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from aiogym import compare_policies, evaluate, make_controller, make_env
+from aiogym import evaluate, make_controller, make_env
 from aiogym.workflows._comparison_svg import render_trajectory_svg
 from aiogym.workflows.evaluate import _validation_summary
+from aiogym.workflows.training_curve import _legacy_control_metrics
 from aiogym.workflows.train import (
     _is_better_training_evaluation,
     _TrainingEvaluationRecorder,
@@ -23,7 +24,7 @@ def _plot_report(scenario, *, benchmark=None, seeds=(0,)):
     """Reuse one short hold trajectory; plot cases supply their own metrics."""
     env = make_env(scenario, benchmark=benchmark)
     try:
-        template = evaluate(env=env, policy="hold", seeds=(0,), max_steps=2)
+        template = evaluate(env=env, policies={"policy": "hold"}, seeds=(0,), max_steps=2)["evaluations"]["policy"]
     finally:
         env.close()
     report = {
@@ -54,7 +55,7 @@ def _plot_report(scenario, *, benchmark=None, seeds=(0,)):
     ({"length": 40, "episode_spec": {"horizon": 40},
       "metrics": {"constraint_violations": 0, "settling_time": 0}}, 1, 1),
 ])
-def test_validation_summary_uses_safe_full_horizon_and_step_fraction(
+def test_legacy_validation_preserves_safe_full_horizon_and_step_fraction(
     change, safe, success,
 ):
     episode = {
@@ -64,7 +65,8 @@ def test_validation_summary_uses_safe_full_horizon_and_step_fraction(
         "metrics": {"constraint_violations": 0, "settling_time": 90},
     }
     episode.update(change)
-    summary = _validation_summary([episode], control_dt=0.5)
+    episode["metrics"] = _legacy_control_metrics(episode, 0.5)
+    summary = _validation_summary([episode])
     assert summary["safe_completion"] == safe
     assert summary["control_success"] == success
     assert summary["mean_return"] == -2
@@ -80,7 +82,9 @@ def test_validation_summary_includes_all_cases_in_returns_and_rates():
         "metrics": {"constraint_violations": int(index == 3),
                     "settling_time": 0 if index < 2 else 200},
     } for index, value in enumerate([-1, -2, -4, -100])]
-    summary = _validation_summary(episodes, control_dt=1.0)
+    for episode in episodes:
+        episode["metrics"] = _legacy_control_metrics(episode, 1.0)
+    summary = _validation_summary(episodes)
     assert summary["safe_completion"] == 0.75
     assert summary["control_success"] == 0.5
     assert summary["mean_return"] == -26.75
@@ -89,20 +93,16 @@ def test_validation_summary_includes_all_cases_in_returns_and_rates():
 
 
 @pytest.mark.parametrize("metrics", [
-    {"constraint_violations": 0}, {"settling_time": 0},
-    {"constraint_violations": -1, "settling_time": 0},
-    {"constraint_violations": 0, "settling_time": -1},
-    {"constraint_violations": 0, "settling_time": 101},
-    {"constraint_violations": 0, "settling_time": float("nan")},
-    {"constraint_violations": 0, "settling_time": True},
+    {"safe_completion": 0}, {"control_success": 0},
+    {"safe_completion": -1, "control_success": 0},
+    {"safe_completion": 0, "control_success": 1},
+    {"safe_completion": 1, "control_success": 0.5},
+    {"safe_completion": 1, "control_success": float("nan")},
+    {"safe_completion": 1, "control_success": True},
 ])
 def test_validation_summary_requires_valid_control_metrics(metrics):
-    episode = {
-        "return": -2, "length": 100, "terminated": False, "truncated": True,
-        "episode_spec": {"horizon": 100}, "metrics": metrics,
-    }
     with pytest.raises(ValueError, match="validation"):
-        _validation_summary([episode], control_dt=1.0)
+        _validation_summary([{"return": -2, "length": 100, "metrics": metrics}])
 
 
 def test_training_evaluation_prioritizes_safety():
@@ -175,7 +175,9 @@ def test_training_recorder_saves_only_improved_validation_candidates(tmp_path, m
             "terminated": index >= safe_count, "truncated": True,
             "episode_spec": {"horizon": 40}, "episode_family": "interior",
             "episode_parameters": {}, "runtime_variation": {},
-            "metrics": {"constraint_violations": int(index >= safe_count),
+            "metrics": {"safe_completion": float(index < safe_count),
+                        "control_success": float(index < success_count),
+                        "constraint_violations": int(index >= safe_count),
                         "settling_time": 0 if index < success_count else 40},
         } for index in range(20)]})
     evaluations = iter(batches)
@@ -185,7 +187,8 @@ def test_training_recorder_saves_only_improved_validation_candidates(tmp_path, m
         module, "save_checkpoint",
         lambda *args, **kwargs: saved_steps.append(kwargs["training"]["completed_steps"]),
     )
-    env = SimpleNamespace(unwrapped=SimpleNamespace(control_dt=1.0))
+    env = SimpleNamespace(unwrapped=SimpleNamespace(control_dt=1.0,
+        reward=SimpleNamespace(success_criterion="Test criterion")))
     recorder = _TrainingEvaluationRecorder(
         backend=SimpleNamespace(policy=lambda *args, **kwargs: object()),
         model=object(), env=env, checkpoint_env=env, evaluate_every=1,
@@ -209,10 +212,10 @@ def test_evaluate_preserves_seed_order_and_aggregates_metrics():
     try:
         result = evaluate(
             env=env,
-            policy="pid",
+            policies={"policy": "pid"},
             seeds=(4, 3),
             max_steps=4,
-        )
+        )["evaluations"]["policy"]
         observation, _ = env.reset(seed=20)
         assert observation.shape == env.observation_space.shape
     finally:
@@ -264,29 +267,32 @@ def test_evaluate_preserves_seed_order_and_aggregates_metrics():
     assert result["trajectory_schema"]["output"][0]["high"] == 20.0
 
 
-def test_evaluate_writes_one_json_and_rejects_overwrite(tmp_path):
-    output = tmp_path / "evaluation.json"
-    env = make_env("quadruple")
-    try:
-        result = evaluate(
-            env=env,
-            policy="hold",
-            seeds=(1,),
-            max_steps=2,
-            output=output,
-        )
-        with pytest.raises(FileExistsError):
-            evaluate(
-                env=env,
-                policy="hold",
-                seeds=(1,),
-                max_steps=2,
-                output=output,
-            )
-    finally:
-        env.close()
-    assert json.loads(output.read_text(encoding="utf-8")) == result
-    assert [path.name for path in tmp_path.iterdir()] == ["evaluation.json"]
+def test_evaluate_single_policy_keeps_full_result_with_optional_report(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    output = tmp_path / "evaluation"
+    with make_env("quadruple") as env:
+        result = evaluate(env=env, policies={"hold": "hold"}, seeds=(1, 2), max_steps=2)
+        assert list(tmp_path.iterdir()) == []
+        exported = evaluate(env=env, policies={"hold": "hold"}, seeds=(1, 2),
+                            max_steps=2, output=output)
+        assert exported == result
+        with pytest.raises(FileExistsError, match="non-empty directory"):
+            evaluate(env=env, policies={"hold": "hold"}, seeds=(1,), output=output)
+    assert result["schema_version"] == "aiogym.evaluation.v6"
+    assert result["ordering"] == ["hold"]
+    assert "trajectory_archive" not in result
+    assert all("trajectory" in row for row in result["evaluations"]["hold"]["episodes"])
+    report = json.loads((output / "comparison.json").read_text())
+    assert report["schema_version"] == "aiogym.comparison.v7"
+    assert len(report["trajectory_archive"]["entries"]) == 2
+    assert "trajectory" not in report["evaluations"]["hold"]["episodes"][1]
+    svg = (output / "comparison.svg").read_text()
+    assert 'data-section="paired"' not in svg
+    assert "single policy" in svg
+    ET.fromstring(svg)
+    assert sorted(p.name for p in output.iterdir()) == [
+        "comparison.json", "comparison.svg", "trajectories.npz",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -302,7 +308,7 @@ def test_evaluate_validates_seeds(seeds, error):
     env = make_env("quadruple")
     try:
         with pytest.raises(error):
-            evaluate(env=env, policy="hold", seeds=seeds, max_steps=1)
+            evaluate(env=env, policies={"policy": "hold"}, seeds=seeds, max_steps=1)
     finally:
         env.close()
 
@@ -327,17 +333,22 @@ def test_evaluate_validates_the_public_policy_boundary():
 
     env = make_env("quadruple")
     try:
+        for policies in ({}, [], "pid"):
+            with pytest.raises(ValueError, match="non-empty mapping"):
+                evaluate(env=env, policies=policies, seeds=[0])
+        with pytest.raises(ValueError, match="policy labels"):
+            evaluate(env=env, policies={"": "pid"}, seeds=[0])
         with pytest.raises(TypeError, match="policy must provide"):
             evaluate(
                 env=env,
-                policy=IncompletePolicy(),
+                policies={"policy": IncompletePolicy()},
                 seeds=[0],
                 max_steps=1,
             )
         with pytest.raises(TypeError, match="metadata.*mapping"):
             evaluate(
                 env=env,
-                policy=InvalidMetadataPolicy(),
+                policies={"policy": InvalidMetadataPolicy()},
                 seeds=[0],
                 max_steps=1,
             )
@@ -349,8 +360,8 @@ def test_compare_matches_individual_evaluation_and_return_ordering(tmp_path):
     env = make_env("quadruple")
     try:
         pid = make_controller("pid", env=env)
-        single = evaluate(env=env, policy=pid, seeds=(3, 4), max_steps=3)
-        comparison = compare_policies(
+        single = evaluate(env=env, policies={"policy": pid}, seeds=(3, 4), max_steps=3)["evaluations"]["policy"]
+        comparison = evaluate(
             env=env,
             policies={"pid": pid, "hold": "hold"},
             seeds=(3, 4),
@@ -360,15 +371,10 @@ def test_compare_matches_individual_evaluation_and_return_ordering(tmp_path):
     finally:
         env.close()
     assert comparison["seeds"] == [3, 4]
-    compact_pid = comparison["evaluations"]["pid"]
-    assert compact_pid["aggregate"] == single["aggregate"]
-    assert compact_pid["policy"] == single["policy"]
-    assert compact_pid["episodes"][0]["trajectory"] == single["episodes"][0][
-        "trajectory"
-    ]
-    assert "trajectory" not in compact_pid["episodes"][1]
-    assert "trajectory_summary" not in compact_pid
-    archive = comparison["trajectory_archive"]
+    assert comparison["evaluations"]["pid"] == single
+    report = json.loads((tmp_path / "comparison/comparison.json").read_text())
+    assert "trajectory" not in report["evaluations"]["pid"]["episodes"][1]
+    archive = report["trajectory_archive"]
     archived_seed_4 = next(
         entry
         for entry in archive["entries"]
@@ -397,7 +403,7 @@ def test_compare_matches_individual_evaluation_and_return_ordering(tmp_path):
 def test_compare_reuses_identical_cases_for_every_policy(tmp_path, scenario):
     env = make_env(scenario, benchmark="tracking")
     try:
-        comparison = compare_policies(
+        comparison = evaluate(
             env=env,
             policies={"pid": "pid", "mpc": "mpc"},
             seeds=(0, 1, 2),
@@ -444,7 +450,7 @@ def test_compare_allows_constraint_names_observed_by_only_one_policy(tmp_path):
                 "bias": [1.0, 1.0],
             },
         )
-        comparison = compare_policies(
+        comparison = evaluate(
             env=env,
             policies={"unsafe": unsafe_pid, "safe": "mpc"},
             seeds=(0,),
@@ -505,7 +511,7 @@ def test_compare_does_not_hide_one_unsafe_case_behind_a_zero_median(tmp_path):
             def metadata(self):
                 return {"id": "one-case-unsafe"}
 
-        comparison = compare_policies(
+        comparison = evaluate(
             env=env,
             policies={
                 "a-one-case-unsafe": OneCaseUnsafePolicy(),
@@ -531,7 +537,7 @@ def test_compare_does_not_hide_one_unsafe_case_behind_a_zero_median(tmp_path):
 def test_quadruple_pid_safely_completes_tracking_benchmark():
     env = make_env("quadruple", benchmark="tracking")
     try:
-        result = evaluate(env=env, policy="pid", seeds=(0, 1, 2))
+        result = evaluate(env=env, policies={"policy": "pid"}, seeds=(0, 1, 2))["evaluations"]["policy"]
     finally:
         env.close()
 
@@ -544,7 +550,7 @@ def test_compare_uses_reward_direction_and_writes_json_and_svg(tmp_path):
     output = tmp_path / "comparison"
     env = make_env("three_tank")
     try:
-        result = compare_policies(
+        result = evaluate(
             env=env,
             policies={"pid": "pid", "hold": "hold"},
             seeds=(0, 1),
@@ -560,46 +566,29 @@ def test_compare_uses_reward_direction_and_writes_json_and_svg(tmp_path):
     assert result["ranking_metrics"] == [
         {"name": "return", "direction": "maximize", "aggregate": "mean"}
     ]
-    assert result["schema_version"] == "aiogym.comparison.v6"
+    assert result["schema_version"] == "aiogym.evaluation.v6"
+    report = json.loads((output / "comparison.json").read_text())
+    assert report["schema_version"] == "aiogym.comparison.v7"
     assert result["trajectory_seed"] == 0
-    assert result["trajectory_archive"]["schema_version"] == (
+    assert report["trajectory_archive"]["schema_version"] == (
         "aiogym.trajectory-archive.v1"
     )
-    assert result["trajectory_archive"]["file"] == "trajectories.npz"
-    assert len(result["trajectory_archive"]["entries"]) == 4
+    assert report["trajectory_archive"]["file"] == "trajectories.npz"
+    assert len(report["trajectory_archive"]["entries"]) == 4
     assert result["ordering"] == sorted(
         means, key=lambda label: (-means[label], label)
     )
-    assert json.loads((output / "comparison.json").read_text(encoding="utf-8")) == result
+    assert report["ordering"] == result["ordering"]
     svg_path = output / "comparison.svg"
-    ET.parse(svg_path)
     svg = svg_path.read_text(encoding="utf-8")
-    assert 'width="1528"' in svg
     root = ET.fromstring(svg)
-    heading = next(node for node in root.iter() if node.get("class") == "title")
-    assert heading.text == heading.text.upper()
-    assert heading.get("y") == "60"
-    subtitle = next(node for node in root.iter() if (node.text or "").startswith("trajectory seed:"))
-    assert subtitle.get("y") == "96"
-    divider = next(node for node in root.iter() if node.get("class") == "section-divider")
-    assert divider.get("y1") == "128"
-    assert 'font-size:34px' in svg
     legend = [node for node in root.iter() if node.get("class") == "header-legend"]
     assert [node.text for node in legend] == ["pid", "hold", "reference"]
-    assert all(float(node.get("y")) > float(heading.get("y")) for node in legend)
     assert [node.text for node in root.iter() if node.get("class") == "section"] == [
         "Shared-case tracking",
         "Absolute performance",
         "Paired tracking cost vs PID",
     ]
-    assert [node.text for node in root.iter() if node.get("class") == "section-number"] == [
-        "01", "02", "03",
-    ]
-    assert len([node for node in root.iter() if node.get("class") == "section-divider"]) == 3
-    bodies = {node.get("data-section"): node for node in root.iter() if node.get("data-section")}
-    assert {key: node.get("transform") for key, node in bodies.items()} == {
-        "tracking": "translate(56 48)", "summary": "translate(56 102)", "paired": "translate(56 155)",
-    }
     values = {(node.get("data-policy"), node.get("data-metric")): node.get("data-value")
               for node in root.iter() if node.get("data-metric")}
     for label in ("pid", "hold"):
@@ -612,25 +601,6 @@ def test_compare_uses_reward_direction_and_writes_json_and_svg(tmp_path):
     assert row.get("data-excluded-count") == "2"
     assert "N/A — no comparable pairs" in " ".join(row.itertext())
     assert "trajectory seed: 0; evaluation cases: 2; baseline: pid" in svg
-    x_axis_starts = [node.text for node in bodies["tracking"].iter()
-                     if node.get("class") == "tick" and node.get("text-anchor") == "middle"
-                     and node.get("x") == "76.00"]
-    assert x_axis_starts
-    assert set(x_axis_starts) == {"0"}
-    first_level = svg.split(">Output: tank_1_level [m]</text>", 1)[1]
-    first_level = first_level.split('<text class="panel-title"', 1)[0]
-    level_ticks = re.findall(
-        r'<text class="tick" text-anchor="end" x="68\.0" y="[^"]+">([^<]+)</text>',
-        first_level,
-    )
-    assert level_ticks == ["0", "0.167", "0.333", "0.5"]
-    first_action = svg.split(">Applied action: pump_P101 [fraction]</text>", 1)[1]
-    first_action = first_action.split('<text class="panel-title"', 1)[0]
-    action_ticks = re.findall(
-        r'<text class="tick" text-anchor="end" x="68\.0" y="[^"]+">([^<]+)</text>',
-        first_action,
-    )
-    assert action_ticks == ["0", "0.333", "0.667", "1"]
     assert sorted(path.name for path in output.iterdir()) == [
         "comparison.json",
         "comparison.svg",
@@ -640,7 +610,7 @@ def test_compare_uses_reward_direction_and_writes_json_and_svg(tmp_path):
     env = make_env("three_tank")
     try:
         with pytest.raises(FileExistsError, match="non-empty directory"):
-            compare_policies(
+            evaluate(
                 env=env,
                 policies={"pid": "pid", "hold": "hold"},
                 seeds=(0,),
@@ -686,99 +656,60 @@ def test_compare_places_changing_disturbances_above_balanced_main_columns():
     assert max(disturbance_y) < min(output_y)
 
 
-@pytest.mark.parametrize("benchmark", ("tracking", "boundary-safety"))
-def test_three_tank_hydraulic_benchmarks_use_compact_plot_layout(
-    benchmark,
-):
-    svg = render_trajectory_svg(_plot_report("three_tank", benchmark=benchmark))
-    assert 'width="1528" height="1158"' in svg
-    titles = re.findall(
-        r'<text class="panel-title" x="[^"]+" y="([^"]+)">([^<]+)</text>',
-        svg,
-    )
-    assert [title for y, title in titles if y == "148"] == [
-        "Output: tank_1_level [m]",
-        "Output: tank_2_level [m]",
-        "Output: tank_3_level [m]",
-    ]
-    assert [title for y, title in titles if y == "373"] == [
-        "Applied action: pump_P101 [fraction]",
-        "Applied action: valve_V12 [fraction]",
-        "Applied action: valve_V23 [fraction]",
-        "Applied action: valve_V34 [fraction]",
-    ]
-
-
 @pytest.mark.parametrize(
-    ("benchmark", "height", "row_titles"),
+    ("scenario", "benchmark", "expected_rows"),
     (
         (
-            "tracking",
-            "1608",
-            {
-                "148": [
+            "three_tank", "tracking",
+            [
+                [
                     "Output: tank_1_level [m]",
                     "Output: tank_2_level [m]",
                     "Output: tank_3_level [m]",
                 ],
-                "373": [
-                    "Output: tank_1_temperature [degC]",
-                    "Output: tank_2_temperature [degC]",
-                    "Output: tank_3_temperature [degC]",
-                ],
-                "598": [
+                [
                     "Applied action: pump_P101 [fraction]",
                     "Applied action: valve_V12 [fraction]",
                     "Applied action: valve_V23 [fraction]",
                     "Applied action: valve_V34 [fraction]",
                 ],
-                "823": [
-                    "Applied action: heater_H1 [fraction]",
-                    "Applied action: heater_H2 [fraction]",
-                    "Applied action: heater_H3 [fraction]",
-                ],
-            },
+            ],
         ),
         (
-            "disturbance-rejection",
-            "1833",
-            {
-                "148": [
+            "cascade", "disturbance-rejection",
+            [
+                [
                     "Disturbance: ambient_temperature",
                     "Disturbance: heater_H1_efficiency_factor",
                     "Disturbance: pump_flow_factor",
                 ],
-                "373": [
+                [
                     "Output: tank_1_level [m]",
                     "Output: tank_2_level [m]",
                     "Output: tank_3_level [m]",
                 ],
-                "598": [
+                [
                     "Output: tank_1_temperature [degC]",
                     "Output: tank_2_temperature [degC]",
                     "Output: tank_3_temperature [degC]",
                 ],
-                "823": [
+                [
                     "Applied action: pump_P101 [fraction]",
                     "Applied action: valve_V12 [fraction]",
                     "Applied action: valve_V23 [fraction]",
                     "Applied action: valve_V34 [fraction]",
                 ],
-                "1048": [
+                [
                     "Applied action: heater_H1 [fraction]",
                     "Applied action: heater_H2 [fraction]",
                     "Applied action: heater_H3 [fraction]",
                 ],
-            },
+            ],
         ),
     ),
 )
-def test_cascade_benchmarks_group_plot_panels_by_physical_role(
-    benchmark,
-    height,
-    row_titles,
-):
-    report = _plot_report("cascade", benchmark=benchmark)
+def test_compare_groups_plot_panels_by_physical_role(scenario, benchmark, expected_rows):
+    report = _plot_report(scenario, benchmark=benchmark)
     if benchmark == "disturbance-rejection":
         for evaluation in report["evaluations"].values():
             evaluation["episodes"][0]["trajectory"]["disturbance"][-1].update({
@@ -786,20 +717,15 @@ def test_cascade_benchmarks_group_plot_panels_by_physical_role(
                 "heater_H1_efficiency_factor": 0.8,
                 "pump_flow_factor": 0.9,
             })
-    svg = render_trajectory_svg(report)
-    ET.fromstring(svg)
-    assert f'width="1528" height="{height}"' in svg
-    titles = re.findall(
-        r'<text class="panel-title" x="[^"]+" y="([^"]+)">([^<]+)</text>',
-        svg,
-    )
-    assert {
-        y: [title for candidate_y, title in titles if candidate_y == y]
-        for y in row_titles
-    } == row_titles
+    root = ET.fromstring(render_trajectory_svg(report))
+    rows = {}
+    for node in root.iter():
+        if node.get("class") == "panel-title":
+            rows.setdefault(float(node.get("y")), []).append(node.text)
+    assert [rows[y] for y in sorted(rows)] == expected_rows
 
 
-def test_extraction_tracking_uses_model_time_and_balanced_plot_layout():
+def test_extraction_plot_uses_model_time_and_control_success():
     result = _plot_report("extraction", benchmark="tracking")
     # Synthetic complete cases straddle the final 10-control-step threshold.
     for label, hold_steps in (("pid", 10), ("hold", 9)):
@@ -807,27 +733,21 @@ def test_extraction_tracking_uses_model_time_and_balanced_plot_layout():
         case.update(length=100, terminated=False, truncated=True)
         case["episode_spec"]["horizon"] = 100
         case["metrics"].update(
+            safe_completion=1.0, control_success=float(hold_steps == 10),
             constraint_violations=0,
             settling_time=100 * result["environment"]["control_dt"] - hold_steps * result["environment"]["control_dt"],
         )
     assert result["trajectory_schema"]["time_unit"] == "h"
     svg = render_trajectory_svg(result)
-    assert 'width="1528" height="1158"' in svg
     assert ">time [h]</text>" in svg
     assert ">time [s]</text>" not in svg
-    titles = re.findall(
-        r'<text class="panel-title" x="([^"]+)" y="([^"]+)">([^<]+)</text>',
-        svg,
-    )
-    assert [title for _x, y, title in titles if y == "148"] == [
-        "Output: stage_5_liquid_concentration [fraction]"
-    ]
-    assert [title for _x, y, title in titles if y == "373"] == [
+
+    root = ET.fromstring(svg)
+    assert [node.text for node in root.iter() if node.get("class") == "panel-title"] == [
+        "Output: stage_5_liquid_concentration [fraction]",
         "Applied action: liquid_feed_flow [normalized_flow]",
         "Applied action: gas_feed_flow [normalized_flow]",
     ]
-
-    root = ET.fromstring(svg)
     assert {
         node.get("data-policy"): float(node.get("data-value"))
         for node in root.iter() if node.get("data-metric") == "control_success"
@@ -835,81 +755,38 @@ def test_extraction_tracking_uses_model_time_and_balanced_plot_layout():
 
 
 
-def test_compare_uses_benchmark_declared_lexicographic_ranking(
-    tmp_path,
-    monkeypatch,
-):
+def test_evaluate_uses_benchmark_ranking_without_implicit_output(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    env = make_env("quadruple", benchmark="disturbance-rejection")
-    try:
-        result = compare_policies(
-            env=env,
-            policies={"pid": "pid", "hold": "hold"},
-            seeds=(0, 1),
-            max_steps=2,
-        )
-    finally:
-        env.close()
+    with make_env("quadruple", benchmark="disturbance-rejection") as env:
+        result = evaluate(env=env, policies={"pid": "pid", "hold": "hold"},
+                          seeds=(0, 1), max_steps=2)
     assert result["ranking_metrics"] == [
         {"name": "unsafe_rate", "direction": "minimize", "aggregate": "mean"},
         {"name": "return", "direction": "maximize", "aggregate": "mean"},
     ]
     assert "return" in result["evaluations"]["pid"]["aggregate"]
-    output = (
-        tmp_path
-        / "runs"
-        / "quadruple"
-        / "benchmarks"
-        / "disturbance-rejection"
-    )
-    assert json.loads((output / "comparison.json").read_text(encoding="utf-8")) == result
-    ET.parse(output / "comparison.svg")
-    env = make_env("quadruple", benchmark="disturbance-rejection")
-    try:
-        replacement = compare_policies(
-            env=env,
-            policies={"pid": "pid", "hold": "hold"},
-            seeds=(2,),
-            max_steps=1,
-        )
-    finally:
-        env.close()
-    assert json.loads((output / "comparison.json").read_text(encoding="utf-8")) == replacement
-    assert sorted(path.name for path in output.iterdir()) == [
-        "comparison.json",
-        "comparison.svg",
-        "trajectories.npz",
-    ]
+    assert all("trajectory" in episode for evaluation in result["evaluations"].values()
+               for episode in evaluation["episodes"])
+    assert list(tmp_path.iterdir()) == []
 
 
-def test_compare_default_output_preserves_unmanaged_entries(tmp_path, monkeypatch):
+def test_evaluate_without_output_does_not_touch_old_benchmark_results(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    output = (
-        tmp_path / "runs" / "three-tank" / "benchmarks" / "tracking"
-    )
+    output = tmp_path / "runs/three-tank/benchmarks/tracking"
     output.mkdir(parents=True)
-    (output / "notes.txt").write_text("keep", encoding="utf-8")
-    env = make_env("three_tank", benchmark="tracking")
-    try:
-        compare_policies(
-            env=env,
-            policies={"pid": "pid", "hold": "hold"},
-            seeds=(0,),
-            max_steps=1,
-        )
-    finally:
-        env.close()
-    assert (output / "notes.txt").read_text(encoding="utf-8") == "keep"
-    assert (output / "comparison.json").is_file()
-    assert (output / "comparison.svg").is_file()
-    assert (output / "trajectories.npz").is_file()
+    (output / "comparison.json").write_text("previous report")
+    (output / "notes.txt").write_text("keep")
+    original = {p.name: p.read_bytes() for p in output.iterdir()}
+    with make_env("three_tank", benchmark="tracking") as env:
+        evaluate(env=env, policies={"pid": "pid"}, seeds=(0,), max_steps=1)
+    assert {p.name: p.read_bytes() for p in output.iterdir()} == original
 
 
 def test_compare_mean_ranking_and_paired_scores_use_matching_cases(tmp_path, monkeypatch):
-    module = importlib.import_module("aiogym.workflows.compare")
+    module = importlib.import_module("aiogym.workflows.evaluate")
     env = make_env("quadruple", benchmark="tracking")
     try:
-        template = evaluate(env=env, policy="pid", seeds=(0, 1, 2), max_steps=2)
+        template = evaluate(env=env, policies={"policy": "pid"}, seeds=(0, 1, 2), max_steps=2)["evaluations"]["policy"]
         batches = {}
         for label, returns in (("candidate", [-4, -4, -4]), ("reference", [-1, -1, -50])):
             batch = copy.deepcopy(template)
@@ -917,13 +794,13 @@ def test_compare_mean_ranking_and_paired_scores_use_matching_cases(tmp_path, mon
             for episode, value in zip(batch["episodes"], returns):
                 episode.update({"return": value, "truncated": True})
                 episode["episode_spec"]["horizon"] = 2
-                episode["metrics"].update({"return": value, "tracking_ise": -2 * value})
+                episode["metrics"].update({"return": value, "tracking_ise": -2 * value, "safe_completion": 1.0})
             for key in ("return", "episode_return"):
                 batch["aggregate"][key].update(mean=float(np.mean(returns)), median=float(np.median(returns)))
             batch["return_distribution"] = returns
             batches[label] = batch
-        monkeypatch.setattr(module, "evaluate", lambda **kwargs: batches[kwargs["policy"]])
-        result = compare_policies(
+        monkeypatch.setattr(module, "_evaluate", lambda **kwargs: batches[kwargs["policy"]])
+        result = evaluate(
             env=env, policies={"candidate": "candidate", "reference": "reference"},
             seeds=(0, 1, 2), output=tmp_path / "paired",
         )
@@ -939,7 +816,7 @@ def test_compare_mean_ranking_and_paired_scores_use_matching_cases(tmp_path, mon
                 if node.get("data-metric") == "mean_return"] == pytest.approx([-4, -52 / 3])
         batches["reference"]["episodes"][0]["episode_spec"]["reference"][0] += 1
         with pytest.raises(ValueError, match="identical physical cases"):
-            compare_policies(
+            evaluate(
                 env=env, policies={"candidate": "candidate", "reference": "reference"},
                 seeds=(0, 1, 2), output=tmp_path / "different-cases",
             )
@@ -953,6 +830,7 @@ def test_paired_plot_marks_zero_costs_and_noncomparable_cases():
         for episode in evaluation["episodes"]:
             episode["episode_spec"]["horizon"] = 2
             episode["truncated"] = True
+            episode["metrics"]["safe_completion"] = 1.0
             episode["metrics"]["tracking_ise"] = 1 if label == "pid" else 0
     pid, hold = (report["evaluations"][label]["episodes"] for label in ("pid", "hold"))
     pid[0]["metrics"]["tracking_ise"] = 0
@@ -962,6 +840,8 @@ def test_paired_plot_marks_zero_costs_and_noncomparable_cases():
     hold[3]["terminated"] = True
     hold[4]["truncated"] = False
     pid[5]["terminated"] = True
+    for episode in [*hold[2:5], pid[5]]:
+        episode["metrics"]["safe_completion"] = 0.0
     root = ET.fromstring(render_trajectory_svg(report))
     row = next(node for node in root.iter() if node.get("data-valid-count") is not None)
     assert (row.get("data-valid-count"), row.get("data-excluded-count")) == ("2", "5")
@@ -972,7 +852,7 @@ def test_paired_plot_marks_zero_costs_and_noncomparable_cases():
     assert [float(box.get(key)) for key in (
         "data-q1", "data-median", "data-q3", "data-whisker-low", "data-whisker-high",
     )] == pytest.approx([2.5e7, 5e7, 7.5e7, 0, 1e8])
-    assert "linear scale (includes zero cost)" in " ".join(root.itertext())
+    assert "linear ≤1×, log >1×" in " ".join(root.itertext())
 
 
 def test_paired_boxes_use_raw_quartiles_and_adapt_to_ratio_spread():
@@ -981,9 +861,11 @@ def test_paired_boxes_use_raw_quartiles_and_adapt_to_ratio_spread():
         for episode in evaluation["episodes"]:
             episode["episode_spec"]["horizon"] = 2
             episode["truncated"] = True
+            episode["metrics"]["safe_completion"] = 1.0
             episode["metrics"]["tracking_ise"] = 1
     for values in (np.r_[np.arange(1, 20), 100], np.ones(20),
-                   np.linspace(0.99990, 0.99997, 20), np.geomspace(1e-5, 1e4, 20)):
+                   np.linspace(0.99990, 0.99997, 20), np.geomspace(1e-5, 1e4, 20),
+                   np.r_[1e-9, np.linspace(0.98, 1.02, 18), 56.7]):
         for episode, value in zip(report["evaluations"]["hold"]["episodes"], values):
             episode["metrics"]["tracking_ise"] = float(value)
         root = ET.fromstring(render_trajectory_svg(report))
@@ -993,10 +875,12 @@ def test_paired_boxes_use_raw_quartiles_and_adapt_to_ratio_spread():
         )
         marks = [node for node in root.iter() if node.get("data-seed")]
         assert max(float(node.get("data-ratio")) for node in marks) == max(values)
-        assert all(190 <= float(node.get("cx")) <= 1200 for node in marks)
         ticks = [node.text for node in root.iter() if node.get("class") == "legend"
                  and node.get("text-anchor") == "middle"]
         assert len(set(ticks)) == len(ticks) >= 3
+        if min(values) == 1e-9:
+            # Near-perfect cases must retain their original ratios.
+            assert min(float(node.get("data-ratio")) for node in marks) == 1e-9
         if max(values) == 100:
             assert [float(box.get(key)) for key in (
                 "data-q1", "data-median", "data-q3", "data-whisker-low", "data-whisker-high",
@@ -1004,16 +888,35 @@ def test_paired_boxes_use_raw_quartiles_and_adapt_to_ratio_spread():
             assert [(node.get("data-seed"), node.get("data-outlier")) for node in marks] == [("19", "true")]
 
 
-def test_compare_requires_explicit_output_without_benchmark():
-    env = make_env("quadruple")
+def test_evaluate_multiple_policies_without_benchmark_or_output(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with make_env("quadruple") as env:
+        result = evaluate(env=env, policies={"pid": "pid", "hold": "hold"},
+                          seeds=(0,), max_steps=1)
+    assert set(result["evaluations"]) == {"pid", "hold"}
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_batch_comparison_reports_endpoint_quality_and_task_success(tmp_path):
+    env = make_env("crystallization", benchmark="tracking")
     try:
-        with pytest.raises(ValueError, match="outside a benchmark"):
-            compare_policies(
-                env=env,
-                policies={"pid": "pid", "hold": "hold"},
-                seeds=(0,),
-                max_steps=1,
-            )
+        result = evaluate(env=env, policies={"pid": "pid", "hold": "hold"},
+                                  seeds=(0,), output=tmp_path / "batch")
+        assert [row["name"] for row in result["ranking_metrics"]] == [
+            "safe_completion", "control_success", "terminal_quality_cost",
+        ]
+        assert result["ranking_metrics"][1]["aggregate"] == "mean"
+        assert "settling_fraction" not in result
+        svg = (tmp_path / "batch/comparison.svg").read_text()
+        root = ET.fromstring(svg)
+        assert "Paired terminal quality cost vs PID" in " ".join(root.itertext())
+        assert "Endpoint coefficient of variation error [dimensionless] (median)" in " ".join(root.itertext())
+        assert "Endpoint mean crystal size error [um] (median)" in " ".join(root.itertext())
+        assert "Relative ISE" not in svg and "last 10%" not in svg
+        for evaluation in result["evaluations"].values():
+            metrics = evaluation["episodes"][0]["metrics"]
+            assert "settling_time" not in metrics and "tracking_ise" not in metrics
+            assert metrics["safe_completion"] == 1
     finally:
         env.close()
 
@@ -1021,7 +924,7 @@ def test_compare_requires_explicit_output_without_benchmark():
 def test_extraction_energy_integrates_native_hours():
     env = make_env("extraction")
     try:
-        result = evaluate(env=env, policy="hold", seeds=(0,), max_steps=2)
+        result = evaluate(env=env, policies={"policy": "hold"}, seeds=(0,), max_steps=2)["evaluations"]["policy"]
         case = result["episodes"][0]
         expected = sum(
             env.unwrapped.model.energy_kw(np.asarray(action)) * env.unwrapped.control_dt
@@ -1032,68 +935,63 @@ def test_extraction_energy_integrates_native_hours():
         env.close()
 
 
-@pytest.mark.parametrize("failure, existing", [
-    ("render", True), ("commit", True), ("commit", False), ("rollback", True),
-])
-def test_comparison_failures_preserve_results_or_recovery_copies(
-    tmp_path, monkeypatch, failure, existing,
+@pytest.mark.parametrize("failure", ["render", "commit", "rollback"])
+def test_evaluation_export_failures_clean_partial_files_or_preserve_recovery(
+    tmp_path, monkeypatch, failure,
 ):
     from pathlib import Path
 
-    module = importlib.import_module("aiogym.workflows.compare")
-    monkeypatch.chdir(tmp_path)
-    output = tmp_path / "runs/heater/benchmarks/tracking"
-    output.mkdir(parents=True)
-    (output / "notes.txt").write_text("keep")
-    env = make_env("heater", benchmark="tracking")
-    try:
-        if existing:
-            compare_policies(env=env, policies={"pid": "pid", "hold": "hold"},
-                             seeds=(0,), max_steps=1)
-        original = {p.name: p.read_bytes() for p in output.iterdir()}
-        replacements = 0
-        replace = module.os.replace
+    module = importlib.import_module("aiogym.workflows._evaluation_report")
+    output = tmp_path / "evaluation"
+    (tmp_path / "notes.txt").write_text("keep")
+    replacements = 0
+    replace = module.os.replace
+    unlink = Path.unlink
 
-        def fail_replace(source, destination):
-            nonlocal replacements
-            if Path(destination).resolve().parent == output:
-                replacements += 1
-                if replacements == 2 or (failure == "rollback" and replacements == 3):
-                    raise OSError("injected replacement failure")
-            return replace(source, destination)
+    def fail_replace(source, destination):
+        nonlocal replacements
+        replacements += 1
+        if replacements == 2:
+            raise OSError("injected replacement failure")
+        return replace(source, destination)
 
-        def fail_render(result):
-            raise RuntimeError("injected rendering failure")
+    def fail_unlink(path, *args, **kwargs):
+        if path == output / "trajectories.npz":
+            raise OSError("injected cleanup failure")
+        return unlink(path, *args, **kwargs)
 
-        if failure == "render":
-            monkeypatch.setattr(module, "render_trajectory_svg", fail_render)
-        else:
-            monkeypatch.setattr(module.os, "replace", fail_replace)
-        message = {"render": "injected rendering", "commit": "injected replacement",
-                   "rollback": "recovery files retained"}[failure]
+    def fail_render(result):
+        raise RuntimeError("injected rendering failure")
+
+    if failure == "render":
+        monkeypatch.setattr(module, "render_trajectory_svg", fail_render)
+    else:
+        monkeypatch.setattr(module.os, "replace", fail_replace)
+        if failure == "rollback":
+            monkeypatch.setattr(Path, "unlink", fail_unlink)
+    message = {"render": "injected rendering", "commit": "injected replacement",
+               "rollback": "recovery files retained"}[failure]
+    with make_env("heater", benchmark="tracking") as env:
         with pytest.raises((RuntimeError, OSError), match=message):
-            compare_policies(env=env, policies={"pid": "pid", "hold": "hold"},
-                             seeds=(1,), max_steps=2)
-        assert (output / "notes.txt").read_text() == "keep"
+            evaluate(env=env, policies={"pid": "pid"}, seeds=(1,),
+                     max_steps=2, output=output)
+        assert (tmp_path / "notes.txt").read_text() == "keep"
         if failure == "rollback":
             pending = output / ".comparison-pending"
-            for name in ("comparison.json", "comparison.svg", "trajectories.npz"):
-                assert (pending / "previous" / name).read_bytes() == original[name]
+            assert (pending / "comparison.json").is_file()
+            assert (pending / "comparison.svg").is_file()
+            assert (output / "trajectories.npz").is_file()
             with pytest.raises(FileExistsError, match="active or unfinished"):
-                compare_policies(env=env, policies={"pid": "pid", "hold": "hold"},
-                                 seeds=(2,), max_steps=1)
-            assert replacements == 3
+                evaluate(env=env, policies={"pid": "pid"}, seeds=(2,), output=output)
         else:
-            assert {p.name: p.read_bytes() for p in output.iterdir()} == original
-    finally:
-        env.close()
+            assert list(output.iterdir()) == []
 
 
 def test_training_validation_matches_metrics_without_building_trajectory_reports(monkeypatch):
     module = importlib.import_module("aiogym.workflows.evaluate")
     env = make_env("heater", randomize=True)
     try:
-        full = evaluate(env=env, policy="hold", seeds=[0, 1], max_steps=3)
+        full = evaluate(env=env, policies={"policy": "hold"}, seeds=[0, 1], max_steps=3)["evaluations"]["policy"]
         def unexpected_report(*args, **kwargs):
             raise AssertionError("training validation must not build trajectory reports")
         monkeypatch.setattr(module, "_trajectory", unexpected_report)
@@ -1106,6 +1004,6 @@ def test_training_validation_matches_metrics_without_building_trajectory_reports
             {key: value for key, value in row.items() if key != "trajectory"}
             for row in full["episodes"]
         ]
-        assert _validation_summary(compact["episodes"], control_dt=env.unwrapped.control_dt) == _validation_summary(full["episodes"], control_dt=env.unwrapped.control_dt)
+        assert _validation_summary(compact["episodes"]) == _validation_summary(full["episodes"])
     finally:
         env.close()

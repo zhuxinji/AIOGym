@@ -14,7 +14,7 @@ from aiogym import (
 from aiogym.core.contracts import ProcessModel
 
 
-def test_builtin_scenarios_are_registered():
+def test_builtin_scenarios_are_listed():
     assert set(list_scenarios()) == {
         "cascade",
         "cstr",
@@ -27,7 +27,7 @@ def test_builtin_scenarios_are_registered():
     }
     assert set(list_rewards("cstr")) == {"regulation"}
     assert set(list_rewards("cascade")) == {"regulation"}
-    assert set(list_rewards("crystallization")) == {"regulation"}
+    assert set(list_rewards("crystallization")) == {"batch-quality"}
     assert set(list_rewards("extraction")) == {"regulation"}
     assert set(list_rewards("heater")) == {"regulation"}
     assert set(list_rewards("hvac")) == {"regulation"}
@@ -117,7 +117,7 @@ def test_randomized_validation_cases_are_fixed_by_seed_for_every_scenario(scenar
     [
         ("cascade", (16,), (7,)),
         ("cstr", (6,), (2,)),
-        ("crystallization", (7,), (1,)),
+        ("crystallization", (8,), (1,)),
         ("extraction", (11,), (2,)),
         ("heater", (5,), (2,)),
         ("hvac", (4,), (2,)),
@@ -382,7 +382,7 @@ def test_scenario_models_declare_equation_time_unit(scenario, time_unit):
 
 @pytest.mark.parametrize("scenario", list_scenarios())
 def test_benchmarks_use_fixed_parameters_and_declared_reward(scenario):
-    from aiogym.core.registry import get_scenario
+    from aiogym.core.catalog import get_scenario
 
     definition = get_scenario(scenario)
     expected_parameters = dict(definition.make_model(None).resolved_parameters)

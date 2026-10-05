@@ -93,6 +93,8 @@ class ProcessModel(Protocol):
         reference: Sequence[float],
         previous_action: Sequence[float],
         disturbances: Mapping[str, float],
+        *,
+        remaining_time: float,
     ) -> Sequence[float]: ...
 
     def constraint_costs(
@@ -113,7 +115,7 @@ class ProcessModel(Protocol):
 
 @runtime_checkable
 class Policy(Protocol):
-    """Act on observations plus public time and reference context only."""
+    """Act on observations, current time, and an observation-aligned reference."""
 
     env: Any | None
 
@@ -137,10 +139,29 @@ def policy_metadata(policy: Any) -> dict[str, Any]:
     metadata = resolved.metadata()
     if not isinstance(metadata, Mapping):
         raise TypeError("policy metadata() must return a mapping")
-    serialized = jsonable(dict(metadata))
-    if not isinstance(serialized, dict):
-        raise TypeError("policy metadata() must return a mapping")
-    return serialized
+    return jsonable(dict(metadata))
+
+
+def environment_interface(env) -> dict[str, Any]:
+    """Read the explicit policy interface, including any outer wrapper changes."""
+    interface_method = getattr(type(env), "policy_interface", None)
+    if not callable(interface_method):
+        raise TypeError("environment wrappers must explicitly implement policy_interface()")
+    interface = interface_method(env)
+    if not isinstance(interface, Mapping):
+        raise TypeError("environment policy_interface() must return a mapping")
+    if "version" not in interface:
+        raise ValueError("environment policy_interface() must declare a version")
+    for name in ("observation", "action"):
+        space = getattr(env, f"{name}_space")
+        rows = interface[name]
+        if space.shape != (len(rows),):
+            raise ValueError(f"policy interface {name} schema does not match space shape")
+        for bound in ("low", "high"):
+            values = np.asarray([row[bound] for row in rows], dtype=space.dtype)
+            if not np.array_equal(values, getattr(space, bound)):
+                raise ValueError(f"policy interface {name} {bound} does not match space")
+    return jsonable(dict(interface))
 
 
 EpisodeSampler = Callable[
@@ -164,6 +185,7 @@ class Scenario:
     rewards: Mapping[str, Reward]
     default_reward: str
     controller_config: ControllerConfig | None = None
+    interface_version: int = 1
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not self.id.strip():
@@ -171,6 +193,14 @@ class Scenario:
         control_dt = float(self.control_dt)
         if not np.isfinite(control_dt) or control_dt <= 0:
             raise ValueError("scenario control_dt must be finite and positive")
+        if (
+            isinstance(self.interface_version, bool)
+            or not isinstance(self.interface_version, int)
+            or self.interface_version < 1
+        ):
+            raise ValueError("scenario interface_version must be a positive integer")
+        if not callable(self.make_model):
+            raise TypeError("scenario make_model must be callable")
         if not callable(self.make_default_episode):
             raise TypeError("scenario make_default_episode must be callable")
         if not callable(self.sample_training_episode):
@@ -201,13 +231,6 @@ class Scenario:
                 "benchmark reward_id values must be declared in rewards: "
                 f"{unknown_benchmark_rewards}"
             )
-        model = self.make_model(None)
-        if model.scenario != self.id:
-            raise ValueError("scenario model does not belong to scenario id")
-        if not isinstance(self.make_default_episode(model), EpisodeSpec):
-            raise TypeError("make_default_episode must return EpisodeSpec")
-        for benchmark in self.benchmarks.values():
-            benchmark.make_episode(model, 0)
         object.__setattr__(self, "control_dt", control_dt)
         object.__setattr__(self, "benchmarks", MappingProxyType(dict(self.benchmarks)))
         object.__setattr__(self, "rewards", MappingProxyType(dict(self.rewards)))

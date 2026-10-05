@@ -90,6 +90,9 @@ class PhysicsModelBase:
     """Shared vector, schema, disturbance, and numerical operations."""
 
     time_unit = "s"
+    # Model-owned English descriptions, separate from the persisted policy schema.
+    parameter_metadata = {}  # name -> (description, allowed values)
+    variable_descriptions = {}
     reference_observation_suffix = "setpoint"
     state_names = ()
     state_units = {}
@@ -110,6 +113,31 @@ class PhysicsModelBase:
             "description": "controlled-variable setpoint move",
         },
     )
+
+    def action_metadata(self):
+        return {}
+
+    def observation_metadata(self):
+        rows = {}
+        for category, definitions in (
+            ("measurement", self.state_schema()),
+            ("reference", self.output_schema()),
+        ):
+            for row in definitions:
+                source = row["name"]
+                name = source if category == "measurement" else f"{source}_{self.reference_observation_suffix}"
+                rows[name] = {
+                    "description": f"Normalized {category}: {self.variable_descriptions.get(source, 'Not provided')}",
+                    "unit": "normalized",
+                    "physical_unit": row["unit"],
+                    "source": source,
+                    "normalization": f"clip((value - {row['low']:g}) / {row['high'] - row['low']:g}, 0, 1)",
+                }
+        return rows
+
+    def safety_metadata(self):
+        """None means safety documentation was not supplied by this model."""
+        return None
 
     def _schema_row(self, name, units, bounds):
         low, high = bounds[name]
@@ -243,8 +271,8 @@ class PhysicsModelBase:
             ),
         ]
 
-    def observation(self, state, reference, previous_action, disturbances):
-        del previous_action, disturbances
+    def observation(self, state, reference, previous_action, disturbances, *, remaining_time=0.0):
+        del previous_action, disturbances, remaining_time
         return [
             *self._normalize(state, self._cached_state_schema),
             *self._normalize(reference, self._cached_output_schema),

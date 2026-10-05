@@ -1,4 +1,4 @@
-"""Thin command-line adapters for collect, train, evaluate, and compare."""
+"""Thin command-line adapters for collect, train, and evaluate."""
 from __future__ import annotations
 
 import argparse
@@ -13,9 +13,8 @@ from aiogym.core.io import jsonable, write_json
 _CONTROLLERS = ("hold", "mpc", "pid", "random")
 _DESCRIPTIONS = {
     "collect": "Collect an episode-oriented Dataset.",
-    "train": "Train registered algorithms across independent training seeds.",
-    "evaluate": "Evaluate one controller or checkpoint on explicit seeds.",
-    "compare": "Compare controllers and checkpoints on identical seeds.",
+    "train": "Train built-in algorithms across independent training seeds.",
+    "evaluate": "Evaluate one or more controllers and checkpoints on identical seeds.",
 }
 
 
@@ -26,7 +25,7 @@ class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescrip
 def _environment_arguments(parser, *, allow_benchmark, options=None):
     parser.add_argument(
         "scenario",
-        help="registered Scenario id; inspect choices with `aiogym list scenarios`",
+        help="built-in Scenario id; inspect choices with `aiogym list scenarios`",
     )
     parser = options if options is not None else parser
     parser.add_argument(
@@ -144,7 +143,7 @@ Inspect progress from another terminal with: aiogym status
         parser.set_defaults(randomize=True)
         parser.add_argument(
             "algorithm", nargs="+", choices=list_algorithms(),
-            help="one or more registered algorithm ids",
+            help="one or more built-in algorithm ids",
         )
         common.add_argument(
             "--steps", default=500_000, type=int, help="positive additional environment steps per task; also additive on continuation"
@@ -227,41 +226,12 @@ Inspect progress from another terminal with: aiogym status
             metavar="DIR",
             help="create a run in this exact new or empty directory (one task only); omit for automatic per-algorithm directories",
         )
-    elif command == "evaluate":
-        source = parser.add_mutually_exclusive_group(required=True)
-        source.add_argument(
-            "--controller",
-            choices=_CONTROLLERS,
-            help="built-in controller to evaluate",
-        )
-        source.add_argument(
-            "--checkpoint",
-            type=Path,
-            metavar="MODEL_ZIP",
-            help="self-describing AIO-Gym model.zip to evaluate",
-        )
-        parser.add_argument(
-            "--seeds",
-            nargs="+",
-            required=True,
-            type=int,
-            help=(
-                "ordered reset seeds; on a Benchmark these select reproducible cases"
-            ),
-        )
-        parser.add_argument(
-            "--max-steps", type=int, help="optional per-episode step limit"
-        )
-        parser.add_argument(
-            "--output", required=True, type=Path, metavar="JSON_FILE",
-            help="create a new evaluation JSON file; existing file rejected"
-        )
     else:
         parser.add_argument(
             "--controllers",
             nargs="+",
             choices=_CONTROLLERS,
-            help="built-in controllers to compare",
+            help="built-in controllers to evaluate",
         )
         parser.add_argument(
             "--checkpoint",
@@ -269,7 +239,7 @@ Inspect progress from another terminal with: aiogym status
             nargs=2,
             metavar=("LABEL", "MODEL_ZIP"),
             help=(
-                "learned policy to compare; repeat for multiple checkpoints"
+                "learned policy to evaluate; repeat for multiple checkpoints"
             ),
         )
         parser.add_argument(
@@ -289,9 +259,8 @@ Inspect progress from another terminal with: aiogym status
             type=Path,
             metavar="DIR",
             help=(
-                "create results in a new or empty directory; omit with --benchmark "
-                "to replace comparison.json, comparison.svg, and trajectories.npz in "
-                "runs/<scenario>/benchmarks/<benchmark>"
+                "write comparison.json, comparison.svg, and trajectories.npz to a new "
+                "or empty directory; omit to print the full result without writing files"
             ),
         )
     return parser
@@ -316,7 +285,7 @@ def _json_object_file(path, parser, label):
     return value
 
 
-def _comparison_policies(args, parser, aiogym, env):
+def _evaluation_policies(args, parser, aiogym, env):
     controllers = () if args.controllers is None else tuple(args.controllers)
     if len(set(controllers)) != len(controllers):
         parser.error("--controllers must not contain duplicates")
@@ -331,31 +300,14 @@ def _comparison_policies(args, parser, aiogym, env):
             Path(checkpoint),
             env=env,
         )
-    if len(policies) < 2:
+    if not policies:
         parser.error(
-            "compare requires at least two policies from --controllers and --checkpoint"
+            "evaluate requires at least one policy from --controllers and --checkpoint"
         )
     return policies
 
 
-def _comparison_output(args, env):
-    if args.output is not None:
-        return str(args.output.resolve())
-    base_env = env.unwrapped
-    if base_env.benchmark is None:
-        raise ValueError("comparison outside a Benchmark requires an explicit --output directory")
-    scenario = base_env.scenario.id.replace("_", "-")
-    return str(
-        (
-            Path("runs")
-            / scenario
-            / "benchmarks"
-            / base_env.benchmark.id
-        ).resolve()
-    )
-
-
-def _success_summary(command, args, result, env):
+def _success_summary(command, args, result):
     if command == "collect":
         return {
             "schema_version": result["schema_version"],
@@ -377,18 +329,11 @@ def _success_summary(command, args, result, env):
             "training_curve": result["training_curve"],
             "behavior_cloning_artifact": result["behavior_cloning_artifact"],
         }
-    if command == "evaluate":
-        return {
-            "schema_version": result["schema_version"],
-            "output": str(args.output.resolve()),
-            "policy": result["policy"],
-            "seeds": result["seeds"],
-            "ranking_metrics": result["ranking_metrics"],
-            "aggregate": result["aggregate"],
-        }
+    if args.output is None:
+        return result
     return {
         "schema_version": result["schema_version"],
-        "output": _comparison_output(args, env),
+        "output": str(args.output.resolve()),
         "seeds": result["seeds"],
         "ranking_metrics": result["ranking_metrics"],
         "ranking": [
@@ -452,7 +397,7 @@ def _print_training_result(output, metadata):
             benchmark_env.close()
         if all(environment[field] == benchmark[field] for field in ENVIRONMENT_COMPATIBILITY_FIELDS):
             comparison_options = ["--benchmark", "tracking"]
-    compare = ["aiogym", "compare", scenario, *comparison_options, "--controllers", "pid",
+    compare = ["aiogym", "evaluate", scenario, *comparison_options, "--controllers", "pid",
                "--checkpoint", algorithm, str(checkpoint), "--seeds", "0", "1", "2",
                "--output", str(output / "comparison")]
     print("  Compare on 3 cases (expand seeds for a formal report):\n    " + shlex.join(compare), file=sys.stderr)
@@ -560,34 +505,18 @@ def main(command, argv=None, *, _managed=False):
                 result = run_training_job(job, train_one)
             _print_training_result(args.output, result)
 
-        elif command == "evaluate":
-            print(f"Evaluation: {args.output.resolve()} (create new JSON file)", file=sys.stderr)
-            if args.checkpoint is not None:
-                policy = aiogym.load_policy(
-                    args.checkpoint,
-                    env=env,
-                )
-            else:
-                policy = args.controller
-            result = aiogym.evaluate(
-                env=env,
-                policy=policy,
-                seeds=args.seeds,
-                max_steps=args.max_steps,
-                output=args.output,
-            )
         else:
-            mode = "create in new or empty directory" if args.output is not None else "replace managed comparison JSON/SVG/NPZ files"
-            print(f"Comparison: {_comparison_output(args, env)} ({mode})", file=sys.stderr)
-            policies = _comparison_policies(args, parser, aiogym, env)
-            result = aiogym.compare_policies(
+            if args.output is not None:
+                print(f"Evaluation: {args.output.resolve()} (create new report directory)", file=sys.stderr)
+            policies = _evaluation_policies(args, parser, aiogym, env)
+            result = aiogym.evaluate(
                 env=env,
                 policies=policies,
                 seeds=args.seeds,
                 max_steps=args.max_steps,
                 output=args.output,
             )
-        summary = _success_summary(command, args, result, env)
+        summary = _success_summary(command, args, result)
     except (
         OSError,
         KeyError,

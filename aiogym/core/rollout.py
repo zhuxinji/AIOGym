@@ -57,7 +57,9 @@ def rollout(
         context = {
             "step_index": len(rows),
             "physical_time": float(info["physical_time"]),
-            "reference": np.asarray(info["reference"], dtype=float).copy(),
+            "reference": np.asarray(
+                info.get("policy_reference", info["reference"]), dtype=float,
+            ).copy(),
         }
         action = np.asarray(policy.act(np.asarray(observation), context), dtype=np.float32)
         if action.shape != env.action_space.shape or not env.action_space.contains(action):

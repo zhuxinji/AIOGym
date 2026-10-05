@@ -17,7 +17,7 @@ SMALL_POLICY = {"policy_kwargs": {"net_arch": [8, 8]}}
     ("scenario", "reward"),
     [
         ("cascade", "regulation"),
-        ("crystallization", "regulation"),
+        ("crystallization", "batch-quality"),
         ("cstr", "regulation"),
         ("extraction", "regulation"),
         ("heater", "regulation"),
@@ -61,11 +61,11 @@ def test_data_train_load_evaluate_and_compare_pipeline(
         )
         single = aiogym.evaluate(
             env=env,
-            policy=learned,
+            policies={"policy": learned},
             seeds=(7, 8),
             max_steps=2,
-        )
-        comparison = aiogym.compare_policies(
+        )["evaluations"]["policy"]
+        comparison = aiogym.evaluate(
             env=env,
             policies={"pid": pid, "mpc": mpc, "sac": learned},
             seeds=(7, 8),

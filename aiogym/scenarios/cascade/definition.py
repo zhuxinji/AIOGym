@@ -1,4 +1,4 @@
-"""Scenario registration for the heated three-tank Cascade."""
+"""Scenario definition for the heated three-tank Cascade."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import numpy as np
 
 from aiogym.core.contracts import Scenario
 from aiogym.core.specs import Reward
+from aiogym.scenarios._metrics import REGULATION_SUCCESS_CRITERION
 
 from .episodes import (
     BENCHMARKS,
@@ -124,13 +125,12 @@ _PID = {
 }
 
 _MPC = {
-    "Ts": 2.0,
-    "P": 30,
+    "prediction_horizon": 20,
+    "solve_every": 2,
     "cv_scale": list(TRACKING_ERROR_SCALES),
-    "move_supp": [50.0, 50.0, 50.0, 50.0, 2.0, 2.0, 2.0],
-    "steady_input_weight": [1.0] * 7,
+    "move_supp": [25.0, 25.0, 25.0, 25.0, 2.0, 2.0, 2.0],
+    "steady_input_weight": [0.5] * 7,
     "q_y": [3.0, 3.0, 3.0, 2.0, 2.5, 4.0],
-    "reseed_on_feedforward_change": True,
 }
 
 
@@ -155,6 +155,7 @@ SCENARIO = Scenario(
     rewards={
         "regulation": Reward(
             id="regulation",
+            success_criterion=REGULATION_SUCCESS_CRITERION,
             function=_cascade_regulation_reward,
             episode_metric_function=regulation_episode_metrics,
             primary_metric="return",

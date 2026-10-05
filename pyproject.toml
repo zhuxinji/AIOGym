@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aiogym"
-version = "0.33.1"
+version = "0.34.0"
 description = "Scenario-oriented process-control models, rewards, datasets, and workflows."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -16,6 +16,7 @@ authors = [
 dependencies = [
   "gymnasium>=0.29",
   "numpy>=1.24",
+  "scipy>=1.11",
 ]
 
 [project.optional-dependencies]
@@ -37,7 +38,7 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/supcon-international/aiogym"
-Documentation = "https://github.com/supcon-international/aiogym/blob/main/docs/quickstart.md"
+Documentation = "https://github.com/supcon-international/aiogym/blob/main/docs/user-guide.md"
 Repository = "https://github.com/supcon-international/aiogym"
 Issues = "https://github.com/supcon-international/aiogym/issues"
 

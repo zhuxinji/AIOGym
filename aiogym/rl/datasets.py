@@ -11,22 +11,14 @@ from aiogym.core.io import jsonable
 def load_training_dataset(dataset: str | Path, *, env):
     """Load and validate one immutable episode snapshot for training."""
 
-    from aiogym.workflows._metadata import (
-        ENVIRONMENT_COMPATIBILITY_FIELDS,
-        environment_metadata,
-    )
-    from aiogym.workflows.dataset import DatasetReader
+    from aiogym.workflows._metadata import validate_environment_compatibility
+    from aiogym.workflows.dataset import DATASET_SCHEMA_VERSION, DatasetReader
 
     reader = DatasetReader(dataset, cache_episodes=True)
-    source_environment = reader.metadata["environment"]
-    target_environment = environment_metadata(env)
-    for field in ENVIRONMENT_COMPATIBILITY_FIELDS:
-        if field not in source_environment:
-            raise ValueError(f"training dataset environment is missing {field!r}")
-        if source_environment[field] != target_environment[field]:
-            raise ValueError(
-                f"training dataset {field} does not match training environment"
-            )
+    validate_environment_compatibility(
+        reader.metadata["environment"], env, artifact="training dataset",
+        allow_legacy=reader.metadata["schema_version"] != DATASET_SCHEMA_VERSION,
+    )
     if len(reader) == 0:
         raise ValueError("training dataset must contain at least one episode")
     float32_max = np.finfo(np.float32).max

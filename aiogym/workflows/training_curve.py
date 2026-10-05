@@ -10,11 +10,18 @@ from typing import Any
 
 import numpy as np
 
+from aiogym.scenarios._metrics import DEFAULT_SETTLING_FRACTION, regulation_control_success
+
 from ._svg import map_value, plot_range
-from .evaluate import DEFAULT_VALIDATION_SETTLING_FRACTION, _validation_summary
+from .evaluate import _validation_summary
 
 
 TRAINING_CURVE_SCHEMA_VERSION = "aiogym.training_curve.v2"
+TRAINING_EVALUATION_SCHEMA_VERSION = "aiogym.training_evaluation.v5"
+LEGACY_EVALUATION_SCHEMAS = {
+    None, "aiogym.training_evaluation.v2", "aiogym.training_evaluation.v3",
+    "aiogym.training_evaluation.v4",
+}
 
 
 def plot_training_curve(
@@ -23,21 +30,25 @@ def plot_training_curve(
     output: str | Path,
     evaluation_history: Mapping[str, Any] | str | Path | None = None,
     control_dt: float | None = None,
-    settling_fraction: float = DEFAULT_VALIDATION_SETTLING_FRACTION,
+    settling_fraction: float | None = None,
 ) -> Path:
     """Plot fixed-case validation; retain training samples in the input artifact.
 
-    ``control_dt`` is required with validation history. Control success means
-    safe full-horizon completion and remaining within the scenario's existing
-    settling tolerance throughout the final ``settling_fraction`` of the planned control steps (rounded up).
+    Current histories contain task-owned success metrics. ``control_dt`` and
+    ``settling_fraction`` are used only to interpret legacy regulation histories.
     """
 
     payload = _load_curve(curve)
     _validate_curve(payload)
-    window = _positive_number("settling_fraction", settling_fraction)
+    window = (DEFAULT_SETTLING_FRACTION if settling_fraction is None
+              else _positive_number("settling_fraction", settling_fraction))
     if window > 1:
         raise ValueError("settling_fraction must be at most 1")
     history = None if evaluation_history is None else _load_curve(evaluation_history)
+    if (history is not None
+        and history.get("schema_version") == TRAINING_EVALUATION_SCHEMA_VERSION
+        and settling_fraction is not None):
+        raise ValueError("settling_fraction applies only to legacy regulation histories")
     rows = [] if history is None else _validation_rows(
         history, payload, control_dt=control_dt, settling_fraction=window,
     )
@@ -73,8 +84,16 @@ def _positive_number(name, value):
     return result
 
 
-def _validation_rows(history, curve, *, control_dt, settling_fraction):
-    dt = _positive_number("control_dt", control_dt)
+def _validation_rows(history, curve, *, control_dt=None,
+                     settling_fraction=DEFAULT_SETTLING_FRACTION):
+    schema = history.get("schema_version")
+    legacy = schema in LEGACY_EVALUATION_SCHEMAS
+    if not legacy and schema != TRAINING_EVALUATION_SCHEMA_VERSION:
+        raise ValueError("unsupported validation history schema")
+    dt = _positive_number("control_dt", control_dt) if legacy or control_dt is not None else None
+    if not legacy and (not isinstance(history.get("success_criterion"), str)
+                       or not history["success_criterion"].strip()):
+        raise ValueError("validation history requires success_criterion")
     seeds = history.get("seeds")
     records = history.get("records")
     if not isinstance(seeds, list) or not seeds or any(
@@ -118,9 +137,10 @@ def _validation_rows(history, curve, *, control_dt, settling_fraction):
             cases = current_cases
         elif cases != current_cases:
             raise ValueError("validation cases must remain fixed across records")
-        summary = _validation_summary(
-            episodes, control_dt=dt, settling_fraction=settling_fraction,
-        )
+        summary = _validation_summary([
+            {**episode, "metrics": _legacy_control_metrics(episode, dt, settling_fraction)}
+            for episode in episodes
+        ] if legacy else episodes)
         rows.append({
             "step": step,
             **summary,
@@ -135,9 +155,38 @@ def _validation_rows(history, curve, *, control_dt, settling_fraction):
     return rows
 
 
+def _legacy_control_metrics(episode, control_dt, settling_fraction=DEFAULT_SETTLING_FRACTION):
+    """Import the old regulation-only metric contract without changing its goal."""
+    metrics = dict(episode["metrics"])
+    for name in ("constraint_violations", "settling_time"):
+        _finite_field(metrics, name)
+        if isinstance(metrics[name], bool) or not isinstance(metrics[name], (int, float)):
+            raise ValueError(f"legacy validation metric {name!r} must be a finite number")
+    if (not 0 <= metrics["settling_time"] <= episode["length"] * control_dt
+        or metrics["constraint_violations"] < 0):
+        raise ValueError("legacy validation settling time or violation count is invalid")
+    horizon = episode["episode_spec"]["horizon"]
+    metrics["safe_completion"] = float(
+        not episode["terminated"] and episode["truncated"]
+        and episode["length"] == horizon and metrics["constraint_violations"] == 0
+    )
+    metrics["control_success"] = regulation_control_success(
+        safe_completion=metrics["safe_completion"], settling_time=metrics["settling_time"],
+        horizon=horizon, control_dt=control_dt, settling_fraction=settling_fraction,
+    )
+    return metrics
+
+
 def _training_curve_svg(curve, history, rows, settling_fraction) -> str:
     total_steps = int(curve["actual_steps"])
-    original_selection = history is not None and history.get("settling_fraction") != settling_fraction
+    legacy = history is not None and history.get("schema_version") in LEGACY_EVALUATION_SCHEMAS
+    original_selection = legacy and history.get("settling_fraction") != settling_fraction
+    criterion = (
+        f"Legacy regulation: safe full episode + last {settling_fraction:.0%} of planned "
+        "control steps continuously within scenario settling tolerances."
+        if legacy else history["success_criterion"] if history is not None
+        else "Defined by the task's episode metrics."
+    )
     panels = (
         {
             "title": "Fixed-validation episode return (symlog axis; higher is better)",
@@ -185,8 +234,7 @@ def _training_curve_svg(curve, history, rows, settling_fraction) -> str:
             f'<text class="legend" x="64" y="62">{html.escape(description)}</text>'
         ),
         (
-            f'<text class="tick" x="64" y="84">Control success: safe full episode + '
-            f'last {settling_fraction:.0%} of planned control steps continuously within scenario settling tolerances.</text>'
+            f'<text class="tick" x="64" y="84">Control success: {html.escape(criterion)}</text>'
         ),
     ]
     for index, panel in enumerate(panels):

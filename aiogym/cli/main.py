@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 
-_WORKFLOWS = {"collect", "compare", "evaluate", "train"}
+_WORKFLOWS = {"collect", "evaluate", "train"}
 
 
 def build_parser():
@@ -22,106 +22,96 @@ def build_parser():
     status.add_argument("paths", nargs="*", help="run directories or status.json files; omit to discover recent runs under ./runs")
     status.add_argument("--limit", type=int, default=10, help="number of recent runs when paths are omitted (default: 10)")
     status.add_argument("--json", action="store_true", help="emit structured status and progress instead of a table")
-    listing = commands.add_parser("list", help="list registered resources")
+    listing = commands.add_parser("list", help="list built-in resources")
     resources = listing.add_subparsers(dest="resource", metavar="RESOURCE")
     resource_help = {
-        "scenarios": "list registered Scenario ids",
-        "rewards": "list Reward ids for one Scenario",
-        "benchmarks": "list fixed Benchmarks for one Scenario",
-        "parameters": "list model parameter defaults and units",
+        "scenarios": "list built-in Scenario ids",
+        "rewards": "list Reward goals and success criteria",
+        "benchmarks": "list fixed Benchmark protocols and ranking metrics",
+        "parameters": "list parameter defaults, units and allowed values",
+        "states": "list physical state definitions",
+        "actions": "list action ranges and physical interpretations",
+        "observations": "list observation sources and normalization rules",
+        "outputs": "list controlled output definitions",
+        "safety_rules": "list safety conditions and effects",
+        "info": "list the complete environment configuration",
         "controllers": "list built-in controller ids",
-        "algorithms": "list registered training algorithm ids",
+        "algorithms": "list built-in training algorithm ids",
     }
     for name, description in resource_help.items():
         item = resources.add_parser(name, help=description)
-        if name in {"rewards", "benchmarks", "parameters"}:
-            item.add_argument("--scenario", help="registered Scenario id")
+        if name not in {"scenarios", "controllers", "algorithms"}:
+            item.add_argument("--scenario", required=True, help="built-in Scenario id")
+        if name == "info":
+            item.add_argument("--benchmark", help="fixed Benchmark id; describes its template without reset")
+        item.add_argument("--json", action="store_true", help="emit structured JSON instead of a table")
     help_text = {
         "collect": "collect an episode-oriented Dataset",
         "train": "train algorithms across independent seeds",
-        "evaluate": "evaluate one policy on explicit seeds",
-        "compare": "compare controllers and checkpoints on identical seeds",
+        "evaluate": "evaluate one or more policies on identical seeds",
     }
     for name, description in help_text.items():
         commands.add_parser(name, help=description, add_help=False)
     return parser
 
 
+def _display_value(value):
+    if value is None:
+        return "Not provided"
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, allow_nan=False)
+
+
+def _print_information(value):
+    if value is None:
+        print("Not provided")
+        return
+    if isinstance(value, dict):
+        if value and all(isinstance(row, dict) for row in value.values()):
+            rows = [{"name": name, **row} for name, row in value.items()]
+        else:
+            rows = [{"field": name, "value": item} for name, item in value.items()]
+    else:
+        rows = list(value)
+    if not rows:
+        print("None")
+        return
+    if isinstance(rows[0], str):
+        print("\n".join(rows))
+        return
+    columns = list(dict.fromkeys(key for row in rows for key in row))
+    if "default" in columns and all(row.get("value") == row.get("default") for row in rows):
+        columns = [key for key in columns if key != "value"]
+    rendered = [[_display_value(row.get(key)) for key in columns] for row in rows]
+    headings = [key.upper() for key in columns]
+    widths = [max(len(headings[i]), *(len(row[i]) for row in rendered)) for i in range(len(columns))]
+    for row in [headings, *rendered]:
+        print("  ".join(item.ljust(width) for item, width in zip(row, widths)).rstrip())
+
+
 def _list(args):
     import aiogym
 
-    if args.resource == "scenarios":
-        values = aiogym.list_scenarios()
-    elif args.resource == "rewards":
-        if not args.scenario:
-            raise ValueError("--scenario is required for rewards")
-        values = aiogym.list_rewards(args.scenario)
-    elif args.resource == "benchmarks":
-        if not args.scenario:
-            raise ValueError("--scenario is required for benchmarks")
-        benchmark_ids = aiogym.list_benchmarks(args.scenario)
-        from aiogym.core.registry import get_scenario
-
-        scenario = get_scenario(args.scenario)
-        model = scenario.make_model(None)
-        rows = []
-        for benchmark_id in benchmark_ids:
-            benchmark = scenario.benchmarks[benchmark_id]
-            rows.append(
-                (
-                    benchmark_id,
-                    str(benchmark.make_episode(model, 0).horizon),
-                    benchmark.reward_id,
-                    "scenario-defaults",
-                    ",".join(name for name, _direction in benchmark.ranking_metrics),
-                )
-            )
-        headings = (
-            "ID",
-            "HORIZON",
-            "REWARD",
-            "PARAMETERS",
-            "RANKING_METRICS",
-        )
-        widths = [
-            max(len(headings[index]), *(len(row[index]) for row in rows))
-            for index in range(len(headings))
-        ]
-        print(
-            "  ".join(
-                value.ljust(widths[index]) for index, value in enumerate(headings)
-            )
-        )
-        for row in rows:
-            print(
-                "  ".join(value.ljust(widths[index]) for index, value in enumerate(row))
-            )
-        return 0
-    elif args.resource == "parameters":
-        if not args.scenario:
-            raise ValueError("--scenario is required for parameters")
-        rows = aiogym.list_parameters(args.scenario)
-        rendered = [
-            (row["name"], json.dumps(row["default"]), row["unit"]) for row in rows
-        ]
-        name_width = max((len(name) for name, _, _ in rendered), default=len("NAME"))
-        default_width = max(
-            (len(default) for _, default, _ in rendered), default=len("DEFAULT")
-        )
-        print(f"{'NAME':<{name_width}}  {'DEFAULT':<{default_width}}  UNIT")
-        for name, default, unit in rendered:
-            print(f"{name:<{name_width}}  {default:<{default_width}}  {unit}")
-        return 0
-    elif args.resource == "controllers":
-        values = ("hold", "mpc", "pid", "random")
-    elif args.resource == "algorithms":
-        values = aiogym.list_algorithms()
+    if args.resource is None:
+        raise ValueError("choose a resource; run 'aiogym list --help'")
+    if args.resource == "controllers":
+        value = ("hold", "mpc", "pid", "random")
+    elif args.resource in {"scenarios", "algorithms"}:
+        value = getattr(aiogym, f"list_{args.resource}")()
+    elif args.resource == "info":
+        value = aiogym.list_info(args.scenario, benchmark=args.benchmark)
     else:
-        raise ValueError(
-            "choose one of: scenarios, rewards, benchmarks, "
-            "parameters, controllers, algorithms"
-        )
-    print("\n".join(values))
+        value = getattr(aiogym, f"list_{args.resource}")(args.scenario)
+    if args.json:
+        print(json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False))
+    elif args.resource == "info":
+        for name, section in value.items():
+            print(name.replace("_", " ").title())
+            _print_information(section)
+            print()
+    else:
+        _print_information(value)
     return 0
 
 

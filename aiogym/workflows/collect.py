@@ -5,11 +5,10 @@ from pathlib import Path
 
 import numpy as np
 
-from aiogym.controllers import make_controller
-from aiogym.core.contracts import policy_metadata
+from aiogym.controllers.base import resolve_policy
 from aiogym.core.rollout import rollout
 
-from ._metadata import environment_metadata
+from ._metadata import environment_metadata, policy_metadata_for_environment
 from .dataset import DatasetReader, DatasetWriter
 
 
@@ -22,14 +21,16 @@ def collect(
     seed: int = 0,
     max_steps: int | None = None,
 ):
-    """Collect complete episodes without taking ownership of ``env``."""
+    """Collect episodes using a controller name, Policy, or ``act(observation)``.
+
+    Use ``FunctionPolicy`` when inference needs an episode reset or context.
+    The caller retains ownership of ``env``.
+    """
 
     count = _positive_int("episodes", episodes)
     base_seed = _nonnegative_int("seed", seed)
-    resolved_policy = (
-        make_controller(policy, env=env) if isinstance(policy, str) else policy
-    )
-    resolved_policy_metadata = policy_metadata(resolved_policy)
+    resolved_policy = resolve_policy(policy, env=env)
+    resolved_policy_metadata = policy_metadata_for_environment(resolved_policy, env)
     writer = DatasetWriter(
         output,
         environment=environment_metadata(env),

@@ -11,6 +11,8 @@ from typing import Any
 
 import numpy as np
 
+from aiogym.core.information import state_limit_rules
+
 from aiogym.core.model import PhysicsModelBase
 
 
@@ -83,6 +85,45 @@ class ExtractionModel(PhysicsModelBase):
         }
     )
 
+    parameter_metadata = {
+        'liquid_stage_volume': ('Liquid holdup volume per extraction stage', 'Finite number > 0'),
+        'gas_stage_volume': ('Gas holdup volume per extraction stage', 'Finite number > 0'),
+        'equilibrium_constant': ('Liquid-gas equilibrium distribution coefficient', 'Finite number > 0'),
+        'mass_transfer_coefficient': ('Default volumetric liquid-gas mass-transfer coefficient', 'Finite number > 0'),
+        'equilibrium_exponent': ('Exponent in the liquid-gas equilibrium relation', 'Finite number > 0'),
+        'maximum_liquid_pump_power': ('Liquid-pump power at full command for energy accounting', 'Finite number > 0'),
+        'maximum_gas_pump_power': ('Gas-pump power at full command for energy accounting', 'Finite number > 0'),
+        'liquid_feed_concentration': ('Default solute concentration in the liquid feed', '[0, 1]'),
+        'gas_feed_concentration': ('Default solute concentration in the gas feed', '[0, 1]'),
+        'nominal_gas_action': ('Gas-feed command used to construct the nominal operating point', '[0, 1]'),
+        'minimum_liquid_flow': ('Minimum liquid feed flow', '0 <= minimum_liquid_flow < maximum_liquid_flow'),
+        'maximum_liquid_flow': ('Maximum liquid feed flow', '0 <= minimum_liquid_flow < maximum_liquid_flow'),
+        'minimum_gas_flow': ('Minimum gas feed flow', '0 <= minimum_gas_flow < maximum_gas_flow'),
+        'maximum_gas_flow': ('Maximum gas feed flow', '0 <= minimum_gas_flow < maximum_gas_flow'),
+    }
+    variable_descriptions = {
+        'stage_1_liquid_concentration': 'Solute concentration in the liquid phase of stage 1',
+        'stage_1_gas_concentration': 'Solute concentration in the gas phase of stage 1',
+        'stage_2_liquid_concentration': 'Solute concentration in the liquid phase of stage 2',
+        'stage_2_gas_concentration': 'Solute concentration in the gas phase of stage 2',
+        'stage_3_liquid_concentration': 'Solute concentration in the liquid phase of stage 3',
+        'stage_3_gas_concentration': 'Solute concentration in the gas phase of stage 3',
+        'stage_4_liquid_concentration': 'Solute concentration in the liquid phase of stage 4',
+        'stage_4_gas_concentration': 'Solute concentration in the gas phase of stage 4',
+        'stage_5_liquid_concentration': 'Solute concentration in the liquid phase of stage 5',
+        'stage_5_gas_concentration': 'Solute concentration in the gas phase of stage 5',
+        'liquid_feed_flow': 'Normalized liquid-feed flow command',
+        'gas_feed_flow': 'Normalized gas-feed flow command',
+    }
+
+    def action_metadata(self):
+        return {f"{phase}_feed_flow": {
+            "interpretation": f"Flow = {self.p[f'minimum_{phase}_flow']:g} + action * {self.p[f'maximum_{phase}_flow'] - self.p[f'minimum_{phase}_flow']:g} volume/h; zero command retains the minimum flow",
+        } for phase in ("liquid", "gas")}
+
+    def safety_metadata(self):
+        return state_limit_rules(self.state_bounds, self.state_units)
+
     def __init__(self, parameters: Mapping[str, Any] | None = None):
         defaults = {
             "liquid_stage_volume": 5.0,
@@ -100,6 +141,7 @@ class ExtractionModel(PhysicsModelBase):
             "maximum_liquid_pump_power": 1000.0,
             "maximum_gas_pump_power": 1000.0,
         }
+        self._parameter_defaults = deepcopy(defaults)
         self.p = _resolved_parameters(defaults, parameters)
         self._resolved_parameters = MappingProxyType(dict(self.p))
         self._steady_cache = {}
@@ -192,9 +234,6 @@ class ExtractionModel(PhysicsModelBase):
 
     def outputs(self, state):
         return [float(state[8])]
-
-    def display_outputs(self, state):
-        return {"levels": [], "temps": []}
 
     def liquid_concentrations(self, state):
         return [float(state[2 * stage]) for stage in range(5)]

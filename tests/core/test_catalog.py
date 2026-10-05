@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
 from aiogym.core.contracts import Scenario
 from aiogym.core.io import write_json
-from aiogym.core.registry import (
+from aiogym.core.catalog import (
     get_benchmark,
     get_reward,
     get_scenario,
@@ -14,19 +15,17 @@ from aiogym.core.registry import (
     list_parameters,
     list_rewards,
     list_scenarios,
-    register_scenario,
-    unregister_scenario,
 )
 from aiogym.core.specs import Benchmark, EpisodeSpec, Reward
 
 
-class RegistryModel:
-    scenario = "registry-toy"
+class CatalogModel:
+    scenario = "catalog-toy"
     parameter_units = {}
 
     def __init__(self, parameters=None):
         if parameters:
-            raise ValueError("registry toy has no parameters")
+            raise ValueError("catalog toy has no parameters")
         self.resolved_parameters = {}
 
 
@@ -71,8 +70,8 @@ def _scenario():
         metric_direction="maximize",
     )
     return Scenario(
-        id="registry-toy",
-        make_model=RegistryModel,
+        id="catalog-toy",
+        make_model=CatalogModel,
         control_dt=1.0,
         make_default_episode=_episode,
         sample_training_episode=lambda model, rng, reward_id, boundary: (
@@ -86,28 +85,23 @@ def _scenario():
     )
 
 
-def test_registry_is_the_single_scenario_reward_and_benchmark_index():
-    unregister_scenario("registry-toy")
+def test_explicit_scenario_resolves_without_changing_builtin_catalog():
     scenario = _scenario()
-    register_scenario(scenario)
-    try:
-        assert get_scenario("registry-toy") is scenario
-        assert get_reward("registry-toy", "regulation") is scenario.rewards["regulation"]
-        assert get_benchmark("registry-toy", "tracking") is scenario.benchmarks[
-            "tracking"
-        ]
-        assert "registry-toy" in list_scenarios()
-        assert list_rewards(scenario="registry-toy") == ("regulation",)
-        assert list_benchmarks(scenario="registry-toy") == (
-            "boundary-safety",
-            "disturbance-rejection",
-            "tracking",
-        )
-        assert list_parameters(scenario="registry-toy") == ()
-        with pytest.raises(ValueError, match="already registered"):
-            register_scenario(scenario)
-    finally:
-        unregister_scenario("registry-toy")
+    assert get_scenario(scenario) is scenario
+    assert get_reward(scenario, "regulation") is scenario.rewards["regulation"]
+    assert get_benchmark(scenario, "tracking") is scenario.benchmarks[
+        "tracking"
+    ]
+    assert scenario.id not in list_scenarios()
+    assert list_rewards(scenario=scenario) == ("regulation",)
+    assert list_benchmarks(scenario=scenario) == (
+        "boundary-safety",
+        "disturbance-rejection",
+        "tracking",
+    )
+    assert list_parameters(scenario=scenario) == ()
+    with pytest.raises(KeyError, match="unknown scenario"):
+        get_scenario(scenario.id)
 
 
 def test_atomic_json_is_canonical(tmp_path):
@@ -117,3 +111,22 @@ def test_atomic_json_is_canonical(tmp_path):
         write_json(target, {"a": 1, "b": 2})
     with pytest.raises(ValueError, match="NaN or Infinity"):
         write_json(tmp_path / "invalid.json", {"value": float("nan")})
+
+
+def test_definition_lookup_does_not_construct_models_or_episodes():
+    def unexpected_factory(*args):
+        raise AssertionError("lookup must not perform numerical initialization")
+
+    original = _scenario()
+    scenario = replace(
+        original,
+        make_model=unexpected_factory,
+        make_default_episode=unexpected_factory,
+        benchmarks={
+            name: replace(benchmark, episode_factory=unexpected_factory)
+            for name, benchmark in original.benchmarks.items()
+        },
+    )
+    assert get_scenario(scenario) is scenario
+    assert list_rewards(scenario=scenario) == ("regulation",)
+    assert len(list_benchmarks(scenario=scenario)) == 3

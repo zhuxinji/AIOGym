@@ -1,177 +1,9 @@
 from __future__ import annotations
 
-import importlib
-import json
-import platform
-import zipfile
-from dataclasses import dataclass
-from functools import partial
-
 import numpy as np
 import pytest
 
 import aiogym
-from aiogym.rl import algorithms as algorithm_registry
-
-
-@dataclass
-class ConstantModel:
-    action: np.ndarray
-    env: object | None
-    seed: int
-
-
-class ConstantPolicy:
-    def __init__(self, model, checkpoint):
-        self.env = model.env
-        self._action = model.action
-        self._checkpoint = str(checkpoint)
-
-    def reset(self, seed=None):
-        del seed
-
-    def act(self, observation, context):
-        del observation, context
-        return self._action.copy()
-
-    def metadata(self):
-        return {
-            "id": "external_constant",
-            "kind": "learned_policy",
-            "algorithm": "external_constant",
-            "checkpoint": self._checkpoint,
-        }
-
-
-class ConstantAlgorithmBackend:
-    id = "external_constant"
-    behavior_cloning = None
-    requires_dataset = False
-
-    def effective_kwargs(self, *, steps, values):
-        del steps
-        if values:
-            raise ValueError("external_constant accepts no algorithm kwargs")
-        return {}
-
-    def create(self, *, env, seed, algorithm_kwargs):
-        if algorithm_kwargs:
-            raise ValueError("external_constant accepts no algorithm kwargs")
-        action = np.asarray(env.unwrapped.model.default_action(), dtype=np.float32)
-        return ConstantModel(action=action, env=env, seed=seed)
-
-    def learn(self, model, *, steps, dataset, on_step):
-        del dataset
-        observation, _ = model.env.reset(seed=model.seed)
-        del observation
-        episode = 0
-        for step in range(1, steps + 1):
-            _, reward, terminated, truncated, _ = model.env.step(model.action)
-            on_step(
-                aiogym.TrainingStep(
-                    step=step,
-                    reward=float(reward),
-                    terminated=bool(terminated),
-                    truncated=bool(truncated),
-                )
-            )
-            if terminated or truncated:
-                episode += 1
-                model.env.reset(seed=model.seed + episode)
-        return steps
-
-    def save(self, model, payload):
-        with zipfile.ZipFile(payload, "w") as archive:
-            archive.writestr(
-                "model.json",
-                json.dumps({"action": model.action.tolist(), "seed": model.seed}),
-            )
-
-    def load(self, payload, *, env=None):
-        with zipfile.ZipFile(payload) as archive:
-            payload = json.loads(archive.read("model.json"))
-        return ConstantModel(
-            action=np.asarray(payload["action"], dtype=np.float32),
-            env=env,
-            seed=int(payload["seed"]),
-        )
-
-    def policy(self, model, *, checkpoint):
-        return ConstantPolicy(model, checkpoint)
-
-    def runtime_metadata(self):
-        return {
-            "python": platform.python_version(),
-            "aiogym": aiogym.__version__,
-            "external_backend": "test_constant.v1",
-        }
-
-
-def test_external_algorithm_uses_the_complete_workflow(tmp_path, capsys, monkeypatch):
-    monkeypatch.setattr(
-        importlib.import_module("aiogym.workflows.train"),
-        "evaluate",
-        partial(aiogym.evaluate, max_steps=2),
-    )
-    backend = ConstantAlgorithmBackend()
-    aiogym.register_algorithm(backend)
-    env = aiogym.make_env("quadruple")
-    evaluation_env = aiogym.make_env("quadruple", randomize=True)
-    try:
-        assert isinstance(backend, aiogym.AlgorithmBackend)
-        assert "external_constant" in aiogym.list_algorithms()
-
-        result = aiogym.train(
-            env=env,
-            algorithm="external_constant",
-            steps=3,
-            record_every=2,
-            evaluation_env=evaluation_env,
-            evaluate_every=2,
-            output=tmp_path / "training",
-        )
-        policy = aiogym.load_policy(
-            tmp_path / "training" / "model.zip",
-            env=env,
-        )
-        evaluation = aiogym.evaluate(
-            env=env,
-            policy=policy,
-            seeds=[1],
-            max_steps=2,
-        )
-        comparison = aiogym.compare_policies(
-            env=env,
-            policies={"external": policy, "hold": "hold"},
-            seeds=[1],
-            max_steps=2,
-            output=tmp_path / "comparison",
-        )
-
-        from aiogym.cli.main import main
-
-        assert main(["list", "algorithms"]) == 0
-        listed = capsys.readouterr().out.splitlines()
-        with zipfile.ZipFile(tmp_path / "training" / "model.zip") as checkpoint:
-            manifest = json.loads(checkpoint.read("manifest.json"))
-            members = set(checkpoint.namelist())
-    finally:
-        evaluation_env.close()
-        env.close()
-        del algorithm_registry._BACKENDS[backend.id]
-
-    assert result["algorithm"] == "external_constant"
-    assert result["actual_steps"] == 3
-    assert result["runtime"]["external_backend"] == "test_constant.v1"
-    assert result["best_checkpoint"].endswith("best/model.zip")
-    assert result["evaluation"]["seeds"] == list(range(1_000, 1_020))
-    assert evaluation["policy"]["algorithm"] == "external_constant"
-    assert set(comparison["evaluations"]) == {"external", "hold"}
-    assert "external_constant" in listed
-    assert members == {"manifest.json", "payload.zip"}
-    assert manifest["schema_version"] == "aiogym.checkpoint.v2"
-    assert manifest["algorithm"] == "external_constant"
-    assert manifest["environment"]["scenario"] == "quadruple"
 
 
 def test_load_policy_rejects_non_aiogym_checkpoint(tmp_path):
@@ -185,61 +17,95 @@ def test_load_policy_rejects_non_aiogym_checkpoint(tmp_path):
         env.close()
 
 
-def test_external_algorithm_checkpoint_can_continue_training(tmp_path):
-    backend = ConstantAlgorithmBackend()
-    aiogym.register_algorithm(backend)
-    env = aiogym.make_env("quadruple")
-    try:
-        first = aiogym.train(
-            env=env,
-            evaluate_every=None,
-            algorithm=backend.id,
-            steps=2,
-            seed=8,
-            output=tmp_path / "first",
+def test_function_policy_resets_and_records_checked_declaration(tmp_path):
+    with aiogym.make_env("heater", randomize=True) as env:
+        resets, contexts = [], []
+        state = {"step": 0}
+        metadata = {
+            "id": "external_stateful",
+            "environment": aiogym.environment_metadata(env),
+            "information_access": ["observation", "context"],
+        }
+
+        def reset(*, seed):
+            resets.append(seed)
+            state["step"] = 0
+
+        def act(observation, context):
+            contexts.append(context)
+            state["step"] += 1
+            return np.full(env.action_space.shape, 0.4 + 0.01 * state["step"])
+
+        policy = aiogym.FunctionPolicy(act, reset=reset, metadata=metadata)
+        metadata["environment"]["scenario"] = "modified_after_construction"
+        assert isinstance(policy, aiogym.Policy)
+        report = aiogym.evaluate(
+            env=env, policies={"external": policy, "hold": "hold"},
+            seeds=[7, 8], max_steps=2, output=tmp_path / "comparison",
         )
-        continued = aiogym.train(
-            env=env,
-            evaluate_every=None,
-            algorithm=backend.id,
-            steps=3,
-            resume_from=first["checkpoint"],
-            output=tmp_path / "continued",
+        result = report["evaluations"]["external"]
+        assert resets == [7, 8]
+        assert [row["step_index"] for row in contexts] == [0, 1, 0, 1]
+        assert set(contexts[0]) == {"step_index", "physical_time", "reference"}
+        assert result["policy"]["declared_environment_check"] == "matched"
+        assert result["policy"]["information_access"] == ["observation", "context"]
+        assert result["episodes"][0]["trajectory"]["commanded_action"][0] == pytest.approx([0.41, 0.41])
+        assert "step-limited: max_steps=2" in (tmp_path / "comparison/comparison.svg").read_text()
+        collected = aiogym.collect(
+            env=env, policy=policy, episodes=1, max_steps=1, output=tmp_path / "dataset",
         )
-        with zipfile.ZipFile(continued["checkpoint"]) as checkpoint:
-            manifest = json.loads(checkpoint.read("manifest.json"))
-    finally:
-        env.close()
-        del algorithm_registry._BACKENDS[backend.id]
-
-    assert continued["initial_steps"] == 2
-    assert continued["added_steps"] == 3
-    assert continued["actual_steps"] == 5
-    assert continued["seed"] == 8
-    assert manifest["policy"]["training"]["completed_steps"] == 5
+        assert collected["metadata"]["policy"]["declared_environment_check"] == "matched"
 
 
-def test_installed_entry_point_discovers_external_backend(monkeypatch):
-    backend = ConstantAlgorithmBackend()
+def test_external_declaration_mismatch_fails_before_rollout_or_dataset(tmp_path, monkeypatch):
+    with aiogym.make_env("heater") as env:
+        expected = aiogym.environment_metadata(env)
+        expected["policy_interface"]["action"].reverse()
+        policy = aiogym.FunctionPolicy(
+            lambda observation, context: [0.4, 0.7], metadata={"environment": expected},
+        )
 
-    class EntryPoint:
-        name = backend.id
+        def unexpected_reset(**kwargs):
+            raise AssertionError("incompatible policy reached reset")
 
-        @staticmethod
-        def load():
-            return backend
+        monkeypatch.setattr(env, "reset", unexpected_reset)
+        with pytest.raises(ValueError, match="policy policy_interface is incompatible"):
+            aiogym.evaluate(env=env, policies={"policy": policy}, seeds=[0], max_steps=1)
+        with pytest.raises(ValueError, match="policy policy_interface is incompatible"):
+            aiogym.collect(env=env, policy=policy, output=tmp_path / "dataset")
+        assert not (tmp_path / "dataset").exists()
 
-    monkeypatch.setattr(
-        algorithm_registry,
-        "entry_points",
-        lambda *, group: (EntryPoint(),) if group == "aiogym.algorithms" else (),
-    )
-    monkeypatch.setattr(
-        algorithm_registry,
-        "_INSTALLED_BACKENDS_REGISTERED",
-        False,
-    )
-    try:
-        assert backend.id in algorithm_registry.list_algorithms()
-    finally:
-        del algorithm_registry._BACKENDS[backend.id]
+
+def test_function_policy_without_declaration_does_not_claim_compatibility_or_clip():
+    with aiogym.make_env("heater") as env:
+        policy = aiogym.FunctionPolicy(lambda observation, context: [0.4, 0.7])
+        result = aiogym.evaluate(env=env, policies={"policy": policy}, seeds=[0], max_steps=1)["evaluations"]["policy"]
+        assert result["policy"]["declared_environment_check"] == "not_provided"
+        invalid = aiogym.FunctionPolicy(lambda observation, context: [2.0, 0.7])
+        with pytest.raises(ValueError, match="policy output must belong directly"):
+            aiogym.evaluate(env=env, policies={"policy": invalid}, seeds=[0], max_steps=1)
+
+
+def test_observation_function_works_in_all_public_policy_workflows(tmp_path):
+    observations = []
+
+    def act(observation):
+        observations.append(observation.copy())
+        return [0.4, 0.75]
+
+    with aiogym.make_env("heater", benchmark="tracking") as env:
+        evaluation = aiogym.evaluate(env=env, policies={"policy": act}, seeds=[0], max_steps=2)["evaluations"]["policy"]
+        comparison = aiogym.evaluate(
+            env=env, policies={"mine": act, "hold": "hold"}, seeds=[0],
+            max_steps=2, output=tmp_path / "comparison",
+        )
+        collected = aiogym.collect(
+            env=env, policy=act, episodes=1, seed=0,
+            max_steps=2, output=tmp_path / "dataset",
+        )
+    assert len(observations) == 6
+    assert all(row.shape == (5,) for row in observations)
+    assert evaluation["policy"]["declared_environment_check"] == "not_provided"
+    assert comparison["evaluations"]["mine"]["aggregate"] == evaluation["aggregate"]
+    episode = aiogym.DatasetReader(collected["path"]).load_episode(0)
+    np.testing.assert_allclose(episode.array("action"), [[0.4, 0.75]] * 2)

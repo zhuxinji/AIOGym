@@ -164,6 +164,7 @@ class CascadeModel(ThreeTankModel):
     parameter_units = MappingProxyType(
         {
             **dict(ThreeTankModel.parameter_units),
+            "heater": "binary",
             "heater_power_max": "W",
             "heat_loss_coefficient": "W/K",
             "ambient_temperature": "degC",
@@ -177,14 +178,86 @@ class CascadeModel(ThreeTankModel):
         }
     )
 
-    def __init__(
-        self,
-        parameters: Mapping[str, Any] | None = None,
-        *,
-        heater: Sequence[int] | None = None,
-    ):
+    parameter_metadata = {
+        **ThreeTankModel.parameter_metadata,
+        'heater': ('Enable flags for heaters H1, H2 and H3', 'Exactly three binary values: 0 or 1'),
+        'heater_power_max': ('Rated electrical powers of H1, H2 and H3', 'Three finite positive values'),
+        'heat_loss_coefficient': ('Tank-to-ambient thermal conductances', 'Three finite positive values'),
+        'ambient_temperature': ('Default ambient air temperature', 'Finite number > 0'),
+        'reservoir_capacity': ('Maximum reservoir liquid volume', 'reservoir_capacity > reservoir_initial_volume > 0'),
+        'reservoir_initial_volume': ('Reservoir volume used to construct the default operating point', '0 < reservoir_initial_volume < reservoir_capacity'),
+        'reservoir_heat_loss_coefficient': ('Reservoir-to-ambient thermal conductance', 'Finite number > 0'),
+        'heater_min_level': ('Minimum liquid level that permits heater operation', '0 < heater_min_level < nominal_level; thermal_level_floor <= heater_min_level'),
+        'temperature_trip': ('Tank temperature threshold that disables the local heater', '30 < temperature_trip < temperature_hard_limit'),
+        'temperature_hard_limit': ('Tank and reservoir temperature threshold for episode termination', 'temperature_hard_limit > temperature_trip > 30'),
+        'thermal_level_floor': ('Liquid-level floor used in the thermal-capacity calculation', '0 < thermal_level_floor <= heater_min_level'),
+    }
+    variable_descriptions = {
+        **ThreeTankModel.variable_descriptions,
+        'T1': 'Liquid temperature in tank 1',
+        'T2': 'Liquid temperature in tank 2',
+        'T3': 'Liquid temperature in tank 3',
+        'tank_1_temperature': 'Liquid temperature in tank 1',
+        'tank_2_temperature': 'Liquid temperature in tank 2',
+        'tank_3_temperature': 'Liquid temperature in tank 3',
+        'heater_H1': 'Heater H1 electrical power fraction',
+        'heater_H2': 'Heater H2 electrical power fraction',
+        'heater_H3': 'Heater H3 electrical power fraction',
+        'reservoir_volume': 'Reservoir liquid volume (internal state)',
+        'reservoir_temperature': 'Reservoir liquid temperature (internal state)',
+    }
+
+    def action_metadata(self):
+        return {**super().action_metadata(), **{
+            f"heater_H{i + 1}": {
+                "description": f"Heater H{i + 1} electrical power fraction",
+                "enabled": bool(self.heater[i]),
+                "interpretation": f"0 = off; 1 = {power:g} W electrical power when enabled and permitted by the interlock",
+            } for i, power in enumerate(self.p["heater_power_max"])
+        }}
+
+    def observation_metadata(self):
+        rows = super().observation_metadata()
+        for index in range(3):
+            name = f"tank_{index + 1}_temperature"
+            for suffix in ("", "_reference"):
+                rows[f"normalized_{name}{suffix}"] = {
+                    "description": f"Normalized {'reference' if suffix else 'measurement'}: liquid temperature in tank {index + 1}",
+                    "source": name,
+                    "physical_unit": "degC",
+                    "normalization": f"clip(value / {self.p['temperature_hard_limit']:g}, 0, 1)",
+                }
+        return rows
+
+    def safety_metadata(self):
+        rules = super().safety_metadata()
+        for index in range(3):
+            name = f"T{index + 1}"
+            rules[name] = {
+                "kind": "termination",
+                "condition": f"{name} < 0 or {name} >= {self.p['temperature_hard_limit']:g} degC",
+                "effect": "Terminate episode",
+            }
+            rules[f"heater_H{index + 1}_interlock"] = {
+                "kind": "interlock",
+                "condition": f"heater[{index}] = 0 or h{index + 1} < {self.p['heater_min_level']:g} m or {name} >= {self.p['temperature_trip']:g} degC",
+                "effect": f"Disable heater H{index + 1}",
+            }
+        rules["reservoir_volume"] = {
+            "kind": "termination",
+            "condition": f"reservoir_volume <= 0 or reservoir_volume > {self.p['reservoir_capacity']:g} m3",
+            "effect": "Terminate episode",
+        }
+        rules["reservoir_temperature"] = {
+            "kind": "termination",
+            "condition": f"reservoir_temperature < 0 or reservoir_temperature >= {self.p['temperature_hard_limit']:g} degC",
+            "effect": "Terminate episode",
+        }
+        rules["pump_interlock"]["condition"] += " or reservoir_volume <= 0 m3"
+        return rules
+
+    def __init__(self, parameters: Mapping[str, Any] | None = None):
         supplied = _parameter_mapping(parameters)
-        self.heater = _resolved_heater(DEFAULT_HEATER if heater is None else heater)
         thermal_defaults = {
             "heater_power_max": [HEATER_POWER_W] * 3,
             "heat_loss_coefficient": [40.0, 40.0, 40.0],
@@ -197,7 +270,7 @@ class CascadeModel(ThreeTankModel):
             "temperature_hard_limit": 90.0,
             "thermal_level_floor": 0.005,
         }
-        known = _HYDRAULIC_PARAMETER_NAMES | set(thermal_defaults)
+        known = _HYDRAULIC_PARAMETER_NAMES | set(thermal_defaults) | {"heater"}
         unknown = sorted(set(supplied) - known)
         if unknown:
             raise ValueError(
@@ -209,6 +282,7 @@ class CascadeModel(ThreeTankModel):
             if name in _HYDRAULIC_PARAMETER_NAMES
         }
         super().__init__(hydraulic)
+        self._parameter_defaults.update(deepcopy(thermal_defaults), heater=list(DEFAULT_HEATER))
         thermal = _resolved_thermal_parameters(
             thermal_defaults,
             {
@@ -218,6 +292,7 @@ class CascadeModel(ThreeTankModel):
             },
         )
         self.p.update(thermal)
+        self.p["heater"] = _resolved_heater(supplied.get("heater", DEFAULT_HEATER))
         if self.p["heater_min_level"] >= self.p["nominal_level"]:
             raise ValueError(
                 "cascade heater_min_level must be below the nominal level"
@@ -243,6 +318,10 @@ class CascadeModel(ThreeTankModel):
         self._environment_bounds = {
             row["name"]: tuple(row["bounds"]) for row in self.input_disturbances
         }
+
+    @property
+    def heater(self):
+        return self.p["heater"]
 
     def parameter(self, name):
         try:
@@ -738,7 +817,7 @@ class CascadeModel(ThreeTankModel):
             ),
         ]
 
-    def observation(self, state, reference, previous_action, disturbances):
+    def observation(self, state, reference, previous_action, disturbances, *, remaining_time=0.0):
         context = self._resolved_env(disturbances)
         state_values = np.asarray(state, dtype=float)
         process_state = state_values[:6]

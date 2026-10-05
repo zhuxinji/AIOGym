@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
 import aiogym
 from aiogym.scenarios.crystallization.model import CrystallizationModel
+from aiogym.scenarios.crystallization.metrics import batch_quality_metrics
+from aiogym.core.rollout import rollout
 
 
 def test_crystallization_default_batch_matches_the_model_endpoint():
@@ -17,7 +21,7 @@ def test_crystallization_default_batch_matches_the_model_endpoint():
             horizon_steps=env.unwrapped.episode_steps,
         )
 
-        assert env.observation_space.shape == (7,)
+        assert env.observation_space.shape == (8,)
         assert env.action_space.shape == (1,)
         assert env.observation_space.contains(observation)
         assert model.outputs(model.initial_state()) == pytest.approx(
@@ -31,23 +35,41 @@ def test_crystallization_default_batch_matches_the_model_endpoint():
         env.close()
 
 
-def test_crystallization_environment_integration_matches_batch_endpoint():
-    env = aiogym.make_env("crystallization")
+def test_crystallization_endpoint_reward_success_and_terminal_observation():
+    env = aiogym.make_env("crystallization", benchmark="tracking")
     try:
-        observation, _ = env.reset(seed=0)
-        del observation
+        env.reset(seed=0)
         model = env.unwrapped.model
         action = np.asarray(env.unwrapped.episode.initial_action, dtype=np.float32)
-        endpoint = model.batch_endpoint(
-            action,
-            horizon_steps=env.unwrapped.episode_steps,
-        )
-        for step in range(env.unwrapped.episode_steps):
-            _, _, terminated, truncated, info = env.step(action)
-            assert not terminated
-            assert truncated == (step == env.unwrapped.episode_steps - 1)
+        endpoint = model.batch_endpoint(action, horizon_steps=env.unwrapped.episode_steps)
+        policy = aiogym.make_controller("hold", env=env, config={"action": action})
+        episode = rollout(env, policy, seed=0)
+        metrics = batch_quality_metrics(env, episode)
         assert env.unwrapped.state == pytest.approx(endpoint["state"], abs=1e-10)
-        assert info["y"] == pytest.approx(endpoint["output"], abs=1e-10)
+        assert all(row.reward == 0 for row in episode.transitions[:-1])
+        assert not any(row.terminated or row.truncated for row in episode.transitions[:-1])
+        last = episode.transitions[-1]
+        assert last.terminated and not last.truncated
+        assert last.reward == pytest.approx(-metrics["terminal_quality_cost"], abs=1e-20)
+        assert "safety" not in last.info["reward_terms"]
+        assert metrics["final_error"] < 1e-7
+        assert metrics["safe_completion"] == metrics["control_success"] == 1
+        assert episode.transitions[0].observation[-1] == pytest.approx(50 / 150)
+        assert last.next_observation[-1] == 0
+
+        # Meeting the target earlier cannot excuse a bad endpoint.
+        reference = last.info["transition_reference"]
+        early = replace(episode.transitions[0], info={**episode.transitions[0].info, "y": reference})
+        missed = replace(last, info={**last.info, "y": reference + [0.011, 0]})
+        missed_episode = replace(episode, transitions=(early, *episode.transitions[1:-1], missed))
+        assert batch_quality_metrics(env, missed_episode)["control_success"] == 0
+
+        # Nor can a good endpoint erase an earlier safety violation.
+        unsafe = replace(early, info={**early.info, "constraint_costs": {"injected_violation": 1.0}})
+        unsafe_episode = replace(episode, transitions=(unsafe, *episode.transitions[1:]))
+        unsafe_metrics = batch_quality_metrics(env, unsafe_episode)
+        assert unsafe_metrics["safe_completion"] == unsafe_metrics["control_success"] == 0
+        assert batch_quality_metrics(env, replace(episode, transitions=episode.transitions[:-1]))["safe_completion"] == 0
     finally:
         env.close()
 
@@ -57,6 +79,45 @@ def test_crystallization_action_maps_to_cooling_temperature():
     assert model.cooling_temperature([0.0]) == pytest.approx(30.0)
     assert model.cooling_temperature([0.5]) == pytest.approx(35.0)
     assert model.cooling_temperature([1.0]) == pytest.approx(40.0)
+
+
+def test_batch_clock_shares_observation_delay_without_sensor_noise():
+    env = aiogym.make_env(
+        "crystallization", noise={"std": 0.1},
+        delay={"observation_steps": 2, "action_steps": 0},
+    )
+    long_batch = aiogym.make_env("crystallization", benchmark="boundary-safety")
+    try:
+        observation, _ = env.reset(seed=0)
+        assert observation[-1] == pytest.approx(50 / 150)
+        for remaining in (50, 50, 49):
+            observation, *_ = env.step([0.85])
+            assert observation[-1] == pytest.approx(remaining / (100 + remaining))
+        observation, _ = long_batch.reset(seed=0)
+        assert observation[-1] == pytest.approx(100 / 200)
+    finally:
+        env.close()
+        long_batch.close()
+
+
+def test_batch_end_is_terminal_to_sb3_and_legacy_contract_is_rejected():
+    vec_env = pytest.importorskip("stable_baselines3.common.vec_env")
+    from aiogym.workflows._metadata import environment_metadata, validate_environment_compatibility
+
+    env = aiogym.make_env("crystallization")
+    old = {**environment_metadata(env), "reward": "regulation", "observation_shape": [7]}
+    with pytest.raises(ValueError, match="reward is incompatible"):
+        validate_environment_compatibility(old, env)
+    vector = vec_env.DummyVecEnv([lambda: env])
+    try:
+        vector.reset()
+        for _ in range(50):
+            _, _, done, infos = vector.step(np.asarray([[0.85]], dtype=np.float32))
+        assert done[0]
+        assert infos[0]["TimeLimit.truncated"] is False
+        assert infos[0]["terminal_observation"][-1] == 0
+    finally:
+        vector.close()
 
 
 def test_crystallization_parameter_overrides_are_strict_and_change_dynamics():
@@ -135,7 +196,7 @@ def test_crystallization_distinguishes_state_observation_and_quality_output():
             "coefficient_of_variation",
             "mean_crystal_size",
         ]
-        assert len(model.observation_schema()) == 7
+        assert len(model.observation_schema()) == 8
     finally:
         env.close()
 
@@ -225,7 +286,7 @@ def test_crystallization_baselines_complete_every_formal_batch(
     env = aiogym.make_env("crystallization", benchmark=benchmark)
     try:
         policy = aiogym.make_controller(controller_id, env=env)
-        result = aiogym.evaluate(env=env, policy=policy, seeds=(0, 1, 2))
+        result = aiogym.evaluate(env=env, policies={"policy": policy}, seeds=(0, 1, 2))["evaluations"]["policy"]
         aggregate = result["aggregate"]
         assert aggregate["safe_completion"]["mean"] == pytest.approx(1.0)
         assert aggregate["unsafe_rate"]["max"] == pytest.approx(0.0)
@@ -233,7 +294,7 @@ def test_crystallization_baselines_complete_every_formal_batch(
             env.unwrapped.episode_steps
         )
         assert np.isfinite(aggregate["return"]["median"])
-        assert np.isfinite(aggregate["tracking_iae"]["median"])
+        assert np.isfinite(aggregate["terminal_quality_cost"]["median"])
         assert np.isfinite(aggregate["final_error"]["median"])
     finally:
         env.close()

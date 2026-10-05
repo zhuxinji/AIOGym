@@ -11,6 +11,8 @@ from typing import Any
 
 import numpy as np
 
+from aiogym.core.information import state_limit_rules
+
 from aiogym.core.model import PhysicsModelBase
 
 
@@ -85,6 +87,50 @@ class CSTRModel(PhysicsModelBase):
         }
     )
 
+    parameter_metadata = {
+        'maximum_dilution_rate': ('Maximum feed volumetric flow divided by reactor volume', 'Finite number > 0'),
+        'feed_concentration': ('Default reactant concentration in the feed', 'Finite number > 0'),
+        'pre_exponential_factor': ('Arrhenius reaction-rate pre-exponential factor', 'Finite number > 0'),
+        'activation_temperature': ('Activation energy divided by the gas constant', 'Finite number > 0'),
+        'reaction_temperature_gain': ('Temperature rise per unit reactant concentration consumed', 'Finite number > 0'),
+        'cooling_coefficient': ('Maximum cooling heat-transfer coefficient divided by thermal capacity', 'Finite number > 0'),
+        'maximum_cooling_power': ('Cooling power used for energy accounting at full command', 'Finite number > 0'),
+        'maximum_feed_pump_power': ('Feed-pump power used for energy accounting at full command', 'Finite number > 0'),
+        'nominal_feed_action': ('Feed-pump command used to construct the default operating point', '(0, 1]'),
+        'coolant_temperature': ('Default cooling-jacket inlet temperature', '[-5, 35]'),
+        'feed_temperature': ('Default reactor feed temperature', '[0, 60]'),
+        'temperature_trip': ('Reactor temperature threshold for episode termination', '(45, 200]'),
+    }
+    variable_descriptions = {
+        'reactant_concentration': 'Reactant concentration in the reactor',
+        'reactor_temperature': 'Reactor temperature',
+        'feed_pump': 'Reactor feed-pump command',
+        'cooling': 'Cooling-jacket heat-transfer command',
+    }
+
+    def action_metadata(self):
+        return {
+            "feed_pump": {"interpretation": f"Dilution rate = action * {self.p['maximum_dilution_rate']:g} 1/s"},
+            "cooling": {"interpretation": f"0 = no cooling; 1 = cooling coefficient {self.p['cooling_coefficient']:g} 1/s; heat removal also depends on the reactor-coolant temperature difference"},
+        }
+
+    def observation_metadata(self):
+        rows = super().observation_metadata()
+        for output, scale in zip(self.output_schema(), self.output_scales()):
+            name = output["name"]
+            rows[f"{name}_tracking_error"] = {
+                "description": f"Normalized tracking error: {self.variable_descriptions[name]}",
+                "source": name,
+                "normalization": f"clip((measurement - reference) / {scale:g}, -1, 1)",
+            }
+        return rows
+
+    def safety_metadata(self):
+        return state_limit_rules({
+            "reactant_concentration": self.state_bounds["reactant_concentration"],
+            "reactor_temperature": (0.0, self.p["temperature_trip"]),
+        }, self.state_units)
+
     def __init__(self, parameters: Mapping[str, Any] | None = None):
         defaults = {
             "maximum_dilution_rate": 0.02,
@@ -100,6 +146,7 @@ class CSTRModel(PhysicsModelBase):
             "maximum_feed_pump_power": 1200.0,
             "temperature_trip": 92.0,
         }
+        self._parameter_defaults = deepcopy(defaults)
         self.p = _resolved_parameters(defaults, parameters)
         self._resolved_parameters = MappingProxyType(dict(self.p))
 
@@ -140,7 +187,7 @@ class CSTRModel(PhysicsModelBase):
         ]
         return [*super().observation_schema(), *error_rows]
 
-    def observation(self, state, reference, previous_action, disturbances):
+    def observation(self, state, reference, previous_action, disturbances, *, remaining_time=0.0):
         base = super().observation(
             state,
             reference,
@@ -231,9 +278,6 @@ class CSTRModel(PhysicsModelBase):
 
     def outputs(self, state):
         return [float(state[0]), float(state[1])]
-
-    def display_outputs(self, state):
-        return {"levels": [], "temps": [float(state[1])]}
 
     def _steady_operating_point(self, reference, disturbances=None):
         target = np.asarray(reference, dtype=float).reshape(-1)

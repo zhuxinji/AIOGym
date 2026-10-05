@@ -9,8 +9,9 @@ import gymnasium as gym
 import numpy as np
 
 from aiogym.controllers import make_controller
-from aiogym.core.contracts import policy_metadata, validate_policy
+from aiogym.core.contracts import environment_interface, policy_metadata, validate_policy
 from aiogym.core.env import make_env
+from aiogym.core.information import EnvironmentInformation
 from aiogym.scenarios.three_tank.model import ThreeTankModel
 
 
@@ -21,7 +22,7 @@ _HEATER_ACTION_DIM = 3
 _TEMPERATURE_ERROR_SCALE_C = 5.0
 
 
-class CascadeHydraulicPIDEnv(gym.Wrapper):
+class CascadeHydraulicPIDEnv(EnvironmentInformation, gym.Wrapper):
     """Expose only heater actions while Three-Tank PID controls hydraulics."""
 
     def __init__(self, env: gym.Env, *, temperature_training: bool = False):
@@ -66,6 +67,61 @@ class CascadeHydraulicPIDEnv(gym.Wrapper):
             dtype=np.float32,
         )
         self._pending_hydraulic_action: np.ndarray | None = None
+
+    def policy_interface(self):
+        interface = environment_interface(self.env)
+        observation = list(interface["observation"])
+        observation.extend(
+            {**row, "name": f"pending_{row['name']}", "kind": "action"}
+            for row in interface["action"][:_HYDRAULIC_ACTION_DIM]
+        )
+        if self.temperature_training:
+            for index, row in enumerate(self.unwrapped.model.output_schema()[3:]):
+                observation.append({
+                    "name": f"{row['name']}_error",
+                    "kind": "error",
+                    "unit": "normalized",
+                    "scale": _TEMPERATURE_ERROR_SCALE_C,
+                    "low": float(self.observation_space.low[-3 + index]),
+                    "high": float(self.observation_space.high[-3 + index]),
+                })
+        return {
+            **interface,
+            "adapter": "cascade-hydraulic-pid.v1",
+            "observation": [{**row, "index": i} for i, row in enumerate(observation)],
+            "action": [
+                {**row, "index": i}
+                for i, row in enumerate(interface["action"][-_HEATER_ACTION_DIM:])
+            ],
+        }
+
+    @property
+    def observations(self):
+        rows = super().observations
+        for name, action in self.env.actions.items():
+            pending = f"pending_{name}"
+            if pending in rows:
+                rows[pending].update(
+                    description=f"Next hydraulic PID command: {action['description']}",
+                    source=name,
+                )
+        if self.temperature_training:
+            for name, output in self.outputs.items():
+                error = f"{name}_error"
+                if error in rows:
+                    rows[error].update(
+                        description=f"Temperature tracking error: {output['description']}",
+                        source=name,
+                        normalization=f"(reference - measurement) / {_TEMPERATURE_ERROR_SCALE_C:g} degC",
+                    )
+        return rows
+
+    def describe(self):
+        report = super().describe()
+        report["physical_actions"] = self.env.actions
+        if self.temperature_training:
+            report["environment"]["reward_adapter"] = "temperature_tracking"
+        return report
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         observation, info = self.env.reset(seed=seed, options=options)

@@ -11,6 +11,8 @@ from typing import Any
 
 import numpy as np
 
+from aiogym.core.information import state_limit_rules
+
 from aiogym.core.model import PhysicsModelBase
 
 
@@ -75,6 +77,28 @@ class HVACModel(PhysicsModelBase):
         }
     )
 
+    parameter_metadata = {
+        'zone_thermal_capacity': ('Thermal capacity of each zone', 'Finite number > 0'),
+        'maximum_zone_power': ('Maximum heating or cooling power magnitude per zone', 'Finite number > 0'),
+        'interzone_conductance': ('Thermal conductance between the two zones', 'Finite number >= 0'),
+        'outdoor_conductance': ('Thermal conductance from each zone to outdoor air', 'Finite number >= 0'),
+        'outdoor_temperature': ('Default outdoor air temperature', '[-30, 50]'),
+    }
+    variable_descriptions = {
+        'zone_0_temperature': 'Air temperature in zone 0',
+        'zone_1_temperature': 'Air temperature in zone 1',
+        'hvac_zone_0': 'Heating and cooling command for zone 0',
+        'hvac_zone_1': 'Heating and cooling command for zone 1',
+    }
+
+    def action_metadata(self):
+        return {name: {
+            "interpretation": f"0 = maximum cooling; 0.5 = off; 1 = maximum heating; power = (2 * action - 1) * {self.p['maximum_zone_power']:g} W * hvac_efficiency",
+        } for name in self.action_names}
+
+    def safety_metadata(self):
+        return state_limit_rules(self.state_bounds, self.state_units)
+
     def __init__(self, parameters: Mapping[str, Any] | None = None):
         defaults = {
             "zone_thermal_capacity": 6000.0,
@@ -83,6 +107,7 @@ class HVACModel(PhysicsModelBase):
             "outdoor_conductance": 45.0,
             "outdoor_temperature": 5.0,
         }
+        self._parameter_defaults = deepcopy(defaults)
         self.p = _resolved_parameters(defaults, parameters)
         self._resolved_parameters = MappingProxyType(dict(self.p))
 
@@ -153,9 +178,6 @@ class HVACModel(PhysicsModelBase):
 
     def outputs(self, state):
         return [float(state[0]), float(state[1])]
-
-    def display_outputs(self, state):
-        return {"levels": [], "temps": self.outputs(state)}
 
     def tracking_steady_state_action(self, reference, disturbances=None):
         target = np.asarray(reference, dtype=float).reshape(-1)

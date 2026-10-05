@@ -8,9 +8,176 @@ import pytest
 
 import aiogym.scenarios  # noqa: F401
 from aiogym.controllers.base import make_controller
+from aiogym.controllers.mpc import SuccessiveLinearizationMPC
 from aiogym.core.env import make_env
 from aiogym.core.rollout import rollout
 from aiogym.rl.sb3 import SB3CheckpointPolicy
+
+
+class _LinearMPCModel:
+    scenario = "linear-mpc-test"
+    time_unit = "s"
+    dt_micro = 0.1
+
+    def __init__(self, gains, bounds):
+        self.gains = np.asarray(gains, dtype=float)
+        self.bounds = np.asarray(bounds, dtype=float)
+
+    def action_dim(self):
+        return self.gains.shape[1]
+
+    def action_schema(self):
+        return [{"low": low, "high": high} for low, high in self.bounds]
+
+    def state_schema(self):
+        return [{"low": -np.inf, "high": np.inf} for _ in range(self.gains.shape[0])]
+
+    def clamp_state(self, state):
+        return state
+
+    def initial_state(self):
+        return np.zeros(self.gains.shape[0])
+
+    def default_action(self):
+        return np.clip(np.zeros(self.action_dim()), *self.bounds.T)
+
+    def action_vector(self, action):
+        return list(action)
+
+    def outputs(self, state):
+        return state
+
+    def output_scales(self):
+        return np.ones(self.gains.shape[0])
+
+    def dynamics(self, state, action, disturbances):
+        return self.gains @ action
+
+    def tracking_steady_state_action(self, target, env):
+        return None
+
+
+def test_mpc_reoptimizes_coupled_actions_at_bounds():
+
+    model = _LinearMPCModel([[1, 0], [1, 1]], [[0, 1], [0, 1]])
+    controller = SuccessiveLinearizationMPC(model, control_dt=1, prediction_horizon=1, move_supp=0)
+    action = controller.compute({"x": [0, 0]}, {"y_sp": [-1, 0]})
+    assert action == pytest.approx([0, 0], abs=1e-9)
+    assert np.sum((model.gains @ action - [-1, 0]) ** 2) == pytest.approx(1)
+    assert np.sum((model.gains @ [0, 1] - [-1, 0]) ** 2) == 2  # Old clipped solution.
+
+    controller.reset()
+    action = controller.compute({"x": [0, 0]}, {"y_sp": [0.2, 0.6]})
+    assert action == pytest.approx([0.2, 0.4], abs=1e-9)
+
+
+def test_mpc_handles_singular_objective_and_model_specific_fixed_bounds():
+    model = _LinearMPCModel([[1, 1, 2], [0, 0, 0]], [[2, 3], [-1, 1], [0.25, 0.25]])
+    model.tracking_steady_state_action = lambda target, env: [100, -100, 1]
+    controller = SuccessiveLinearizationMPC(model, control_dt=1, prediction_horizon=1, move_supp=0)
+    action = controller.compute({"x": [0, 0]}, {"y_sp": [10, 0]})
+    assert action == pytest.approx([3, 1, 0.25], abs=1e-9)
+    assert controller.metadata()["action_bounds"] == model.bounds.tolist()
+
+
+def test_mpc_reports_bounded_solver_failure(monkeypatch):
+    from types import SimpleNamespace
+    import aiogym.controllers.mpc as mpc
+
+    model = _LinearMPCModel([[1, 0], [1, 1]], [[0, 1], [0, 1]])
+    controller = SuccessiveLinearizationMPC(model, control_dt=1, prediction_horizon=1, move_supp=0)
+    monkeypatch.setattr(mpc, "lsq_linear", lambda *args, **kwargs: SimpleNamespace(
+        success=False, message="iteration limit reached",
+    ))
+    with pytest.raises(RuntimeError, match="MPC action sequence solve failed: iteration limit"):
+        controller.compute({"x": [0, 0]}, {"y_sp": [-1, 0]})
+
+
+def test_mpc_optimizes_distinct_moves_with_the_previous_action_penalty():
+    model = _LinearMPCModel([[1]], [[0, 1]])
+    model.tracking_steady_state_action = lambda target, env: [1.0]
+    controller = SuccessiveLinearizationMPC(
+        model, control_dt=1, prediction_horizon=2, solve_every=2, move_supp=0.1,
+    )
+    # Exact minimum of (u0-1)^2 + (u0+u1-1)^2 + .1*u0^2 + .1*(u1-u0)^2.
+    first = controller.compute({"x": [0]}, {"y_sp": [1]})
+    assert first == pytest.approx([130 / 161], abs=1e-8)
+    second = controller.compute({"x": first}, {"y_sp": [1]})
+    assert second == pytest.approx([40 / 161], abs=1e-8)
+
+
+def test_mpc_replans_after_two_moves_and_reset_discards_the_cached_sequence(monkeypatch):
+    model = _LinearMPCModel([[1]], [[0, 1]])
+    controller = SuccessiveLinearizationMPC(
+        model, control_dt=1, prediction_horizon=10, solve_every=2, move_supp=1,
+    )
+    solves = []
+    solve = controller._solve
+
+    def record_solve(measurement, setpoint):
+        solves.append(list(measurement["x"]))
+        solve(measurement, setpoint)
+
+    monkeypatch.setattr(controller, "_solve", record_solve)
+    first = controller.compute({"x": [0]}, {"y_sp": [1]})
+    original_plan = controller._plan.copy()
+    second = controller.compute({"x": first}, {"y_sp": [1]})
+    assert second == pytest.approx(original_plan[1])
+    assert len(solves) == 1
+    third = controller.compute({"x": [-1]}, {"y_sp": [1]})
+    assert solves == [[0], [-1]]
+    assert third != pytest.approx(original_plan[2])
+    controller.reset()
+    assert controller.compute({"x": [0]}, {"y_sp": [1]}) == pytest.approx(first)
+
+
+def test_mpc_linearizes_before_rk4_with_affine_drift_and_substeps():
+    from aiogym.core.model import integrate_process_state
+
+    model = _LinearMPCModel([[1]], [[-5, 5]])
+    calls = []
+
+    def dynamics(state, action, disturbances):
+        calls.append(1)
+        return [-state[0] ** 2 + action[0] + disturbances["bias"]]
+
+    model.dynamics = dynamics
+    controller = SuccessiveLinearizationMPC(
+        model, control_dt=0.35, prediction_horizon=1, move_supp=0,
+    )
+    action = controller.compute({"x": [0.8], "bias": 0.3}, {"y_sp": [0.6]})
+    # At x0=.8 the tangent ODE is dx/dt = -1.6*x + u + .94.
+    # Integrate it independently with the shared stage-by-stage RK4 helper.
+    linear = _LinearMPCModel([[1]], [[-5, 5]])
+    linear.dynamics = lambda state, action, disturbances: [-1.6*state[0] + action[0] + 0.94]
+    free = integrate_process_state(linear, [0.8], [0], {}, duration=0.35)
+    unit = integrate_process_state(linear, [0.8], [1], {}, duration=0.35)
+    assert action == pytest.approx((0.6-free)/(unit-free), abs=1e-9)
+    assert len(calls) <= 10  # Derivative sampling must not repeat nonlinear integration.
+    assert controller.metadata()["linearization"] == "continuous_dynamics"
+    assert controller.metadata()["discretization"] == "rk4"
+    assert controller.metadata()["min_integration_substeps"] == 4
+    assert controller.metadata()["max_integration_dt"] == pytest.approx(0.0875)
+
+
+def test_mpc_rk4_refines_stiff_cascade_boundary_linearization():
+    env = make_env("cascade", benchmark="boundary-safety")
+    try:
+        policy = make_controller("mpc", env=env, config={"prediction_horizon": 30})
+        result = rollout(env, policy, seed=1000, max_steps=2)
+        assert len(result.transitions) == 2
+        assert all(env.action_space.contains(row.action) for row in result.transitions)
+        assert np.isfinite(result.episode_return)
+    finally:
+        env.close()
+
+
+def test_mpc_rejects_an_execution_interval_longer_than_its_plan():
+    with pytest.raises(ValueError, match="solve_every must not exceed prediction_horizon"):
+        SuccessiveLinearizationMPC(
+            _LinearMPCModel([[1]], [[0, 1]]), control_dt=1,
+            prediction_horizon=2, solve_every=3,
+        )
 
 
 @pytest.mark.parametrize("controller_id", ("pid", "mpc"))
@@ -40,10 +207,7 @@ def test_fixed_three_tank_pid_and_mpc_contracts(controller_id):
         assert all(env.action_space.contains(row.action) for row in result.transitions)
         assert np.isfinite(result.episode_return)
         if controller_id == "mpc":
-            assert result.policy_metadata["initialization_status"] in {
-                "default_action",
-                "tracking_steady_state_action",
-            }
+            assert result.policy_metadata["initialization"] == "default_action"
     finally:
         env.close()
 
@@ -93,14 +257,14 @@ def test_three_tank_controller_config_is_shared_by_all_benchmarks():
     )
     assert mpc["q_y"] == [1.0] * 3
     assert "feedforward" not in pid
-    assert mpc["feedforward_reseed"] == "setpoint_or_feedforward_change"
-    assert mpc["horizon"] == 60
-    assert mpc["control_horizon"] == 1
-    assert mpc["action_bound_handling"] == "post_solve_clip"
-    assert mpc["action_bounds"] == [0.0, 1.0]
+    assert mpc["steady_input_role"] == "linearization_reference_and_penalty"
+    assert mpc["prediction_horizon"] == 20
+    assert mpc["control_horizon"] == 20
+    assert mpc["action_bound_handling"] == "box_constrained_lsq"
+    assert mpc["action_bounds"] == [[0.0, 1.0]] * 4
     assert mpc["prediction_state_constraints"] is False
-    assert mpc["move_supp"] == [50.0] * 4
-    assert mpc["steady_input_weight"] == [5.0] * 4
+    assert mpc["move_supp"] == [5.0] * 4
+    assert mpc["steady_input_weight"] == [0.5] * 4
 
 
 def test_name_bound_pid_rejects_unknown_actuator_before_rollout():
@@ -133,20 +297,18 @@ def test_mpc_does_not_receive_hidden_disturbance_values():
             "mpc",
             env=env,
             config={
-                "P": 5,
+                "prediction_horizon": 5,
                 "move_supp": 1.0,
                 "steady_input_weight": 1.0,
-                "reseed_on_feedforward_change": True,
             },
         )
         repeated = make_controller(
             "mpc",
             env=env,
             config={
-                "P": 5,
+                "prediction_horizon": 5,
                 "move_supp": 1.0,
                 "steady_input_weight": 1.0,
-                "reseed_on_feedforward_change": True,
             },
         )
         observation, info = env.reset(seed=0)

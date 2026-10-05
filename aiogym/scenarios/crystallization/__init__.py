@@ -1,4 +1,4 @@
-"""Batch-crystallization Scenario registration."""
+"""Batch-crystallization Scenario definition."""
 
 from .definition import SCENARIO
 

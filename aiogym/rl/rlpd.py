@@ -118,10 +118,7 @@ class RLPDAlgorithmBackend:
         device = resolved["device"]
         if device not in {"auto", "cpu", "cuda"}:
             raise ValueError("RLPD device must be 'auto', 'cpu', or 'cuda'")
-        serialized = jsonable(resolved)
-        if not isinstance(serialized, dict):
-            raise TypeError("effective RLPD kwargs must be a mapping")
-        return serialized
+        return jsonable(resolved)
 
     def create(
         self,

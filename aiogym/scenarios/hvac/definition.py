@@ -1,10 +1,11 @@
-"""Scenario registration for the two-zone HVAC model."""
+"""Scenario definition for the two-zone HVAC model."""
 from __future__ import annotations
 
 from copy import deepcopy
 
 from aiogym.core.contracts import Scenario
 from aiogym.core.specs import Reward
+from aiogym.scenarios._metrics import REGULATION_SUCCESS_CRITERION
 from aiogym.scenarios._metrics import regulation_episode_metrics
 from aiogym.scenarios._shared import regulation_reward
 
@@ -37,13 +38,11 @@ _PID = {
     "bias": "default_action",
 }
 _MPC = {
-    "Ts": 5.0,
-    "P": 10,
+    "prediction_horizon": 1,
     "move_supp": [0.0, 0.0],
     "steady_input_weight": [0.0, 0.0],
     "cv_scale": [8.0, 8.0],
     "q_y": [1.0, 1.0],
-    "reseed_on_feedforward_change": True,
 }
 
 
@@ -68,6 +67,7 @@ SCENARIO = Scenario(
     rewards={
         "regulation": Reward(
             id="regulation",
+            success_criterion=REGULATION_SUCCESS_CRITERION,
             function=regulation_reward,
             episode_metric_function=regulation_episode_metrics,
             primary_metric="return",

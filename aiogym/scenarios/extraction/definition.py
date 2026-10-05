@@ -1,10 +1,11 @@
-"""Scenario registration for the five-stage extraction column."""
+"""Scenario definition for the five-stage extraction column."""
 from __future__ import annotations
 
 from copy import deepcopy
 
 from aiogym.core.contracts import Scenario
 from aiogym.core.specs import Reward
+from aiogym.scenarios._metrics import REGULATION_SUCCESS_CRITERION
 from aiogym.scenarios._metrics import regulation_episode_metrics
 from aiogym.scenarios._shared import regulation_reward
 
@@ -37,13 +38,11 @@ _PID = {
     "bias": "default_action",
 }
 _MPC = {
-    "Ts": 0.01,
-    "P": 10,
-    "move_supp": [0.5, 20.0],
-    "steady_input_weight": [5.0, 20.0],
+    "prediction_horizon": 5,
+    "move_supp": [0.05, 2.0],
+    "steady_input_weight": [0.0, 0.0],
     "cv_scale": [0.45],
     "q_y": [1.0],
-    "reseed_on_feedforward_change": True,
 }
 
 
@@ -72,6 +71,7 @@ SCENARIO = Scenario(
     rewards={
         "regulation": Reward(
             id="regulation",
+            success_criterion=REGULATION_SUCCESS_CRITERION,
             function=regulation_reward,
             episode_metric_function=regulation_episode_metrics,
             primary_metric="return",

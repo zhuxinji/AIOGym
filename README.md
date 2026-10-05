@@ -1,90 +1,52 @@
 # AIO-Gym
 
-AIO-Gym is a process-control toolkit for simulation, classical control,
-reinforcement learning, and reproducible comparison. It lets PID, MPC, and
-learned policies run on the same environments and test cases, so users can
-compare stability, tracking quality, disturbance rejection, and safety.
+AIO-Gym is a process-control toolkit for simulation, classical control, reinforcement learning, and reproducible comparison. It lets PID, MPC, and learned policies run on the same environments and test cases, so users can compare stability, tracking quality, disturbance rejection, and safety.
 
-## Highlights
+## What you can do
 
-- Gymnasium-compatible `reset()` and `step()` environments;
-- built-in PID, MPC, hold, and random controllers;
-- DDPG, PPO, SAC, TD3, and RLPD training;
-- randomized operating conditions, physical disturbances, measurement noise,
-  delays, and actuator faults;
-- Dataset collection, behavior cloning, and offline-to-online learning;
-- trainable checkpoints that can be loaded, evaluated, or continued;
-- tracking, disturbance-rejection, and boundary-safety Benchmarks;
-- JSON summaries, SVG comparisons, and complete numeric trajectories.
+- **Simulate a process:** use Gymnasium-compatible environments to inspect physical variables and advance a model with your own actions.
+- **Run controllers:** use built-in PID, MPC, hold, and random policies, or load a trained policy.
+- **Train policies:** use DDPG, PPO, SAC, TD3, or RLPD; add randomized operating conditions, physical disturbances, measurement noise, delays, and actuator faults.
+- **Use recorded data:** collect a Dataset for behavior cloning or RLPD's offline-to-online learning.
+- **Evaluate and inspect results:** compare policies on identical cases and save JSON metrics, SVG figures, and numeric trajectories; continue training from saved checkpoints.
+
+## Start here
+
+**Start with the [User guide](docs/user-guide.md).** One Heater example takes you from installation through SAC training, comparison with PID/MPC, and reading the results. Copy the complete script; training and comparison each run once.
+
+For a specific task, jump directly to its section:
+
+| Task                                                   | Read                                                                                                                                 |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Train your own algorithm or evaluate an external model | [External algorithms](docs/external-algorithms.md)                                                                                   |
+| Train, validate, or continue a policy                  | [Training](docs/user-guide.md#3-train-and-compare), [continuation](docs/user-guide.md#continue-training)                             |
+| Compare policies and interpret results                 | [Comparison](docs/user-guide.md#evaluate-a-saved-model), [metrics and figures](docs/user-guide.md#4-read-the-results)                |
+| Inspect an environment or configure a controller       | [Environment information](docs/user-guide.md#inspect-and-configure-an-environment), [MPC settings](docs/user-guide.md#configure-mpc) |
+| Collect demonstrations                                 | [Dataset](docs/user-guide.md#collect-and-use-a-dataset)                                                                              |
+| Run terminal commands or schedule training jobs        | [CLI guide](docs/cli.md)                                                                                                             |
+| Combine offline data with online RL                    | [RLPD training](docs/rlpd.md)                                                                                                        |
+
+The CLI runs the same workflows and adds terminal job management; choose it when you prefer commands to Python scripts.
 
 ## Included scenarios
 
-| Scenario id | Process |
-|---|---|
-| [`cascade`](docs/scenarios/cascade.md) | Heated three-tank cascade with configurable heaters and a dynamic closed reservoir |
-| [`crystallization`](docs/scenarios/crystallization.md) | Batch crystallization |
-| [`cstr`](docs/scenarios/cstr.md) | Two-input, two-output stirred-tank reactor |
-| [`extraction`](docs/scenarios/extraction.md) | Five-stage counter-current extraction |
-| [`heater`](docs/scenarios/heater.md) | Fired heater |
-| [`hvac`](docs/scenarios/hvac.md) | Two-zone HVAC |
-| [`quadruple`](docs/scenarios/quadruple.md) | Quadruple-tank laboratory process |
-| [`three_tank`](docs/scenarios/three_tank.md) | Hydraulic three-tank cascade |
+Once you know the workflow, choose a process below. Each guide supplies the physical interface, default task, success criteria, controller settings, training differences, and fixed Benchmark protocols for that scenario.
 
-Each scenario guide documents its physical variables, actions, safety limits,
-training variation, controller settings, and fixed Benchmarks.
+| Scenario id                                            | Process                                                                            |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------- |
+| [`cascade`](docs/scenarios/cascade.md)                 | Heated three-tank cascade with configurable heaters and a dynamic closed reservoir |
+| [`crystallization`](docs/scenarios/crystallization.md) | Batch crystallization with endpoint quality targets                                |
+| [`cstr`](docs/scenarios/cstr.md)                       | Two-input, two-output stirred-tank reactor                                         |
+| [`extraction`](docs/scenarios/extraction.md)           | Five-stage counter-current extraction                                              |
+| [`heater`](docs/scenarios/heater.md)                   | Fired heater; used in the introductory examples                                    |
+| [`hvac`](docs/scenarios/hvac.md)                       | Two-zone HVAC                                                                      |
+| [`quadruple`](docs/scenarios/quadruple.md)             | Quadruple-tank laboratory process                                                  |
+| [`three_tank`](docs/scenarios/three_tank.md)           | Hydraulic three-tank cascade                                                       |
 
-## Install
+## Results and support
 
-From a downloaded or cloned AIO-Gym repository, run:
+Your runs generate results locally under the output paths you choose. The [published benchmark snapshot](benchmark-results/README.md) provides existing figures and downloadable artifacts with their recorded provenance. It is a historical snapshot, not a reproduction of the current checkout.
 
-```bash
-pip install .
-```
+For your own study, follow the [evaluation guidance](docs/user-guide.md#metrics-and-ranking). Short training examples establish that the workflow runs; meaningful RL comparisons also require planned training budgets and independent training seeds.
 
-To include reinforcement-learning training, use this instead:
-
-```bash
-pip install '.[rl]'
-```
-
-## Start with heater
-
-Run a small PID/MPC comparison from the repository root:
-
-```bash
-aiogym compare heater --benchmark tracking --controllers pid mpc --seeds 0 1 2 --output runs/heater/demos/pid-mpc
-```
-
-Open `runs/heater/demos/pid-mpc/comparison.svg`. The same directory contains
-`comparison.json` for metrics and `trajectories.npz` for numeric trajectories.
-Choose a new output directory when repeating this example.
-
-With the RL dependencies installed, check the training workflow with:
-
-```bash
-aiogym train heater sac --steps 1000 --record-every 250 --no-evaluation
-aiogym status
-```
-
-This is a workflow smoke run. Use the [Quickstart](docs/quickstart.md) to move
-on to validation, best-checkpoint comparison, and a longer training budget.
-Online SAC, DDPG, PPO, and TD3 training does not need a Dataset.
-
-## Documentation
-
-- [Quickstart](docs/quickstart.md): install, see a heater comparison, run a
-  short training job, then start a validated experiment;
-- [Task guide](docs/workflows.md): parallel training, status, continuation,
-  Python examples, optional Dataset/BC/RLPD workflows, and output paths;
-- [Concepts and reference](docs/architecture.md): environments, fixed Benchmarks,
-  checkpoint selection, metrics, chart interpretation, and artifact contracts;
-- [RLPD training](docs/rlpd.md): Dataset requirements and offline-to-online
-  training;
-- the scenario table above links directly to every process guide.
-
-Short training runs verify that the workflow executes; they are not performance
-evidence. For a meaningful comparison, use a fixed Benchmark, identical seeds,
-and report safety separately from tracking quality.
-
-Use `aiogym --help` to discover commands. The same workflows are available
-through the Python API for integration with your own code.
+Report bugs and documentation issues in the [issue tracker](https://github.com/supcon-international/aiogym/issues).

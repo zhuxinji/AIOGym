@@ -2,6 +2,7 @@ from copy import deepcopy
 
 from aiogym.core.contracts import Scenario
 from aiogym.core.specs import Reward
+from aiogym.scenarios._metrics import REGULATION_SUCCESS_CRITERION
 from aiogym.scenarios._metrics import regulation_episode_metrics
 from aiogym.scenarios._shared import regulation_reward
 
@@ -33,7 +34,7 @@ _PID = {
     ],
     "bias": [0.3, 0.3],
 }
-_MPC = {"Ts": 1.0, "P": 1, "move_supp": 0.0, "cv_scale": [1.0, 1.0]}
+_MPC = {"prediction_horizon": 1, "move_supp": 0.0, "cv_scale": [1.0, 1.0]}
 def _controller_config(controller_id, reward_id):
     del reward_id
     configs = {"pid": _PID, "mpc": _MPC}
@@ -54,6 +55,7 @@ SCENARIO = Scenario(
     rewards={
         "regulation": Reward(
             id="regulation",
+            success_criterion=REGULATION_SUCCESS_CRITERION,
             function=regulation_reward,
             episode_metric_function=regulation_episode_metrics,
             primary_metric="return",

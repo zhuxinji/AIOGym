@@ -6,7 +6,6 @@ import pytest
 import aiogym
 from aiogym.core.contracts import Scenario
 from aiogym.core.env import ProcessControlEnv, make_env
-from aiogym.core.registry import register_scenario, unregister_scenario
 from aiogym.core.specs import Benchmark, EpisodeSpec, Reward
 
 
@@ -56,7 +55,7 @@ class ToyModel:
     def clamp_state(self, state):
         return state
 
-    def observation(self, state, reference, previous_action, disturbances):
+    def observation(self, state, reference, previous_action, disturbances, *, remaining_time=0.0):
         del reference, previous_action, disturbances
         return self.outputs(state)
 
@@ -78,8 +77,7 @@ def _reward(state, action, next_state, context):
     return -(error**2), {"tracking": -(error**2)}
 
 
-def register_toy() -> Scenario:
-    unregister_scenario("core-toy")
+def make_toy_scenario() -> Scenario:
     reward = Reward(
         id="regulation",
         function=_reward,
@@ -134,41 +132,40 @@ def register_toy() -> Scenario:
         rewards={"regulation": reward},
         default_reward="regulation",
     )
-    register_scenario(scenario)
     return scenario
 
 
 def test_make_env_uses_scenario_model_and_concrete_environment():
-    scenario = register_toy()
-    try:
-        env = make_env("core-toy", benchmark="boundary-safety")
-        assert isinstance(env, ProcessControlEnv)
-        observation, info = env.reset(seed=7)
-        assert env.action_space.shape == (1,)
-        assert env.observation_space.contains(observation)
-        assert info["reward_id"] == "regulation"
-        assert info["scenario_id"] == "core-toy"
-        assert info["episode_parameters"] == {"case_seed": 7}
-        assert info["previous_applied_action"] == pytest.approx([0.25])
-        assert scenario.id == "core-toy"
+    scenario = make_toy_scenario()
+    env = aiogym.make_env(scenario, benchmark="boundary-safety")
+    assert isinstance(env, ProcessControlEnv)
+    observation, info = env.reset(seed=7)
+    assert env.action_space.shape == (1,)
+    assert env.observation_space.contains(observation)
+    assert info["reward_id"] == "regulation"
+    assert info["scenario_id"] == "core-toy"
+    assert info["episode_parameters"] == {"case_seed": 7}
+    assert info["episode_spec"]["horizon"] == env.episode_steps
+    assert info["previous_applied_action"] == pytest.approx([0.25])
+    assert scenario.id == "core-toy"
 
-        next_observation, reward, terminated, truncated, step_info = env.step(
-            np.asarray([0.5], dtype=np.float32)
-        )
-        assert np.allclose(next_observation, [0.19661458])
-        assert reward == pytest.approx(-(1.0 - float(next_observation[0])) ** 2)
-        assert not terminated
-        assert not truncated
-        assert step_info["commanded_action"].tolist() == [0.5]
-    finally:
-        unregister_scenario("core-toy")
+    next_observation, reward, terminated, truncated, step_info = env.step(
+        np.asarray([0.5], dtype=np.float32)
+    )
+    assert np.allclose(next_observation, [0.19661458])
+    assert reward == pytest.approx(-(1.0 - float(next_observation[0])) ** 2)
+    assert not terminated
+    assert not truncated
+    assert step_info["commanded_action"].tolist() == [0.5]
+    assert "episode_spec" not in step_info
+    assert "episode_parameters" not in step_info
 
 
 def test_benchmark_reset_requires_case_seed_and_rejects_episode_override():
-    register_toy()
+    scenario = make_toy_scenario()
     env = None
     try:
-        env = make_env("core-toy", benchmark="tracking")
+        env = make_env(scenario, benchmark="tracking")
         with pytest.raises(ValueError, match="requires a case seed"):
             env.reset()
         with pytest.raises(ValueError, match="cannot override"):
@@ -176,55 +173,45 @@ def test_benchmark_reset_requires_case_seed_and_rejects_episode_override():
     finally:
         if env is not None:
             env.close()
-        unregister_scenario("core-toy")
 
 
 def test_env_rejects_unknown_benchmark_and_non_space_action():
-    register_toy()
-    try:
-        with pytest.raises(KeyError, match="unknown benchmark"):
-            make_env("core-toy", benchmark="missing")
-        env = make_env("core-toy")
-        env.reset(seed=0)
-        with pytest.raises(ValueError, match="action_space"):
-            env.step(np.asarray([1.5], dtype=np.float32))
-    finally:
-        unregister_scenario("core-toy")
+    scenario = make_toy_scenario()
+    with pytest.raises(KeyError, match="unknown benchmark"):
+        make_env(scenario, benchmark="missing")
+    env = make_env(scenario)
+    env.reset(seed=0)
+    with pytest.raises(ValueError, match="action_space"):
+        env.step(np.asarray([1.5], dtype=np.float32))
 
 
 def test_constraints_are_computed_before_terminal_safety_penalty():
-    register_toy()
-    try:
-        env = make_env("core-toy")
-        env.model.constraint_costs = lambda state, disturbances: (
-            {"state_limit": 1.0} if float(state[0]) > 0.3 else {}
-        )
-        env.model.safety_margins = lambda state, disturbances: {
-            "state": 0.3 - float(state[0])
-        }
-        env.reset(seed=0)
-        _, reward, terminated, _, info = env.step(
-            np.asarray([1.0], dtype=np.float32)
-        )
-        base_reward = -(1.0 - float(info["y"][0])) ** 2
-        assert terminated
-        assert info["constraint_costs"] == {"state_limit": 1.0}
-        assert info["reward_terms"]["safety"] == -5.0
-        assert reward == pytest.approx(base_reward - 5.0)
-    finally:
-        unregister_scenario("core-toy")
+    scenario = make_toy_scenario()
+    env = make_env(scenario)
+    env.model.constraint_costs = lambda state, disturbances: (
+        {"state_limit": 1.0} if float(state[0]) > 0.3 else {}
+    )
+    env.model.safety_margins = lambda state, disturbances: {
+        "state": 0.3 - float(state[0])
+    }
+    env.reset(seed=0)
+    _, reward, terminated, _, info = env.step(
+        np.asarray([1.0], dtype=np.float32)
+    )
+    base_reward = -(1.0 - float(info["y"][0])) ** 2
+    assert terminated
+    assert info["constraint_costs"] == {"state_limit": 1.0}
+    assert info["reward_terms"]["safety"] == -5.0
+    assert reward == pytest.approx(base_reward - 5.0)
 
 
 @pytest.mark.parametrize(
     "variation", ("randomize", "disturbance", "noise", "delay", "fault")
 )
 def test_benchmark_rejects_training_variation(variation):
-    register_toy()
-    try:
-        with pytest.raises(ValueError, match="benchmark cannot be combined"):
-            make_env("core-toy", benchmark="tracking", **{variation: True})
-    finally:
-        unregister_scenario("core-toy")
+    scenario = make_toy_scenario()
+    with pytest.raises(ValueError, match="benchmark cannot be combined"):
+        make_env(scenario, benchmark="tracking", **{variation: True})
 
 
 def test_disturbance_switch_requires_boolean():
@@ -277,10 +264,10 @@ def test_public_disturbance_schedule_is_recorded_in_evaluation_metadata():
     try:
         result = aiogym.evaluate(
             env=env,
-            policy="hold",
+            policies={"policy": "hold"},
             seeds=(3,),
             max_steps=1,
-        )
+        )["evaluations"]["policy"]
     finally:
         env.close()
     assert result["environment"]["disturbance_schedule"] == {
@@ -323,10 +310,10 @@ def test_public_disturbance_schedule_rejects_owned_schedules():
 
 
 def test_public_initial_state_sets_the_default_episode_and_metadata():
-    register_toy()
+    scenario = make_toy_scenario()
     env = None
     try:
-        env = make_env("core-toy", initial_state=[0.4])
+        env = make_env(scenario, initial_state=[0.4])
         observation, info = env.reset(seed=7)
         assert observation == pytest.approx([0.4])
         assert env.state == pytest.approx([0.4])
@@ -335,7 +322,6 @@ def test_public_initial_state_sets_the_default_episode_and_metadata():
     finally:
         if env is not None:
             env.close()
-        unregister_scenario("core-toy")
 
 
 @pytest.mark.parametrize("initial_state", (0.4, "0.4"))
@@ -390,17 +376,14 @@ def test_nonzero_boundary_probability_requires_randomization():
 
 
 def test_benchmark_rejects_boundary_probability():
-    register_toy()
-    try:
-        with pytest.raises(ValueError, match="benchmark cannot be combined"):
-            make_env(
-                "core-toy",
-                benchmark="tracking",
-                randomize=True,
-                boundary_probability=0.3,
-            )
-    finally:
-        unregister_scenario("core-toy")
+    scenario = make_toy_scenario()
+    with pytest.raises(ValueError, match="benchmark cannot be combined"):
+        make_env(
+            scenario,
+            benchmark="tracking",
+            randomize=True,
+            boundary_probability=0.3,
+        )
 
 
 @pytest.mark.parametrize(
@@ -408,12 +391,9 @@ def test_benchmark_rejects_boundary_probability():
     ({"reward": "regulation"}, {"parameters": {}}),
 )
 def test_benchmark_rejects_reward_and_parameter_overrides(override):
-    register_toy()
-    try:
-        with pytest.raises(ValueError, match="fixes model parameters and reward"):
-            make_env("core-toy", benchmark="tracking", **override)
-    finally:
-        unregister_scenario("core-toy")
+    scenario = make_toy_scenario()
+    with pytest.raises(ValueError, match="fixes model parameters and reward"):
+        make_env(scenario, benchmark="tracking", **override)
 
 
 @pytest.mark.parametrize("scenario", ("quadruple", "three_tank"))

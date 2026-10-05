@@ -5,6 +5,19 @@ from collections.abc import Mapping
 
 import numpy as np
 
+from aiogym.core.contracts import Policy
+
+
+def resolve_policy(policy, *, env):
+    """Resolve a controller name, Policy, or observation-only action function."""
+    if isinstance(policy, str):
+        return make_controller(policy, env=env)
+    if callable(policy) and not isinstance(policy, Policy):
+        from .policies import FunctionPolicy
+
+        return FunctionPolicy(lambda observation, context: policy(observation))
+    return policy
+
 
 def make_controller(
     controller_id: str,
@@ -12,12 +25,9 @@ def make_controller(
     env,
     config: Mapping | None = None,
 ):
-    import aiogym.scenarios  # noqa: F401
-    from aiogym.core.registry import get_scenario
-
     key = str(controller_id).lower()
     base_env = env.unwrapped
-    scenario = get_scenario(base_env.scenario.id)
+    scenario = base_env.scenario
     if key in {"pid", "mpc"}:
         if scenario.controller_config is None:
             raise ValueError(f"scenario {scenario.id!r} has no controller config")

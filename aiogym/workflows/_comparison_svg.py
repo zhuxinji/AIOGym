@@ -9,7 +9,7 @@ from collections.abc import Mapping
 import numpy as np
 
 from ._svg import map_value, plot_range
-from .evaluate import DEFAULT_VALIDATION_SETTLING_FRACTION, _validation_summary
+from .evaluate import _validation_summary
 
 
 _COLORS = (
@@ -26,12 +26,15 @@ _COLORS = (
 
 def render_trajectory_svg(result, *, title: str | None = None) -> str:
     labels = tuple(result["evaluations"])
-    settling_fraction = result.get("settling_fraction", DEFAULT_VALIDATION_SETTLING_FRACTION)
+    criterion = result.get("success_criterion", result["evaluations"][labels[0]].get(
+        "success_criterion", "Defined by the task's episode metrics.",
+    ))
     schema = result["trajectory_schema"]
     time_unit = str(schema["time_unit"])
     resolved_title = title or (
         f"{result['environment']['scenario']} / "
-        f"{result['environment']['benchmark'] or result['environment']['reward']} comparison"
+        f"{result['environment']['benchmark'] or result['environment']['reward']} "
+        f"{'comparison' if len(labels) > 1 else 'evaluation'}"
     )
     baseline = next(
         (label for label in labels if result["evaluations"][label]["policy"].get("id") == "pid"),
@@ -44,16 +47,27 @@ def render_trajectory_svg(result, *, title: str | None = None) -> str:
     }
     case_summaries = {
         label: {
-            seed: _validation_summary(
-                [episode], control_dt=result["environment"]["control_dt"],
-                settling_fraction=settling_fraction,
-            ) if {
-                "constraint_violations", "settling_time"
+            seed: _validation_summary([episode]) if {
+                "safe_completion", "control_success"
             } <= episode["metrics"].keys() else None
             for seed, episode in cases.items()
         }
         for label, cases in episodes.items()
     }
+    terminal_quality = all("terminal_quality_cost" in episode["metrics"]
+                           for cases in episodes.values() for episode in cases.values())
+    cost_metric = "terminal_quality_cost" if terminal_quality else "tracking_ise"
+    cost_name = "terminal quality cost" if terminal_quality else "tracking ISE"
+    endpoint_metrics = [
+        (f"endpoint_{row['name']}_error",
+         f"Endpoint {row['name'].replace('_', ' ')} error\n[{row['unit']}] (median)")
+        for row in schema["output"]
+        if terminal_quality and all(
+            f"endpoint_{row['name']}_error" in episode["metrics"]
+            for cases in episodes.values() for episode in cases.values()
+        )
+    ]
+    extra_summary_height = 35 * len(endpoint_metrics)
     temperature_indices = [
         index for index, row in enumerate(schema["output"]) if row.get("unit") == "degC"
     ]
@@ -116,10 +130,10 @@ def render_trajectory_svg(result, *, title: str | None = None) -> str:
     canvas_width = width + 88
     header_height = max(128, 76 + 26 * math.ceil((len(labels) + 1) / 4))
     summary_top = header_height + 225 * len(groups)
-    paired_top = summary_top + 220
+    paired_top = summary_top + 220 + extra_summary_height
     height = paired_top + (312 + 48 * len(paired_labels) if paired_labels else 120)
     sections = [
-        (header_height, "Shared-case tracking" if paired_labels else "Case tracking",
+        (header_height, "Batch trajectories" if terminal_quality else "Shared-case tracking" if paired_labels else "Case tracking",
          f"Seed {result['trajectory_seed']} · outputs, references and applied actions"),
         (summary_top + 78, "Absolute performance", f"All {len(seeds)} evaluation cases"),
     ]
@@ -142,6 +156,11 @@ def render_trajectory_svg(result, *, title: str | None = None) -> str:
         f'<text class="tick" x="64" y="96">trajectory seed: {result["trajectory_seed"]}; evaluation cases: {len(seeds)}; '
         f'baseline: {html.escape(baseline) if paired_labels else "single policy"}</text>',
     ]
+    if result.get("max_steps") is not None:
+        parts.append(
+            f'<text class="tick" x="64" y="114">step-limited: max_steps={result["max_steps"]}; '
+            'diagnostic comparison</text>'
+        )
     for index, label in enumerate((*labels, "reference")):
         x = width - 664 + index % 4 * 165
         y = 76 + index // 4 * 26
@@ -168,15 +187,22 @@ def render_trajectory_svg(result, *, title: str | None = None) -> str:
     parts.extend((
         '</g>',
         '<g data-section="summary" transform="translate(56 102)">',
-        f'<rect x="64" y="{summary_top + 44}" width="{width - 104}" height="145" rx="8" fill="#f5f7fa"/>',
+        f'<rect x="64" y="{summary_top + 44}" width="{width - 104}" height="{145 + extra_summary_height}" rx="8" fill="#f5f7fa"/>',
     ))
     metric_labels = (
         ("safe_completion", "Safe full-horizon completion"),
-        ("control_success", f"Control success (last {settling_fraction:.0%} of steps)"),
+        ("control_success", "Endpoint quality success" if terminal_quality else "Control success (task criterion)"),
         ("mean_return", "Mean return (higher is better)"),
+        *endpoint_metrics,
     )
     for row, (_key, label) in enumerate(metric_labels):
-        parts.append(f'<text class="body" x="80" y="{summary_top + 102 + row * 35}">{label}</text>')
+        lines = label.splitlines()
+        y = summary_top + 102 + row * 35 - (4 if len(lines) > 1 else 0)
+        caption = html.escape(lines[0]) + "".join(
+            f'<tspan class="tick" x="80" dy="14">{html.escape(line)}</tspan>'
+            for line in lines[1:]
+        )
+        parts.append(f'<text class="body" x="80" y="{y}">{caption}</text>')
     column_width = (width - 370) / len(labels)
     for index, label in enumerate(labels):
         x = 330 + (index + 0.5) * column_width
@@ -187,6 +213,11 @@ def render_trajectory_svg(result, *, title: str | None = None) -> str:
             if key == "mean_return":
                 value = result["evaluations"][label]["aggregate"]["episode_return"]["mean"]
                 display = _number(value)
+            elif key.startswith("endpoint_"):
+                values = [episode["metrics"][key] for episode in episodes[label].values()
+                          if episode["metrics"]["safe_completion"]]
+                value = float(np.median(values)) if values else None
+                display = _number(value) if value is not None else "N/A"
             elif all(case is not None for case in case_summaries[label].values()):
                 count = sum(case[key] for case in case_summaries[label].values())
                 value = count / len(seeds)
@@ -198,8 +229,9 @@ def render_trajectory_svg(result, *, title: str | None = None) -> str:
                 f'<text class="metric" data-policy="{html.escape(label, quote=True)}" data-metric="{key}" '
                 f'data-value="{value}" x="{x}" y="{summary_top + 102 + row * 35}" text-anchor="middle">{display}</text>'
             )
-    parts.append(f'<text class="tick" x="76" y="{summary_top + 210}">'
-                 f'Safe = full horizon without violations; control success also holds every scenario settling tolerance for the last {settling_fraction:.0%} of planned control steps (rounded up). '
+    parts.append(f'<text class="tick" x="76" y="{summary_top + 210 + extra_summary_height}">'
+                 f'{html.escape(criterion)} '
+                 + ('Endpoint error medians use safe complete batches. ' if terminal_quality else '') +
                  'N/A = required metrics unavailable.</text></g>')
 
     if paired_labels:
@@ -214,62 +246,60 @@ def render_trajectory_svg(result, *, title: str | None = None) -> str:
                     excluded[label].append(f"seed {seed}: required control metrics unavailable")
                 elif not stats["safe_completion"] or not ref_stats["safe_completion"]:
                     excluded[label].append(f"seed {seed}: unsafe or incomplete pair")
-                elif "tracking_ise" not in episode["metrics"] or "tracking_ise" not in reference["metrics"]:
-                    excluded[label].append(f"seed {seed}: tracking ISE unavailable")
-                elif reference["metrics"]["tracking_ise"] == 0:
+                elif cost_metric not in episode["metrics"] or cost_metric not in reference["metrics"]:
+                    excluded[label].append(f"seed {seed}: {cost_name} unavailable")
+                elif reference["metrics"][cost_metric] == 0:
                     excluded[label].append(f"seed {seed}: ref=0, undefined ratio")
                 else:
                     pairs[label].append((
-                        seed, episode["metrics"]["tracking_ise"] / reference["metrics"]["tracking_ise"],
+                        seed, episode["metrics"][cost_metric] / reference["metrics"][cost_metric],
                     ))
         all_values = [1.0, *(ratio for rows in pairs.values() for _seed, ratio in rows)]
-        logarithmic = min(all_values) > 0
-        if logarithmic:
-            lower, upper = math.log2(min(all_values)), math.log2(max(all_values))
-            span = upper - lower
-            if span == 0:
-                lower, upper = -1.0, 1.0
-                ticks = [0.5, 1.0, 2.0]
-            elif span >= 1:
-                lower, upper = min(-0.25, math.floor(lower)), max(0.25, math.ceil(upper))
-                stride = max(1, math.ceil((upper - lower) / 8))
-                ticks = sorted({1.0, *(2.0 ** power for power in range(
-                    math.ceil(lower), math.floor(upper) + 1, stride,
-                ))})
-            else:
-                padding = span * 0.12
-                lower, upper = lower - padding, upper + padding
-                ticks = sorted({1.0, *(2.0 ** value for value in np.linspace(lower, upper, 5))})
-                ticks = [tick for tick in ticks if tick == 1 or abs(math.log2(tick)) > (upper - lower) * 0.07]
-            axis_label = "Relative ISE · log scale"
+        # Keep zero and near-zero costs finite without changing their ratios.
+        # Above the baseline, logarithmic spacing still accommodates large costs.
+        scale_ratio = lambda value: value if value <= 1 else 1 + math.log2(value)
+        lower, upper = scale_ratio(min(all_values)), scale_ratio(max(all_values))
+        span = upper - lower
+        if span == 0:
+            lower, upper = 0.5, 2.0
+            ticks = [0.5, 1.0, 2.0]
+        elif span >= 1:
+            lower, upper = min(0.75, math.floor(lower)), max(1.25, math.ceil(upper))
+            stride = max(1, math.ceil((upper - lower) / 8))
+            ticks = sorted({1.0, *(value for value in (0.0, 0.5) if value >= lower),
+                            *(2.0 ** (power - 1) for power in range(
+                                1, math.floor(upper) + 1, stride,
+                            ))})
         else:
-            lower, upper = 0.0, max(all_values) * 1.05
-            ticks = sorted({1.0, *np.linspace(lower, upper, 5)})
-            # Zero is a valid cost, not a value to discard or replace with epsilon.
-            axis_label = "Relative ISE · linear scale (includes zero cost)"
+            padding = span * 0.12
+            lower, upper = max(0.0, lower - padding), upper + padding
+            ticks = sorted({1.0, *(value if value <= 1 else 2.0 ** (value - 1)
+                                  for value in np.linspace(lower, upper, 5))})
+            ticks = [tick for tick in ticks if tick == 1 or abs(scale_ratio(tick) - 1) > (upper - lower) * 0.07]
+        axis_label = f"Relative {'terminal cost' if terminal_quality else 'ISE'} · linear ≤1×, log >1×"
         sections.append((
-            paired_top + 128, f"Paired tracking cost vs {'PID' if baseline == 'pid' else baseline}",
+            paired_top + 128, f"Paired {'terminal quality' if terminal_quality else 'tracking'} cost vs {'PID' if baseline == 'pid' else baseline}",
             f"{len(seeds)} cases · {axis_label} · largest ratio labeled",
         ))
         left, right = 190.0, float(width - 240)
         precision = max(3, 2 - math.floor(math.log10(upper - lower)))
         chart_top = paired_top + 71
         bottom = chart_top + 48 * len(paired_labels)
-        pid_x = _map_x(0.0 if logarithmic else 1.0, lower, upper, left, right)
+        pid_x = _map_x(1.0, lower, upper, left, right)
         parts.extend((
             '<g data-section="paired" transform="translate(56 155)">',
             f'<text class="legend" x="{pid_x - 14}" y="{paired_top + 57}" text-anchor="end" style="fill:#237354">← Better</text>',
             f'<text class="legend" x="{pid_x + 14}" y="{paired_top + 57}" style="fill:#9a5134">Worse →</text>',
         ))
         for tick in ticks:
-            x = _map_x(math.log2(tick) if logarithmic else tick, lower, upper, left, right)
+            x = _map_x(scale_ratio(tick), lower, upper, left, right)
             stroke = "#5f6368" if tick == 1 else "#e9edf1"
             dash = ' stroke-dasharray="4 4"' if tick == 1 else ""
             parts.append(f'<line x1="{x}" x2="{x}" y1="{chart_top}" y2="{bottom}" stroke="{stroke}"{dash}/>')
             # Keep nearly identical ratios legible and avoid overlapping zero/one ticks.
             if tick != 1 and abs(x - pid_x) < 45:
                 continue
-            display = f"{tick:.{precision}g}" if logarithmic and upper - lower < 1 else _number(tick)
+            display = f"{tick:.{precision}g}" if upper - lower < 1 else _number(tick)
             parts.append(f'<text class="legend" x="{x}" y="{bottom + 23}" text-anchor="middle">{display}×</text>')
         for row, label in enumerate(paired_labels):
             center = chart_top + (row + 0.5) * 48
@@ -295,7 +325,7 @@ def render_trajectory_svg(result, *, title: str | None = None) -> str:
             within = values[(values >= q1 - 1.5 * iqr) & (values <= q3 + 1.5 * iqr)]
             low, high = float(within.min()), float(within.max())
             x_low, x_q1, x_median, x_q3, x_high = [
-                _map_x(math.log2(value) if logarithmic else value, lower, upper, left, right)
+                _map_x(scale_ratio(value), lower, upper, left, right)
                 for value in (low, q1, median, q3, high)
             ]
             parts.extend((
@@ -312,16 +342,16 @@ def render_trajectory_svg(result, *, title: str | None = None) -> str:
                 outlier = ratio < low or ratio > high
                 if not outlier and index != worst:
                     continue
-                x = _map_x(math.log2(ratio) if logarithmic else ratio, lower, upper, left, right)
+                x = _map_x(scale_ratio(ratio), lower, upper, left, right)
                 episode, reference = episodes[label][seed], episodes[baseline][seed]
-                detail = (f"{label}, seed {seed}: {ratio:.8g}× baseline ISE; "
+                detail = (f"{label}, seed {seed}: {ratio:.8g}× baseline {cost_name}; "
                           f"return={episode['return']:.8g}; baseline return={reference['return']:.8g}")
                 parts.append(
                     f'<circle data-policy="{html.escape(label, quote=True)}" data-seed="{seed}" data-ratio="{ratio:.15g}" data-outlier="{str(outlier).lower()}" '
                     f'cx="{x}" cy="{center}" r="3.5" fill="{color}" fill-opacity="0.65"><title>{html.escape(detail)}</title></circle>'
                 )
                 if index == worst:
-                    display = f"{ratio:.{precision}g}" if logarithmic and upper - lower < 1 else _number(ratio)
+                    display = f"{ratio:.{precision}g}" if upper - lower < 1 else _number(ratio)
                     parts.extend((
                         f'<circle cx="{x}" cy="{center}" r="5.5" fill="none" stroke="{color}" stroke-width="1.2" pointer-events="none"/>',
                         f'<text class="legend" x="{x + 14}" y="{center + 4}" style="fill:{color}">seed {seed} · {display}×</text>',

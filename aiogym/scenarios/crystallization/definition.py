@@ -1,12 +1,10 @@
-"""Scenario registration for batch crystallization."""
+"""Scenario definition for batch crystallization."""
 from __future__ import annotations
 
 from copy import deepcopy
 
 from aiogym.core.contracts import Scenario
 from aiogym.core.specs import Reward
-from aiogym.scenarios._metrics import regulation_episode_metrics
-from aiogym.scenarios._shared import regulation_reward
 
 from .episodes import (
     BENCHMARKS,
@@ -15,6 +13,7 @@ from .episodes import (
     sample_training_episode,
 )
 from .model import CrystallizationModel
+from .metrics import SUCCESS_CRITERION, batch_quality_metrics, batch_quality_reward
 
 
 _PID = {
@@ -37,16 +36,15 @@ _PID = {
     "bias": "default_action",
 }
 _MPC = {
-    "Ts": 1.0,
-    "P": 20,
-    "move_supp": [0.5],
+    "prediction_horizon": 10,
+    "move_supp": [0.05],
     "cv_scale": [0.5, 3.5],
     "q_y": [1.0, 1.0],
 }
 
 
 def _controller_config(controller_id, reward_id):
-    if reward_id != "regulation":
+    if reward_id != "batch-quality":
         raise ValueError(
             f"crystallization has no controllers for reward {reward_id!r}"
         )
@@ -68,16 +66,17 @@ SCENARIO = Scenario(
     sample_training_disturbance=sample_training_disturbance,
     benchmarks=BENCHMARKS,
     rewards={
-        "regulation": Reward(
-            id="regulation",
-            function=regulation_reward,
-            episode_metric_function=regulation_episode_metrics,
+        "batch-quality": Reward(
+            id="batch-quality",
+            function=batch_quality_reward,
+            episode_metric_function=batch_quality_metrics,
             primary_metric="return",
             metric_direction="maximize",
             safety_violation_penalty=100.0,
+            success_criterion=SUCCESS_CRITERION,
         ),
     },
-    default_reward="regulation",
+    default_reward="batch-quality",
     controller_config=_controller_config,
 )
 

@@ -10,7 +10,8 @@ from typing import Any
 import gymnasium as gym
 import numpy as np
 
-from .contracts import EpisodeSampler, TrainingDisturbanceSampler
+from .contracts import EpisodeSampler, TrainingDisturbanceSampler, environment_interface
+from .information import EnvironmentInformation
 from .specs import EpisodeSpec
 
 
@@ -136,7 +137,12 @@ def _sample_integer(rng: np.random.Generator, bounds: tuple[int, int]) -> int:
     return int(rng.integers(bounds[0], bounds[1] + 1))
 
 
-class EpisodeSamplingWrapper(gym.Wrapper):
+class _InterfacePreservingWrapper(EnvironmentInformation, gym.Wrapper):
+    def policy_interface(self):
+        return environment_interface(self.env)
+
+
+class EpisodeSamplingWrapper(_InterfacePreservingWrapper):
     """Resolve scenario-owned tracking conditions and physical disturbances."""
 
     def __init__(
@@ -206,7 +212,7 @@ class EpisodeSamplingWrapper(gym.Wrapper):
         return observation, info
 
 
-class ActionChannelWrapper(gym.Wrapper):
+class ActionChannelWrapper(_InterfacePreservingWrapper):
     """Apply episode-sampled command delay and loss-of-effectiveness faults."""
 
     def __init__(
@@ -302,8 +308,8 @@ class ActionChannelWrapper(gym.Wrapper):
         }
 
 
-class ObservationChannelWrapper(gym.Wrapper):
-    """Apply normalized observation delay, bias, and white measurement noise."""
+class ObservationChannelWrapper(_InterfacePreservingWrapper):
+    """Delay observations and their policy reference together, then add noise."""
 
     def __init__(
         self,
@@ -317,7 +323,7 @@ class ObservationChannelWrapper(gym.Wrapper):
         self._noise_config = noise
         self._delay_rng = np.random.default_rng()
         self._noise_rng = np.random.default_rng()
-        self._queue: deque[np.ndarray] = deque()
+        self._queue: deque[tuple[np.ndarray, np.ndarray]] = deque()
         self._observation_delay = 0
         self._bias = np.zeros(self.observation_space.shape, dtype=np.float32)
         observation_schema = tuple(self.unwrapped.model.observation_schema())
@@ -337,12 +343,12 @@ class ObservationChannelWrapper(gym.Wrapper):
             kinds = [row["kind"] for row in observation_schema]
             if any(
                 not isinstance(kind, str)
-                or kind not in {"measurement", "reference", "action", "derived"}
+                or kind not in {"measurement", "reference", "action", "derived", "time"}
                 for kind in kinds
             ):
                 raise ValueError(
                     "observation schema kind must be measurement, reference, action, "
-                    "or derived"
+                    "derived, or time"
                 )
             self._noise_mask = np.asarray(
                 [kind in {"measurement", "action"} for kind in kinds],
@@ -373,8 +379,12 @@ class ObservationChannelWrapper(gym.Wrapper):
             )
         )
         initial = np.asarray(observation, dtype=np.float32)
+        reference = np.asarray(
+            info.get("policy_reference", info["reference"]), dtype=float,
+        ).copy()
         self._queue = deque(
-            initial.copy() for _ in range(self._observation_delay)
+            (initial.copy(), reference.copy())
+            for _ in range(self._observation_delay)
         )
         bias_std = 0.0 if self._noise_config is None else self._noise_config["bias_std"]
         self._bias = np.asarray(
@@ -391,14 +401,19 @@ class ObservationChannelWrapper(gym.Wrapper):
         )
         updated = dict(info)
         updated["runtime_variation"] = dict(self.unwrapped.runtime_variation)
+        updated["policy_reference"] = reference
         return self._apply(initial), updated
 
     def step(self, action):
         observation, reward, terminated, truncated, info = self.env.step(action)
-        self._queue.append(np.asarray(observation, dtype=np.float32).copy())
-        delayed = self._queue.popleft()
+        self._queue.append((
+            np.asarray(observation, dtype=np.float32).copy(),
+            np.asarray(info.get("policy_reference", info["reference"]), dtype=float).copy(),
+        ))
+        delayed, reference = self._queue.popleft()
         updated = dict(info)
         updated["runtime_variation"] = dict(self.unwrapped.runtime_variation)
+        updated["policy_reference"] = reference
         return self._apply(delayed), reward, terminated, truncated, updated
 
     def _apply(self, observation: np.ndarray) -> np.ndarray:

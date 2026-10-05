@@ -11,8 +11,9 @@ import gymnasium as gym
 import numpy as np
 
 from .contracts import ProcessModel, Scenario
+from .information import EnvironmentInformation
 from .model import apply_action_slew, integrate_process_state
-from .registry import get_benchmark, get_reward, get_scenario
+from .catalog import get_benchmark, get_reward, get_scenario
 from .specs import Benchmark, EpisodeSpec, Reward
 from .variations import (
     ActionChannelWrapper,
@@ -92,7 +93,7 @@ def _validate_disturbance_values(
     return resolved
 
 
-class ProcessControlEnv(gym.Env):
+class ProcessControlEnv(EnvironmentInformation, gym.Env):
     """Deterministic process simulation with physical actions."""
 
     metadata = {"render_modes": []}
@@ -147,6 +148,13 @@ class ProcessControlEnv(gym.Env):
     def state(self) -> np.ndarray:
         return self._state.copy()
 
+    def policy_interface(self) -> dict[str, Any]:
+        return {
+            "version": self.scenario.interface_version,
+            "observation": self.model.observation_schema(),
+            "action": self.model.action_schema(),
+        }
+
     @property
     def y_sp(self) -> np.ndarray:
         return self._reference_state.copy()
@@ -198,7 +206,7 @@ class ProcessControlEnv(gym.Env):
         constraints = self._constraints()
         margins = self._safety_margins()
         observation = self._observation()
-        return observation, self._info(
+        info = self._info(
             commanded_action=None,
             channel_action=None,
             applied_action=None,
@@ -209,6 +217,9 @@ class ProcessControlEnv(gym.Env):
             transition_disturbance=None,
             transition_step_index=None,
         )
+        info["episode_spec"] = self.episode.as_dict()
+        info["episode_parameters"] = dict(self.episode_parameters)
+        return observation, info
 
     def _validate_action(self, action) -> np.ndarray:
         commanded = np.asarray(action, dtype=np.float32).reshape(-1)
@@ -231,8 +242,6 @@ class ProcessControlEnv(gym.Env):
         previous_applied = self._previous_applied_action.copy()
         applied = self._apply_action_slew(commanded)
         self._state = self._integrate(previous_state, applied)
-        if not np.isfinite(self._state).all():
-            raise FloatingPointError("model produced a non-finite state")
 
         constraints = self._constraints(transition_disturbance)
         safety_margins = self._safety_margins(transition_disturbance)
@@ -272,7 +281,9 @@ class ProcessControlEnv(gym.Env):
             reward_terms["safety"] = -penalty
 
         self._step_index += 1
-        truncated = self._step_index >= self.episode_steps
+        at_horizon = self._step_index >= self.episode_steps
+        truncated = at_horizon and not self.episode.terminal_at_horizon
+        terminated = terminated or (at_horizon and self.episode.terminal_at_horizon)
         if not (terminated or truncated):
             self._apply_events()
         info = self._info(
@@ -320,6 +331,7 @@ class ProcessControlEnv(gym.Env):
                 self._reference(),
                 self._previous_applied_action,
                 self.disturbances,
+                remaining_time=(self.episode_steps - self._step_index) * self.control_dt,
             ),
             dtype=float,
         )
@@ -395,9 +407,7 @@ class ProcessControlEnv(gym.Env):
             "channel_action": None if channel_action is None else channel_action.copy(),
             "applied_action": None if applied_action is None else applied_action.copy(),
             "previous_applied_action": self._previous_applied_action.copy(),
-            "episode_spec": self.episode.as_dict(),
             "episode_family": self.episode_family,
-            "episode_parameters": dict(self.episode_parameters),
             "runtime_variation": dict(self.runtime_variation),
             "reward_terms": dict(reward_terms),
             "constraint_costs": dict(constraints),
@@ -428,11 +438,10 @@ class ProcessControlEnv(gym.Env):
 
 
 def make_env(
-    scenario: str,
+    scenario: str | Scenario,
     *,
     reward: str | None = None,
     parameters: Mapping[str, Any] | None = None,
-    heater: Sequence[int] | None = None,
     initial_state: Sequence[float] | None = None,
     benchmark: str | None = None,
     randomize: bool = False,
@@ -472,8 +481,6 @@ def make_env(
         raise TypeError("initial_state must be a numeric sequence or None")
     if initial_state is not None and randomize:
         raise ValueError("initial_state cannot be combined with randomize=True")
-    if heater is not None and scenario != "cascade":
-        raise ValueError("heater is supported only by the cascade scenario")
     definition = get_scenario(scenario)
     if benchmark is not None and (reward is not None or parameters is not None):
         raise ValueError(
@@ -485,14 +492,14 @@ def make_env(
             "benchmark fixes the initial state; do not pass initial_state"
         )
     resolved_benchmark = (
-        None if benchmark is None else get_benchmark(scenario, benchmark)
+        None if benchmark is None else get_benchmark(definition, benchmark)
     )
     reward_id = (
         resolved_benchmark.reward_id
         if resolved_benchmark is not None
         else definition.default_reward if reward is None else reward
     )
-    resolved_reward = get_reward(scenario, reward_id)
+    resolved_reward = get_reward(definition, reward_id)
     resolved_noise = resolve_noise_option(noise)
     resolved_delay = resolve_delay_option(delay)
     resolved_fault = resolve_fault_option(fault)
@@ -509,16 +516,16 @@ def make_env(
             "benchmark cannot be combined with randomize, boundary_probability, "
             "disturbance, disturbance_schedule, noise, delay, or fault"
         )
-    model = (
-        definition.make_model(parameters, heater=heater)
-        if scenario == "cascade"
-        else definition.make_model(parameters)
-    )
+    model = definition.make_model(parameters)
+    if model.scenario != definition.id:
+        raise ValueError("scenario model does not belong to scenario id")
     episode = (
         definition.make_default_episode(model)
         if resolved_benchmark is None
         else resolved_benchmark.make_episode(model, 0)
     )
+    if not isinstance(episode, EpisodeSpec):
+        raise TypeError("make_default_episode must return EpisodeSpec")
     if initial_state is not None:
         try:
             supplied_initial_state = tuple(initial_state)
@@ -536,13 +543,10 @@ def make_env(
         episode,
         benchmark=resolved_benchmark,
     )
-    runtime_parameters = dict(model.resolved_parameters)
-    if scenario == "cascade":
-        runtime_parameters["heater"] = list(model.heater)
     base.runtime_config = {
-        "scenario": scenario,
+        "scenario": definition.id,
         "reward": reward_id,
-        "parameters": runtime_parameters,
+        "parameters": dict(model.resolved_parameters),
         "initial_state": (
             None if initial_state is None else list(episode.initial_state)
         ),

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from aiogym.core.specs import Benchmark, EpisodeSpec
-from aiogym.scenarios._metrics import regulation_episode_metrics
+from .metrics import batch_quality_metrics
 
 
 _BATCH_HORIZON = 100
@@ -22,6 +22,7 @@ def make_default_episode(model) -> EpisodeSpec:
         initial_action=target_action,
         reference=tuple(endpoint["output"]),
         horizon=_TRACKING_HORIZON,
+        terminal_at_horizon=True,
         disturbances=model.default_disturbances(),
     )
 
@@ -58,6 +59,7 @@ def _tracking_episode(model, rng) -> EpisodeSpec:
         initial_action=target["action"],
         reference=target["reference"],
         horizon=_TRACKING_HORIZON,
+        terminal_at_horizon=True,
         disturbances=model.default_disturbances(),
     )
 
@@ -70,6 +72,7 @@ def _disturbance_episode(model, rng) -> EpisodeSpec:
         initial_action=tuple(model.default_action()),
         reference=tuple(model.default_setpoint_vector()),
         horizon=_BATCH_HORIZON,
+        terminal_at_horizon=True,
         disturbances=model.default_disturbances(),
         disturbance_schedule={
             start: {
@@ -97,6 +100,7 @@ def _boundary_episode(model, rng) -> EpisodeSpec:
         initial_action=action,
         reference=tuple(endpoint["output"]),
         horizon=_BATCH_HORIZON,
+        terminal_at_horizon=True,
         disturbances=model.default_disturbances(),
     )
 
@@ -104,7 +108,7 @@ def _boundary_episode(model, rng) -> EpisodeSpec:
 def sample_training_episode(
     model, rng, reward_id, boundary: bool
 ) -> tuple[EpisodeSpec, str]:
-    if reward_id != "regulation":
+    if reward_id != "batch-quality":
         raise ValueError(
             f"unsupported crystallization training reward {reward_id!r}"
         )
@@ -128,6 +132,7 @@ def sample_training_episode(
             initial_action=target["action"],
             reference=target["reference"],
             horizon=_TRACKING_HORIZON,
+            terminal_at_horizon=True,
             disturbances=model.default_disturbances(),
         ),
         "boundary-batch" if boundary else "interior",
@@ -150,32 +155,41 @@ def sample_training_disturbance(model, rng):
 BENCHMARKS = {
     "tracking": Benchmark(
         id="tracking",
-        reward_id="regulation",
+        description='Reach a sampled attainable crystal-quality target at the batch endpoint.',
+        horizon=_TRACKING_HORIZON,
+        reward_id="batch-quality",
         episode_factory=_tracking_episode,
-        metric_function=regulation_episode_metrics,
+        metric_function=batch_quality_metrics,
         ranking_metrics=(
-            ("unsafe_rate", "minimize"),
-            ("return", "maximize"),
+            ("safe_completion", "maximize"),
+            ("control_success", "maximize"),
+            ("terminal_quality_cost", "minimize"),
         ),
     ),
     "disturbance-rejection": Benchmark(
         id="disturbance-rejection",
-        reward_id="regulation",
+        description='Reach the batch-quality target under scheduled kinetic and solubility disturbances.',
+        horizon=_BATCH_HORIZON,
+        reward_id="batch-quality",
         episode_factory=_disturbance_episode,
-        metric_function=regulation_episode_metrics,
+        metric_function=batch_quality_metrics,
         ranking_metrics=(
-            ("unsafe_rate", "minimize"),
-            ("return", "maximize"),
+            ("safe_completion", "maximize"),
+            ("control_success", "maximize"),
+            ("terminal_quality_cost", "minimize"),
         ),
     ),
     "boundary-safety": Benchmark(
         id="boundary-safety",
-        reward_id="regulation",
+        description='Complete a high-concentration batch safely and reach its attainable endpoint target.',
+        horizon=_BATCH_HORIZON,
+        reward_id="batch-quality",
         episode_factory=_boundary_episode,
-        metric_function=regulation_episode_metrics,
+        metric_function=batch_quality_metrics,
         ranking_metrics=(
-            ("unsafe_rate", "minimize"),
-            ("return", "maximize"),
+            ("safe_completion", "maximize"),
+            ("control_success", "maximize"),
+            ("terminal_quality_cost", "minimize"),
         ),
     ),
 }

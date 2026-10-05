@@ -95,7 +95,7 @@ def test_cascade_settling_uses_physical_level_and_temperature_tolerances():
     )
     episode = SimpleNamespace(
         episode_return=0.0,
-        reset_info={"episode_spec": {"disturbance_schedule": {}}},
+        reset_info={"episode_spec": {"horizon": 1, "disturbance_schedule": {}}},
         transitions=(transition,),
     )
     env = SimpleNamespace(
@@ -233,7 +233,7 @@ def test_bypass_flow_affects_cascade_balances_but_not_branch_flowmeters():
 
 
 def test_each_heater_independently_heats_its_own_tank():
-    model = CascadeModel(heater=[1, 1, 1])
+    model = CascadeModel({"heater": [1, 1, 1]})
     state = model.initial_state()
     base_action = np.asarray(model.default_action(), dtype=float)
     base = np.asarray(model.dynamics(state, base_action), dtype=float)
@@ -248,7 +248,7 @@ def test_each_heater_independently_heats_its_own_tank():
 
 
 def test_low_level_and_temperature_interlocks_are_per_tank():
-    model = CascadeModel(heater=[1, 1, 1])
+    model = CascadeModel({"heater": [1, 1, 1]})
     action = np.ones(7)
     state = model.initial_state()
     state[0] = model.parameter("heater_min_level") - 0.01
@@ -318,10 +318,9 @@ def test_runtime_thermal_disturbances_stay_outside_policy_observation():
 
 
 def test_cascade_parameter_overrides_preserve_the_interface_and_change_dynamics():
-    base = CascadeModel(heater=[1, 1, 1])
+    base = CascadeModel({"heater": [1, 1, 1]})
     changed = CascadeModel(
-        {"heater_power_max": [1500.0, 1800.0, 2200.0]},
-        heater=[1, 1, 1],
+        {"heater_power_max": [1500.0, 1800.0, 2200.0], "heater": [1, 1, 1]},
     )
     state = base.initial_state()
     action = [*base.default_action()[:4], 0.5, 0.5, 0.5]
@@ -568,10 +567,11 @@ def test_cascade_tuned_controller_config_is_shared_by_all_benchmarks():
     assert pid["feedforward"] == (
         "tracking_steady_state_action_on_reference_change"
     )
-    assert mpc["Ts"] == 2.0
-    assert mpc["horizon"] == 30
-    assert mpc["move_supp"] == [50.0] * 4 + [2.0] * 3
-    assert mpc["steady_input_weight"] == [1.0] * 7
+    assert mpc["control_dt"] == 2.0
+    assert mpc["prediction_horizon"] == 20
+    assert mpc["solve_every"] == 2
+    assert mpc["move_supp"] == [25.0] * 4 + [2.0] * 3
+    assert mpc["steady_input_weight"] == [0.5] * 7
     assert mpc["q_y"] == [3.0, 3.0, 3.0, 2.0, 2.5, 4.0]
 
 
@@ -597,10 +597,10 @@ def test_cascade_evaluation_aggregates_settling_as_a_case_rate():
     try:
         result = aiogym.evaluate(
             env=env,
-            policy="hold",
+            policies={"policy": "hold"},
             seeds=(0, 1),
             max_steps=2,
-        )
+        )["evaluations"]["policy"]
     finally:
         env.close()
     assert result["ranking_metrics"] == [
@@ -646,11 +646,12 @@ def test_physical_io_declares_level_temperature_and_all_actuator_channels():
 
 
 def test_public_heater_configuration_masks_unavailable_actions_and_power():
-    env = aiogym.make_env("cascade", heater=[1, 0, 1], benchmark="tracking")
+    env = aiogym.make_env("cascade", parameters={"heater": [1, 0, 1]})
     try:
         _, info = env.reset(seed=3)
         assert env.unwrapped.model.heater == (1, 0, 1)
-        assert env.unwrapped.runtime_config["parameters"]["heater"] == [1, 0, 1]
+        assert env.unwrapped.model.resolved_parameters["heater"] == (1, 0, 1)
+        assert env.unwrapped.model.parameter("heater") == (1, 0, 1)
         _, _, terminated, truncated, step_info = env.step(np.ones(7))
         assert not terminated
         assert not truncated
@@ -668,6 +669,7 @@ def test_public_heater_configuration_masks_unavailable_actions_and_power():
 @pytest.mark.parametrize(
     "heater",
     (
+        None,
         [1, 0],
         [1, 0, 0, 1],
         [1, 0.0, 0],
@@ -677,12 +679,53 @@ def test_public_heater_configuration_masks_unavailable_actions_and_power():
 )
 def test_public_heater_configuration_rejects_invalid_values(heater):
     with pytest.raises((TypeError, ValueError), match="heater"):
-        aiogym.make_env("cascade", heater=heater)
+        aiogym.make_env("cascade", parameters={"heater": heater})
 
 
 def test_public_heater_configuration_rejects_other_scenarios():
-    with pytest.raises(ValueError, match="only by the cascade"):
-        aiogym.make_env("three_tank", heater=[1, 0, 0])
+    with pytest.raises(ValueError, match="unknown three-tank parameters"):
+        aiogym.make_env("three_tank", parameters={"heater": [1, 0, 0]})
+
+
+@pytest.mark.parametrize("parameters", [None, {
+    "heater": [1, 0, 1], "heater_power_max": [1500.0, 1800.0, 2200.0],
+}])
+def test_cascade_metadata_parameters_reconstruct_the_same_environment(parameters):
+    from aiogym.workflows._metadata import environment_metadata, validate_environment_compatibility
+
+    env = aiogym.make_env("cascade", parameters=parameters)
+    try:
+        metadata = environment_metadata(env)
+        rebuilt = aiogym.make_env(metadata["scenario"], parameters=metadata["parameters"])
+        try:
+            assert environment_metadata(rebuilt) == metadata
+            validate_environment_compatibility(metadata, rebuilt)
+            heater_parameter = next(
+                row for row in aiogym.list_parameters("cascade") if row["name"] == "heater"
+            )
+            assert heater_parameter["default"] == [1, 0, 0]
+            assert heater_parameter["unit"] == "binary"
+            assert heater_parameter["allowed_values"] == "Exactly three binary values: 0 or 1"
+            expected, expected_info = env.reset(seed=3)
+            observed, observed_info = rebuilt.reset(seed=3)
+            np.testing.assert_array_equal(observed, expected)
+            assert observed_info["episode_spec"] == expected_info["episode_spec"]
+        finally:
+            rebuilt.close()
+    finally:
+        env.close()
+
+
+def test_cascade_benchmark_has_no_heater_override_path():
+    with pytest.raises(TypeError, match="heater"):
+        aiogym.make_env("cascade", heater=[1, 0, 1])
+    with pytest.raises(ValueError, match="benchmark fixes model parameters"):
+        aiogym.make_env("cascade", benchmark="tracking", parameters={"heater": [1, 0, 1]})
+    env = aiogym.make_env("cascade", benchmark="tracking")
+    try:
+        assert env.unwrapped.model.heater == (1, 0, 0)
+    finally:
+        env.close()
 
 
 @pytest.mark.parametrize(
@@ -698,41 +741,30 @@ def test_public_heater_configuration_rejects_other_scenarios():
         [1, 1, 1],
     ),
 )
-def test_training_and_benchmarks_respect_each_heater_configuration(heater):
+def test_training_and_episode_factories_respect_each_heater_configuration(heater):
     available = np.asarray(heater, dtype=bool)
-    configurations = (
-        {"randomize": True},
-        {"benchmark": "tracking"},
-        {"benchmark": "disturbance-rejection"},
-        {"benchmark": "boundary-safety"},
-    )
-    for configuration in configurations:
-        env = aiogym.make_env("cascade", heater=heater, **configuration)
-        try:
-            _, _ = env.reset(seed=4)
-            episode = env.unwrapped.episode
+    env = aiogym.make_env("cascade", parameters={"heater": heater}, randomize=True)
+    try:
+        env.reset(seed=4)
+        base = env.unwrapped
+        episodes = [base.episode, *(
+            benchmark.make_episode(base.model, 4)
+            for benchmark in base.scenario.benchmarks.values()
+        )]
+        for episode in episodes:
             initial_action = np.asarray(episode.initial_action, dtype=float)
             assert initial_action[4:][~available] == pytest.approx(0.0)
-
-            target_action = env.unwrapped.model.tracking_steady_state_action(
-                episode.reference,
-                episode.disturbances,
+            target_action = base.model.tracking_steady_state_action(
+                episode.reference, episode.disturbances,
             )
             assert target_action is not None
-            target_action = np.asarray(target_action, dtype=float)
-            assert target_action[4:][~available] == pytest.approx(0.0)
-
-            if configuration.get("benchmark") == "disturbance-rejection":
+            assert np.asarray(target_action)[4:][~available] == pytest.approx(0.0)
+            if episode.disturbance_schedule:
                 event = next(iter(episode.disturbance_schedule.values()))
-                efficiency_names = {
-                    name
-                    for name in event
-                    if name.startswith("heater_")
-                }
+                efficiency_names = {name for name in event if name.startswith("heater_")}
                 assert efficiency_names == {
                     f"heater_H{index + 1}_efficiency_factor"
-                    for index, enabled in enumerate(heater)
-                    if enabled
+                    for index, enabled in enumerate(heater) if enabled
                 }
-        finally:
-            env.close()
+    finally:
+        env.close()

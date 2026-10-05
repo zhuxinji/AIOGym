@@ -32,7 +32,7 @@ def test_collect_uses_the_given_env_and_round_trips_episodes(tmp_path):
     reader = DatasetReader(output)
     assert result["episodes"] == len(reader) == 2
     assert result["transitions"] == reader.transition_count == 6
-    assert reader.metadata["schema_version"] == "aiogym.dataset.v3"
+    assert reader.metadata["schema_version"] == "aiogym.dataset.v4"
     assert reader.metadata["environment"]["scenario"] == "three_tank"
     assert reader.metadata["environment"]["benchmark"] is None
     assert reader.metadata["environment"]["randomize"] is False
@@ -168,6 +168,30 @@ def small_dataset(tmp_path):
     finally:
         env.close()
     return path
+
+
+@pytest.mark.parametrize("version", ["aiogym.dataset.v2", "aiogym.dataset.v3", "aiogym.dataset.v4"])
+def test_training_dataset_interface_requirement_and_legacy_warning(small_dataset, version):
+    from aiogym.rl.datasets import load_training_dataset
+    from aiogym.workflows.dataset import _metadata_digest
+
+    path = small_dataset / "metadata.json"
+    metadata = json.loads(path.read_text())
+    metadata["schema_version"] = version
+    del metadata["environment"]["policy_interface"]
+    metadata["content_sha256"] = _metadata_digest(metadata)
+    path.write_text(json.dumps(metadata))
+    env = make_env("heater")
+    try:
+        if version == "aiogym.dataset.v4":
+            with pytest.raises(ValueError, match="missing compatibility fields.*policy_interface"):
+                load_training_dataset(small_dataset, env=env)
+        else:
+            with pytest.warns(UserWarning, match="only legacy compatibility checks"):
+                reader = load_training_dataset(small_dataset, env=env)
+            assert reader.transition_count == 2
+    finally:
+        env.close()
 
 
 @pytest.mark.parametrize("field, value, message", [

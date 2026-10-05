@@ -1,10 +1,11 @@
-"""Scenario registration for the fired-heater model."""
+"""Scenario definition for the fired-heater model."""
 from __future__ import annotations
 
 from copy import deepcopy
 
 from aiogym.core.contracts import Scenario
 from aiogym.core.specs import Reward
+from aiogym.scenarios._metrics import REGULATION_SUCCESS_CRITERION
 from aiogym.scenarios._metrics import regulation_episode_metrics
 from aiogym.scenarios._shared import regulation_reward
 
@@ -37,13 +38,12 @@ _PID = {
     "bias": "default_action",
 }
 _MPC = {
-    "Ts": 2.0,
-    "P": 20,
+    "prediction_horizon": 30,
+    "solve_every": 2,
     "move_supp": [5.0, 5.0],
-    "steady_input_weight": [50.0, 50.0],
+    "steady_input_weight": [1.0, 1.0],
     "cv_scale": [3.2, 8.0],
     "q_y": [1.0, 1.0],
-    "reseed_on_feedforward_change": True,
 }
 
 
@@ -68,6 +68,7 @@ SCENARIO = Scenario(
     rewards={
         "regulation": Reward(
             id="regulation",
+            success_criterion=REGULATION_SUCCESS_CRITERION,
             function=regulation_reward,
             episode_metric_function=regulation_episode_metrics,
             primary_metric="return",

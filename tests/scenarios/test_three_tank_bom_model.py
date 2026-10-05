@@ -184,7 +184,7 @@ def test_bypass_and_operating_flow_ranges_are_physically_separated():
 def test_disturbance_benchmark_uses_whole_episode_tracking_metrics_only():
     env = aiogym.make_env("three_tank", benchmark="disturbance-rejection")
     try:
-        result = aiogym.evaluate(env=env, policy="pid", seeds=(0,))
+        result = aiogym.evaluate(env=env, policies={"policy": "pid"}, seeds=(0,))["evaluations"]["policy"]
     finally:
         env.close()
 

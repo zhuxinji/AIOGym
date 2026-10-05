@@ -29,6 +29,8 @@ _TRACKING_HORIZON = 2100
 _BOUNDARY_HORIZON = 600
 _TRAINING_HORIZON = 600
 
+_DISTURBANCE_HORIZON = 1000
+
 
 def make_default_episode(model) -> EpisodeSpec:
     start = model.nominal_steady_state()
@@ -170,7 +172,7 @@ def _disturbance_episode(model, rng) -> EpisodeSpec:
         initial_state=tuple(steady["state"]),
         initial_action=tuple(steady["action"]),
         reference=tuple(steady["y_sp"]),
-        horizon=1000,
+        horizon=_DISTURBANCE_HORIZON,
         disturbances=defaults,
         disturbance_schedule={
             start: event,
@@ -293,6 +295,8 @@ def _heater_efficiency_shift(model, rng, lower, upper):
 BENCHMARKS = {
     "tracking": Benchmark(
         id="tracking",
+        description='Track feasible output targets from sampled operating points.',
+        horizon=_TRACKING_HORIZON,
         reward_id="regulation",
         episode_factory=_tracking_episode,
         metric_function=regulation_episode_metrics,
@@ -304,6 +308,8 @@ BENCHMARKS = {
     ),
     "disturbance-rejection": Benchmark(
         id="disturbance-rejection",
+        description='Reject scheduled physical disturbances while maintaining the output targets.',
+        horizon=_DISTURBANCE_HORIZON,
         reward_id="regulation",
         episode_factory=_disturbance_episode,
         metric_function=regulation_episode_metrics,
@@ -315,6 +321,8 @@ BENCHMARKS = {
     ),
     "boundary-safety": Benchmark(
         id="boundary-safety",
+        description='Recover safely from initial conditions near scenario safety boundaries.',
+        horizon=_BOUNDARY_HORIZON,
         reward_id="regulation",
         episode_factory=_boundary_episode,
         metric_function=regulation_episode_metrics,

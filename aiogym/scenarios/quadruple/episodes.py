@@ -16,6 +16,9 @@ _BOUNDARY_LEVEL_RANGE_FRACTION = (0.82, 0.90)
 _MAXIMUM_SAMPLING_ATTEMPTS = 100
 _TRACKING_HORIZON = 180
 
+_DISTURBANCE_HORIZON = 500
+_BOUNDARY_HORIZON = 180
+
 
 def make_default_episode(model) -> EpisodeSpec:
     return EpisodeSpec(
@@ -96,7 +99,7 @@ def _disturbance_episode(model, rng) -> EpisodeSpec:
         initial_state=tuple(model.initial_state()),
         initial_action=tuple(model.default_action()),
         reference=tuple(model.default_setpoint_vector()),
-        horizon=500,
+        horizon=_DISTURBANCE_HORIZON,
         disturbances=model.default_disturbances(),
         disturbance_schedule={
             start: {"pump_flow_factor": factor},
@@ -115,7 +118,7 @@ def _boundary_episode(model, rng) -> EpisodeSpec:
         initial_state=boundary["state"],
         initial_action=boundary["action"],
         reference=tuple(reference),
-        horizon=180,
+        horizon=_BOUNDARY_HORIZON,
         disturbances=model.default_disturbances(),
     )
 
@@ -180,6 +183,8 @@ def sample_training_disturbance(model, rng):
 BENCHMARKS = {
     "tracking": Benchmark(
         id="tracking",
+        description='Track feasible output targets from sampled operating points.',
+        horizon=_TRACKING_HORIZON,
         reward_id="regulation",
         episode_factory=_tracking_episode,
         metric_function=regulation_episode_metrics,
@@ -190,6 +195,8 @@ BENCHMARKS = {
     ),
     "disturbance-rejection": Benchmark(
         id="disturbance-rejection",
+        description='Reject scheduled physical disturbances while maintaining the output targets.',
+        horizon=_DISTURBANCE_HORIZON,
         reward_id="regulation",
         episode_factory=_disturbance_episode,
         metric_function=regulation_episode_metrics,
@@ -200,6 +207,8 @@ BENCHMARKS = {
     ),
     "boundary-safety": Benchmark(
         id="boundary-safety",
+        description='Recover safely from initial conditions near scenario safety boundaries.',
+        horizon=_BOUNDARY_HORIZON,
         reward_id="regulation",
         episode_factory=_boundary_episode,
         metric_function=regulation_episode_metrics,

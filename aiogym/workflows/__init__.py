@@ -1,5 +1,4 @@
 from .collect import collect
-from .compare import compare_policies
 from .dataset import DatasetReader
 from .evaluate import evaluate
 from .train import load_policy, train
@@ -7,7 +6,6 @@ from .training_curve import plot_training_curve
 
 __all__ = [
     "collect",
-    "compare_policies",
     "DatasetReader",
     "evaluate",
     "load_policy",

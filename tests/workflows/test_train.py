@@ -17,7 +17,6 @@ pytestmark = pytest.mark.rl
 
 import aiogym
 from aiogym import load_policy, make_env, plot_training_curve, train
-from aiogym.rl import algorithms as algorithm_registry
 from aiogym.rl.algorithms import get_algorithm
 from aiogym.workflows._checkpoint import load_training_checkpoint
 
@@ -56,8 +55,8 @@ def test_off_policy_training_saves_loads_and_predicts(tmp_path):
     finally:
         env.close()
 
-    assert result["schema_version"] == "aiogym.training.v14"
-    assert result["checkpoint_schema"] == "aiogym.checkpoint.v2"
+    assert result["schema_version"] == "aiogym.training.v15"
+    assert result["checkpoint_schema"] == "aiogym.checkpoint.v3"
     assert result["algorithm"] == "sac"
     assert result["steps"] == 2
     assert result["initial_steps"] == 0
@@ -100,7 +99,7 @@ def test_off_policy_training_saves_loads_and_predicts(tmp_path):
     with zipfile.ZipFile(output / "model.zip") as checkpoint:
         assert set(checkpoint.namelist()) == {"manifest.json", "payload.zip"}
         manifest = json.loads(checkpoint.read("manifest.json"))
-    assert manifest["schema_version"] == "aiogym.checkpoint.v2"
+    assert manifest["schema_version"] == "aiogym.checkpoint.v3"
     assert manifest["algorithm"] == "sac"
     assert manifest["environment"] == metadata["environment"]
     assert manifest["runtime"]["model_class"] == "stable_baselines3.sac.sac:SAC"
@@ -441,7 +440,7 @@ def test_training_periodically_evaluates_and_saves_best_checkpoint(tmp_path, mon
     history = json.loads(
         (output / "evaluation_history.json").read_text(encoding="utf-8")
     )
-    assert history["schema_version"] == "aiogym.training_evaluation.v4"
+    assert history["schema_version"] == "aiogym.training_evaluation.v5"
     assert [row["step"] for row in history["records"]] == [0, 1, 2]
     assert history["seeds"] == list(range(1_000, 1_020))
     assert all(len(row["episodes"]) == 20 for row in history["records"])
@@ -463,7 +462,7 @@ def test_training_periodically_evaluates_and_saves_best_checkpoint(tmp_path, mon
         "aggregate": "mean",
         "direction": "maximize",
     }
-    assert history["settling_fraction"] == 0.1
+    assert "last 10%" in history["success_criterion"]
     assert history["selection_order"] == [
         {"name": "safe_completion", "direction": "maximize"},
         {"name": "control_success", "direction": "maximize"},
@@ -547,7 +546,7 @@ def test_training_periodically_evaluates_and_saves_best_checkpoint(tmp_path, mon
     assert continued["initial_steps"] == result["evaluation"]["best_step"]
     assert continued["actual_steps"] == continued["initial_steps"] + 1
     assert continued["evaluation"]["selection_order"] == history["selection_order"]
-    assert continued["evaluation"]["settling_fraction"] == 0.1
+    assert "last 10%" in continued["evaluation"]["success_criterion"]
 
 
 def test_training_evaluation_requires_randomized_environment(tmp_path):
@@ -568,25 +567,55 @@ def test_training_evaluation_requires_randomized_environment(tmp_path):
         env.close()
 
 
-@pytest.mark.parametrize("variation", ("disturbance", "noise"))
-def test_training_evaluation_requires_deterministic_environment(tmp_path, variation):
-    env = make_env("quadruple")
-    evaluation_env = make_env(
-        "quadruple", randomize=True, **{variation: True}
-    )
-    try:
-        with pytest.raises(ValueError, match=f"must not enable {variation}"):
+def test_training_validation_variation_is_reproducible_and_preserved_on_resume(tmp_path, monkeypatch):
+    module = importlib.import_module("aiogym.workflows.train")
+    monkeypatch.setattr(module, "evaluate", partial(aiogym.evaluate, max_steps=2))
+    monkeypatch.setattr(module, "_evaluate", partial(module._evaluate, max_steps=2))
+    variation = {"disturbance": True, "noise": True, "delay": True, "fault": True}
+    with (
+        make_env("quadruple", randomize=True, **variation) as env,
+        make_env("quadruple", randomize=True, **variation) as evaluation_env,
+        make_env("quadruple", randomize=True, **{**variation, "noise": False}) as changed_env,
+    ):
+        result = train(
+            env=env, algorithm="sac", steps=1, seed=0,
+            algorithm_kwargs=SMALL_POLICY, record_every=1,
+            evaluation_env=evaluation_env, evaluate_every=1,
+            output=tmp_path / "varied-validation",
+        )
+        history = json.loads((Path(result["path"]) / "evaluation_history.json").read_text())
+        assert history["environment"] == result["evaluation"]["environment"]
+        assert all(history["environment"][name] is not None for name in variation)
+        assert history["seeds"] == list(range(1000, 1020))
+        # One warm-up step leaves the policy unchanged. Repeated validation must
+        # replay the same disturbances and channel samples for all 20 seeds.
+        assert history["records"][0]["episodes"] == history["records"][1]["episodes"]
+        for checkpoint in (result["checkpoint"], result["best_checkpoint"]):
+            with zipfile.ZipFile(checkpoint) as archive:
+                manifest = json.loads(archive.read("manifest.json"))
+            saved = manifest["policy"]["training_history"]["evaluation"]
+            assert saved["environment"] == history["environment"]
+
+        rejected_output = tmp_path / "changed-validation"
+        with pytest.raises(ValueError, match="validation environment must match"):
             train(
-                env=env,
-                algorithm="sac",
-                steps=2,
-                evaluation_env=evaluation_env,
-                evaluate_every=1,
-                output=tmp_path / "invalid-evaluation",
+                env=env, algorithm="sac", steps=1,
+                evaluation_env=changed_env, evaluate_every=1,
+                resume_from=result["checkpoint"], output=rejected_output,
             )
-    finally:
-        evaluation_env.close()
-        env.close()
+        assert not rejected_output.exists()
+        continued = train(
+            env=env, algorithm="sac", steps=1, record_every=1,
+            evaluation_env=evaluation_env, evaluate_every=1,
+            resume_from=result["checkpoint"], output=tmp_path / "continued-validation",
+        )
+    continued_history = json.loads(
+        (Path(continued["path"]) / "evaluation_history.json").read_text()
+    )
+    assert continued_history["environment"] == history["environment"]
+    assert continued_history["records"][:2] == history["records"]
+    assert continued_history["records"][-1]["step"] == 2
+    assert continued_history["records"][-1]["episodes"] == history["records"][0]["episodes"]
 
 
 def test_ddpg_training_materializes_json_action_noise(tmp_path):
@@ -708,36 +737,48 @@ def test_on_policy_training_completes(tmp_path):
     assert result["actual_steps"] == 2
 
 
-def test_external_sb3_algorithm_class_uses_the_complete_workflow(tmp_path):
-    from stable_baselines3 import A2C
+@pytest.mark.parametrize("algorithm", (object, get_algorithm("sac")))
+def test_algorithm_resolution_requires_builtin_name(algorithm):
+    with pytest.raises(TypeError, match="built-in algorithm name"):
+        get_algorithm(algorithm)
 
-    aiogym.register_sb3_algorithm("a2c", A2C)
-    env = make_env("quadruple")
+
+def test_checkpoint_interface_is_required_but_legacy_loading_warns(tmp_path):
+    from aiogym.workflows._checkpoint import save_checkpoint
+
+    backend = get_algorithm("sac")
+    kwargs = backend.effective_kwargs(steps=2, values=SMALL_POLICY)
+    env = aiogym.make_env("quadruple")
+    path = tmp_path / "model.zip"
     try:
-        result = train(
-            env=env,
-            evaluate_every=None,
-            algorithm="a2c",
-            steps=2,
-            algorithm_kwargs={"n_steps": 2, **SMALL_POLICY},
-            output=tmp_path / "a2c",
+        model = backend.create(env=env, seed=8, algorithm_kwargs=kwargs)
+        save_checkpoint(
+            backend, model, path, env=env,
+            training={"completed_steps": 2, "seed": 8, "algorithm_kwargs": kwargs, "dataset": None},
         )
-        policy = load_policy(result["checkpoint"], env=env)
-        observation, _ = env.reset(seed=0)
-        action = policy.act(observation, {})
+        with zipfile.ZipFile(path) as archive:
+            manifest = json.loads(archive.read("manifest.json"))
+            payload = archive.read("payload.zip")
+        del manifest["environment"]["policy_interface"]
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("manifest.json", json.dumps(manifest))
+            archive.writestr("payload.zip", payload)
+        with pytest.raises(ValueError, match="missing compatibility fields.*policy_interface"):
+            load_policy(path, env=env)
+
+        manifest["schema_version"] = "aiogym.checkpoint.v2"
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("manifest.json", json.dumps(manifest))
+            archive.writestr("payload.zip", payload)
+        with pytest.warns(UserWarning, match="only legacy compatibility checks"):
+            policy = load_policy(path, env=env)
+        assert policy.model.seed == 8
+        with pytest.warns(UserWarning, match="Channel semantics.*unverified"):
+            _, _, loaded, state = load_training_checkpoint(path, env=env, algorithm="sac")
+        assert loaded.seed == state["seed"] == 8
+        assert state["completed_steps"] == 2
     finally:
         env.close()
-        del algorithm_registry._BACKENDS["a2c"]
-    assert result["algorithm"] == "a2c"
-    assert result["actual_steps"] == 2
-    assert action.shape == env.action_space.shape
-    assert np.isfinite(action).all()
-
-
-def test_sb3_registration_rejects_non_algorithm_class():
-    with pytest.raises(TypeError, match="BaseAlgorithm subclass"):
-        aiogym.register_sb3_algorithm("not_sb3", object)
-    assert "not_sb3" not in aiogym.list_algorithms()
 
 
 @pytest.mark.parametrize("algorithm", ("ddpg", "ppo", "sac", "td3"))
@@ -807,7 +848,6 @@ def test_training_validates_inputs(tmp_path, kwargs, error):
 
 
 def test_resume_old_rule_only_selects_retained_weights(tmp_path):
-    from types import SimpleNamespace
     from aiogym.workflows.train import _resume_history
 
     best_path = tmp_path / "best" / "model.zip"
@@ -832,16 +872,19 @@ def test_resume_old_rule_only_selects_retained_weights(tmp_path):
                      "maximum_reward": 0, "completed_episodes": 0,
                      "terminated_episodes": 0, "truncated_episodes": 0}],
     }
-    restored = _resume_history(final_path, {
+    training = {
         "completed_steps": 20,
         "history": {"curve": curve, "best_checkpoint": str(best_path),
                     "evaluation": {"schema_version": "aiogym.training_evaluation.v3",
                                    "seeds": [1000], "best_step": 0,
                                    "settling_window": 30, "records": records}},
-    }, evaluation_env=SimpleNamespace(unwrapped=SimpleNamespace(
-        control_dt=1.0, model=SimpleNamespace(time_unit="s"),
-    )))
+    }
+    with make_env("heater", randomize=True) as evaluation_env:
+        restored = _resume_history(final_path, training, evaluation_env=evaluation_env)
+    with make_env("heater", randomize=True, noise=True) as evaluation_env:
+        with pytest.raises(ValueError, match="history has no environment metadata"):
+            _resume_history(final_path, training, evaluation_env=evaluation_env)
     assert restored["evaluation"]["best_step"] == 20
     assert restored["best_checkpoint"] == final_path
     assert restored["evaluation"]["records"][1]["selection_eligible"] is False
-    assert restored["evaluation"]["settling_fraction"] == 0.1
+    assert "last 10%" in restored["evaluation"]["success_criterion"]

@@ -1,4 +1,4 @@
-"""Scenario registration for the fixed BOM-backed three-tank system."""
+"""Scenario definition for the fixed BOM-backed three-tank system."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import numpy as np
 
 from aiogym.core.contracts import Scenario
 from aiogym.core.specs import Reward
+from aiogym.scenarios._metrics import REGULATION_SUCCESS_CRITERION
 from .episodes import (
     BENCHMARKS,
     make_default_episode,
@@ -91,13 +92,11 @@ _PID = {
 }
 
 _MPC = {
-    "Ts": 1.0,
-    "P": 60,
+    "prediction_horizon": 20,
     "cv_scale": list(TRACKING_ERROR_SCALES),
-    "move_supp": [50.0, 50.0, 50.0, 50.0],
-    "steady_input_weight": [5.0, 5.0, 5.0, 5.0],
+    "move_supp": [5.0, 5.0, 5.0, 5.0],
+    "steady_input_weight": [0.5, 0.5, 0.5, 0.5],
     "q_y": 1.0,
-    "reseed_on_feedforward_change": True,
 }
 
 
@@ -122,6 +121,7 @@ SCENARIO = Scenario(
     rewards={
         "regulation": Reward(
             id="regulation",
+            success_criterion=REGULATION_SUCCESS_CRITERION,
             function=_three_tank_regulation_reward,
             episode_metric_function=regulation_episode_metrics,
             primary_metric="return",

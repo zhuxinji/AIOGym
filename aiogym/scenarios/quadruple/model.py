@@ -10,6 +10,8 @@ from typing import Any
 
 import numpy as np
 
+from aiogym.core.information import state_limit_rules
+
 from .physics import _QuadruplePhysicsKernel
 
 
@@ -29,8 +31,46 @@ class QuadrupleModel(_QuadruplePhysicsKernel):
         }
     )
 
+    parameter_metadata = {
+        'tank_area': ('Horizontal cross-sectional areas of tanks 1 through 4', 'Four finite positive values'),
+        'outlet_area': ('Outlet-orifice areas of tanks 1 through 4', 'Four finite positive values'),
+        'pump_gain': ('Volumetric flow per volt for pumps 1 and 2', 'Two finite positive values'),
+        'gamma': ('Fractions of pump flows directed to the corresponding lower tanks', 'Two finite values in [0, 1]'),
+        'gravity': ('Gravitational acceleration', 'Finite number > 0'),
+        'max_voltage': ('Maximum pump voltage', 'Finite number > 0; >= every nominal_voltage'),
+        'max_level': ('Upper liquid-level threshold for episode termination', 'Finite number > 0'),
+        'nominal_voltage': ('Pump voltages used for the default equilibrium', 'Two finite values in [0, max_voltage]'),
+    }
+    variable_descriptions = {
+        'h1': 'Liquid level in lower tank 1',
+        'h2': 'Liquid level in lower tank 2',
+        'h3': 'Liquid level in upper tank 3',
+        'h4': 'Liquid level in upper tank 4',
+        'lower_tank_1_level': 'Liquid level in lower tank 1',
+        'lower_tank_2_level': 'Liquid level in lower tank 2',
+        'pump_1_voltage': 'Normalized voltage command for pump 1',
+        'pump_2_voltage': 'Normalized voltage command for pump 2',
+    }
+
+    def action_metadata(self):
+        return {name: {"interpretation": f"Pump voltage = action * {self.p['max_voltage']:g} V"} for name in self.action_names}
+
+    def observation_metadata(self):
+        rows = super().observation_metadata()
+        for output in self.output_names:
+            rows[f"{output}_tracking_error"] = {
+                "description": f"Normalized tracking error: {self.variable_descriptions[output]}",
+                "source": output,
+                "normalization": "normalized measurement - normalized reference",
+            }
+        return rows
+
+    def safety_metadata(self):
+        return state_limit_rules({name: (0.0, self.p["max_level"]) for name in self.state_names}, self.state_units)
+
     def __init__(self, parameters: Mapping[str, Any] | None = None):
         super().__init__()
+        self._parameter_defaults = deepcopy(self.p)
         self.p = _resolved_parameters(self.p, parameters)
         self._resolved_parameters = MappingProxyType(
             {
@@ -82,7 +122,7 @@ class QuadrupleModel(_QuadruplePhysicsKernel):
             ),
         ]
 
-    def observation(self, state, reference, previous_action, disturbances):
+    def observation(self, state, reference, previous_action, disturbances, *, remaining_time=0.0):
         del previous_action, disturbances
         state_rows = self.state_schema()
         normalized_state = [

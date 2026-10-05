@@ -7,6 +7,19 @@ from typing import Any
 
 import numpy as np
 
+DEFAULT_SETTLING_FRACTION = 0.1
+REGULATION_SUCCESS_CRITERION = (
+    "Safe full episode; last 10% of planned control steps continuously within "
+    "scenario settling tolerances."
+)
+
+
+def regulation_control_success(*, safe_completion, settling_time, horizon, control_dt,
+                               settling_fraction=DEFAULT_SETTLING_FRACTION):
+    """Apply the regulation criterion, also when importing legacy histories."""
+    return float(safe_completion and settling_time
+                 <= (horizon - math.ceil(horizon * settling_fraction)) * control_dt)
+
 
 def regulation_episode_metrics(
     env,
@@ -16,7 +29,7 @@ def regulation_episode_metrics(
     output_indices=None,
     settling_tolerance=None,
 ) -> dict[str, float]:
-    trace = _episode_trace(
+    trace = episode_trace(
         env,
         episode,
         output_scale=output_scale,
@@ -49,6 +62,12 @@ def regulation_episode_metrics(
                 ),
             }
         )
+        metrics["control_success"] = regulation_control_success(
+            safe_completion=metrics["safe_completion"],
+            settling_time=metrics["settling_time"],
+            horizon=episode.reset_info["episode_spec"]["horizon"],
+            control_dt=trace["dt"],
+        )
         event_steps = sorted(
             int(step)
             for step in episode.reset_info["episode_spec"]["disturbance_schedule"]
@@ -69,7 +88,7 @@ def regulation_episode_metrics(
     return metrics
 
 
-def _episode_trace(
+def episode_trace(
     env,
     episode,
     *,
@@ -131,7 +150,11 @@ def _episode_trace(
         {
             "unsafe_rate": float(metrics["constraint_violations"] / step_count),
             "safe_completion": float(
-                not transitions[-1].terminated and transitions[-1].truncated
+                (transitions[-1].terminated and not transitions[-1].truncated
+                 if episode.reset_info["episode_spec"].get("terminal_at_horizon", False)
+                 else transitions[-1].truncated and not transitions[-1].terminated)
+                and step_count == episode.reset_info["episode_spec"]["horizon"]
+                and metrics["constraint_violations"] == 0
             ),
             "minimum_safety_margin": float(minimum_safety_margin),
             "time_to_violation": float(

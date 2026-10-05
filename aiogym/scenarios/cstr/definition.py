@@ -1,10 +1,11 @@
-"""Scenario registration for the two-input exothermic CSTR."""
+"""Scenario definition for the two-input exothermic CSTR."""
 from __future__ import annotations
 
 from copy import deepcopy
 
 from aiogym.core.contracts import Scenario
 from aiogym.core.specs import Reward
+from aiogym.scenarios._metrics import REGULATION_SUCCESS_CRITERION
 from aiogym.scenarios._metrics import regulation_episode_metrics
 from aiogym.scenarios._shared import regulation_reward
 
@@ -37,12 +38,10 @@ _PID = {
     "bias": "default_action",
 }
 _MPC = {
-    "Ts": 1.0,
-    "P": 5,
-    "move_supp": [0.1, 0.0],
+    "prediction_horizon": 1,
+    "move_supp": [0.0, 0.0],
     "cv_scale": [0.18, 45.0],
     "q_y": [1.0, 1.0],
-    "reseed_on_feedforward_change": True,
 }
 
 
@@ -67,6 +66,7 @@ SCENARIO = Scenario(
     rewards={
         "regulation": Reward(
             id="regulation",
+            success_criterion=REGULATION_SUCCESS_CRITERION,
             function=regulation_reward,
             episode_metric_function=regulation_episode_metrics,
             primary_metric="return",

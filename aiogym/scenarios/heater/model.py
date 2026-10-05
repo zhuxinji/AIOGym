@@ -11,6 +11,8 @@ from typing import Any
 
 import numpy as np
 
+from aiogym.core.information import state_limit_rules
+
 from aiogym.core.model import PhysicsModelBase
 
 
@@ -99,6 +101,44 @@ class HeaterModel(PhysicsModelBase):
         }
     )
 
+    parameter_metadata = {
+        'maximum_fuel_flow': ('Fuel mass flow at fully open fuel valve', 'Finite number > 0'),
+        'fuel_lower_heating_value': ('Fuel lower heating value', 'Finite number > 0'),
+        'stoichiometric_air_fuel_ratio': ('Air mass required for complete combustion per unit fuel mass', 'Finite number > 0'),
+        'maximum_air_flow': ('Air mass flow at fully open damper', 'Finite number > 0'),
+        'flue_gas_heat_capacity': ('Flue-gas specific heat capacity', 'Finite number > 0'),
+        'heat_transfer_coefficient': ('Firebox-to-process thermal conductance', 'Finite number > 0'),
+        'firebox_heat_capacity': ('Effective firebox thermal capacity', 'Finite number > 0'),
+        'process_heat_capacity': ('Effective process-side thermal capacity', 'Finite number > 0'),
+        'nominal_feed_flow': ('Default process-feed mass flow', 'Finite number > 0'),
+        'feed_specific_heat_capacity': ('Process-feed specific heat capacity', 'Finite number > 0'),
+        'oxygen_time_constant': ('Flue-oxygen first-order response time constant', 'Finite number > 0'),
+        'feed_temperature': ('Default process-feed inlet temperature', '[240, 330]'),
+        'ambient_temperature': ('Default ambient temperature around the firebox', '[-10, 45]'),
+        'outlet_temperature_trip': ('Process outlet temperature threshold for episode termination', '(20, 650]'),
+        'minimum_safe_oxygen': ('Flue-oxygen lower threshold for episode termination', '[0, 20.9)'),
+    }
+    variable_descriptions = {
+        'firebox_temperature': 'Firebox temperature',
+        'outlet_temperature': 'Process-fluid outlet temperature',
+        'flue_oxygen': 'Flue-gas oxygen percentage',
+        'air_damper': 'Combustion-air damper opening',
+        'fuel_valve': 'Fuel-valve opening',
+    }
+
+    def action_metadata(self):
+        return {
+            "air_damper": {"interpretation": f"Air flow = action * {self.p['maximum_air_flow']:g} kg/s"},
+            "fuel_valve": {"interpretation": f"Fuel flow = action * {self.p['maximum_fuel_flow']:g} kg/s"},
+        }
+
+    def safety_metadata(self):
+        return state_limit_rules({
+            "firebox_temperature": self.state_bounds["firebox_temperature"],
+            "outlet_temperature": (20.0, self.p["outlet_temperature_trip"]),
+            "flue_oxygen": (self.p["minimum_safe_oxygen"], 20.9),
+        }, self.state_units)
+
     def __init__(self, parameters: Mapping[str, Any] | None = None):
         defaults = {
             "maximum_fuel_flow": 1.0,
@@ -117,6 +157,7 @@ class HeaterModel(PhysicsModelBase):
             "outlet_temperature_trip": 415.0,
             "minimum_safe_oxygen": 1.2,
         }
+        self._parameter_defaults = deepcopy(defaults)
         self.p = _resolved_parameters(defaults, parameters)
         self._resolved_parameters = MappingProxyType(dict(self.p))
 
@@ -239,9 +280,6 @@ class HeaterModel(PhysicsModelBase):
 
     def outputs(self, state):
         return [float(state[2]), float(state[1])]
-
-    def display_outputs(self, state):
-        return {"levels": [], "temps": [float(state[0]), float(state[1])]}
 
     def _steady_operating_point(self, reference, disturbances=None):
         target = np.asarray(reference, dtype=float).reshape(-1)

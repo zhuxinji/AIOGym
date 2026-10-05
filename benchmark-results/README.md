@@ -1,5 +1,10 @@
 # Benchmark results
 
+For a first run, use the [User guide](../docs/user-guide.md). To interpret these
+figures, see [comparison figures](../docs/user-guide.md#read-the-figure).
+The results below are a historical snapshot; current scenario or controller
+changes require new evaluations.
+
 Prepared snapshot `20260907T100413Z` from the 24 standard comparisons in `runs/<scenario>/benchmarks/`.
 
 Each comparison contains 20 evaluation cases (seeds 0 through 19). Policy coverage and rankings below come directly from each comparison file. Rankings are local to each benchmark and use its recorded ranking metrics.

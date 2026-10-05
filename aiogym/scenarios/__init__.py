@@ -1,7 +1,5 @@
-"""Built-in Scenario registrations."""
+"""Built-in Scenario catalog."""
 from __future__ import annotations
-
-from aiogym.core.registry import list_scenarios, register_scenario
 
 from .cascade import SCENARIO as CASCADE
 from .cstr import SCENARIO as CSTR
@@ -13,25 +11,18 @@ from .quadruple import SCENARIO as QUADRUPLE
 from .three_tank import SCENARIO as THREE_TANK
 
 
-BUILTIN_SCENARIOS = (
-    CASCADE,
-    CSTR,
-    CRYSTALLIZATION,
-    EXTRACTION,
-    HEATER,
-    HVAC,
-    QUADRUPLE,
-    THREE_TANK,
-)
+BUILTIN_SCENARIOS = {
+    scenario.id: scenario
+    for scenario in (
+        CASCADE,
+        CSTR,
+        CRYSTALLIZATION,
+        EXTRACTION,
+        HEATER,
+        HVAC,
+        QUADRUPLE,
+        THREE_TANK,
+    )
+}
 
-
-def register_builtin_scenarios() -> None:
-    registered = set(list_scenarios())
-    for scenario in BUILTIN_SCENARIOS:
-        if scenario.id not in registered:
-            register_scenario(scenario)
-
-
-register_builtin_scenarios()
-
-__all__ = ["BUILTIN_SCENARIOS", "register_builtin_scenarios"]
+__all__ = ["BUILTIN_SCENARIOS"]
