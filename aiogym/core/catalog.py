@@ -5,13 +5,14 @@ from .contracts import Scenario
 from .information import parameter_information, variable_information
 from .specs import Benchmark, Reward
 
+BUILTIN_SCENARIOS: dict[str, Scenario] = {}
+
 
 def get_scenario(scenario: str | Scenario) -> Scenario:
     if isinstance(scenario, Scenario):
         return scenario
     if not isinstance(scenario, str):
         raise TypeError("scenario must be a built-in name or Scenario")
-    from aiogym.scenarios import BUILTIN_SCENARIOS
 
     try:
         return BUILTIN_SCENARIOS[scenario]
@@ -44,8 +45,6 @@ def get_benchmark(scenario: str | Scenario, benchmark: str) -> Benchmark:
 
 
 def list_scenarios() -> tuple[str, ...]:
-    from aiogym.scenarios import BUILTIN_SCENARIOS
-
     return tuple(sorted(BUILTIN_SCENARIOS))
 
 

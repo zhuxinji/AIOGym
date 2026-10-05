@@ -110,7 +110,7 @@ def test_behavior_cloning_rejects_incompatible_scenario_before_writing_output(
     target_env = make_env("three_tank", reward="regulation")
     output = tmp_path / "training"
     try:
-        with pytest.raises(ValueError, match="scenario does not match"):
+        with pytest.raises(ValueError, match="training dataset scenario is incompatible"):
             train(
                 env=target_env,
                 evaluate_every=None,

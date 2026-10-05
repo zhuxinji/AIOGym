@@ -189,6 +189,7 @@ def test_training_recorder_saves_only_improved_validation_candidates(tmp_path, m
     )
     env = SimpleNamespace(unwrapped=SimpleNamespace(control_dt=1.0,
         reward=SimpleNamespace(success_criterion="Test criterion")))
+    monkeypatch.setattr(module, "environment_metadata", lambda env: {})
     recorder = _TrainingEvaluationRecorder(
         backend=SimpleNamespace(policy=lambda *args, **kwargs: object()),
         model=object(), env=env, checkpoint_env=env, evaluate_every=1,
@@ -944,14 +945,11 @@ def test_evaluation_export_failures_clean_partial_files_or_preserve_recovery(
     module = importlib.import_module("aiogym.workflows._evaluation_report")
     output = tmp_path / "evaluation"
     (tmp_path / "notes.txt").write_text("keep")
-    replacements = 0
     replace = module.os.replace
     unlink = Path.unlink
 
     def fail_replace(source, destination):
-        nonlocal replacements
-        replacements += 1
-        if replacements == 2:
+        if destination == output / "comparison.svg":
             raise OSError("injected replacement failure")
         return replace(source, destination)
 

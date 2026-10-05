@@ -115,6 +115,7 @@ def test_collect_accepts_builtin_and_policy_object(tmp_path):
     assert learned["metadata"]["policy"] == {
         "id": "learned",
         "algorithm": "sac",
+        "declared_environment_check": "not_provided",
     }
 
 

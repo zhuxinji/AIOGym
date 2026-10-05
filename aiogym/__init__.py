@@ -14,6 +14,10 @@ from .workflows import (
     plot_training_curve, train,
 )
 from .workflows._metadata import environment_metadata
+from .core import catalog as _catalog
+from .scenarios import BUILTIN_SCENARIOS as _builtin_scenarios
+
+_catalog.BUILTIN_SCENARIOS = _builtin_scenarios
 
 
 def list_scenarios():

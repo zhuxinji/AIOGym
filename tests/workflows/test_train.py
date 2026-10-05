@@ -189,7 +189,7 @@ def test_sac_training_continues_optimizer_and_replay_state(tmp_path):
 
 def test_interrupted_training_preserves_checkpoint_history_when_moved(tmp_path, monkeypatch):
     workflow = importlib.import_module("aiogym.workflows.train")
-    monkeypatch.setattr(workflow, "evaluate", partial(aiogym.evaluate, max_steps=2))
+    monkeypatch.setattr(workflow, "_evaluate", partial(workflow._evaluate, max_steps=2))
     monkeypatch.setattr(
         workflow, "_is_better_training_evaluation",
         lambda candidate, best: best is None or candidate["step"] == 3,
@@ -244,7 +244,7 @@ def test_interrupted_training_preserves_checkpoint_history_when_moved(tmp_path, 
 
 def test_final_checkpoint_continuation_keeps_historical_best(tmp_path, monkeypatch):
     workflow = importlib.import_module("aiogym.workflows.train")
-    monkeypatch.setattr(workflow, "evaluate", partial(aiogym.evaluate, max_steps=2))
+    monkeypatch.setattr(workflow, "_evaluate", partial(workflow._evaluate, max_steps=2))
     monkeypatch.setattr(
         workflow, "_is_better_training_evaluation",
         lambda candidate, best: best is None or candidate["step"] == 1,
@@ -417,7 +417,6 @@ def test_checkpoint_rejects_incompatible_model_parameters(tmp_path):
 def test_training_periodically_evaluates_and_saves_best_checkpoint(tmp_path, monkeypatch):
     # Keep all validation seeds, but exercise workflow wiring with short rollouts.
     module = importlib.import_module("aiogym.workflows.train")
-    monkeypatch.setattr(module, "evaluate", partial(aiogym.evaluate, max_steps=2))
     monkeypatch.setattr(module, "_evaluate", partial(module._evaluate, max_steps=2))
     env = make_env("quadruple")
     evaluation_env = make_env("quadruple", randomize=True)
@@ -569,7 +568,6 @@ def test_training_evaluation_requires_randomized_environment(tmp_path):
 
 def test_training_validation_variation_is_reproducible_and_preserved_on_resume(tmp_path, monkeypatch):
     module = importlib.import_module("aiogym.workflows.train")
-    monkeypatch.setattr(module, "evaluate", partial(aiogym.evaluate, max_steps=2))
     monkeypatch.setattr(module, "_evaluate", partial(module._evaluate, max_steps=2))
     variation = {"disturbance": True, "noise": True, "delay": True, "fault": True}
     with (
